@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 import { mkdir, mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createHash } from 'node:crypto';
@@ -74,8 +74,14 @@ try {
       join(observer, 'observer.cjs'),
       'exports.activate = () => {};',
     );
+    // Run the Windows CLI through Electron's Node mode. A .cmd wrapper cannot
+    // be execFile'd, and using a shell would re-interpret paths as commands.
     const [cli, ...cliArgs] =
-      resolveCliArgsFromVSCodeExecutablePath(executable);
+      process.platform === 'win32'
+        ? [executable, join(dirname(executable), 'resources/app/out/cli.js')]
+        : resolveCliArgsFromVSCodeExecutablePath(executable, {
+            reuseMachineInstall: true,
+          });
     await promisify(execFile)(
       cli,
       [
@@ -88,7 +94,15 @@ try {
         packagePath,
         '--force',
       ],
-      { timeout: 120_000 },
+      {
+        timeout: 120_000,
+        env: {
+          ...process.env,
+          ...(process.platform === 'win32'
+            ? { ELECTRON_RUN_AS_NODE: '1' }
+            : {}),
+        },
+      },
     );
     testedPath = join(
       extensionDirectory,
@@ -118,6 +132,10 @@ try {
     cachePath: join(root, '.vscode-test'),
     launchArgs: [
       fixture.root,
+      // Xvfb runners have no hardware GPU; keep renderer startup deterministic.
+      ...(process.platform === 'linux' && process.env.CI
+        ? ['--disable-gpu', '--disable-dev-shm-usage']
+        : []),
       ...(!installed ? ['--disable-extensions'] : []),
       '--disable-workspace-trust',
       '--skip-welcome',

@@ -8,12 +8,13 @@
 
 Bugsnitch helps developers investigate code through local Git history: trace a line, inspect its associated commit, and follow the evidence in surrounding commits.
 
-**Status: early development, building toward 0.2.0.** Version 0.1.0 is the foundation. Development now adds visual ancestry alongside the history list; regression investigation workflows remain future work.
+**Status: early development, version 0.2.0 (unreleased).** Built on the 0.1.0 foundation, with visual ancestry and connected local investigation. Regression range and bisect workflows remain future work.
 
 ## What works today
 
 - **Bugsnitch: Open** shows the repository path, branch, working-tree summary, and recent commits with authors, dates, and refs.
-- Graph lanes show parent ancestry, including branches and merges. Loading older pages preserves existing lane positions; dashed lanes indicate parents outside the loaded history.
+- Graph lanes show the selected entry point's reachable ancestry, including branches and merges. Loading older pages preserves existing lane positions; dashed lanes indicate parents outside the loaded history.
+- Browse local branches, remote-tracking branches, and commit tags from the **History entry point** selector. No checkout or fetch occurs; the repository overview always shows the actual checkout. Annotated tags are peeled to their commits.
 - Select a commit to inspect its full message, changed files, and a bounded patch preview. Merge patches compare against the first parent.
 - Refresh history or load another page. Opening Bugsnitch does not load the entire history.
 - **Bugsnitch: Snitch on Current Line** traces one saved line to its originating commit and original filename/line, including committed renames where Git can follow them.
@@ -23,7 +24,9 @@ Bugsnitch helps developers investigate code through local Git history: trace a l
 
 Open a tracked text file, save any editor changes, and place the cursor on the line you want to investigate. Run **Bugsnitch: Snitch on Current Line** from the Command Palette or editor context menu. The investigation shows the author, author date, associated hash and subject, and original/current locations. Choose **Inspect this commit** for the full message, changed files, and patch, then **Show in graph** to locate it alongside its ancestry. Parent buttons let you continue the investigation.
 
-Selection and line evidence survive refresh and pagination. If the selected commit is outside the loaded graph, **Show in graph** opens a bounded history from that commit. **Return to checkout history** restores the current checkout's history. The working tree never changes. A line-associated commit is an investigation lead, not proof that it introduced a bug.
+Selection and line evidence survive refresh, pagination, and entry-point changes. If the selected commit is outside the loaded graph, **Show in graph** opens a bounded history from that commit, with a button to return to the previous entry point. Choose **Current checkout (HEAD)** to return to the checkout's history. The working tree never changes. A line-associated commit is an investigation lead, not proof that it introduced a bug.
+
+History pages use a frozen commit ID. Refresh updates branch/tag tips and the working-tree summary. The selector lists up to 2,000 local refs and reports truncation; tags pointing to blobs or trees are omitted. Missing local objects receive an error instead of triggering a fetch. Parent information is limited by the local clone, including shallow-history boundaries.
 
 Saved working-tree changes are supported: if the selected line has no committed origin, Bugsnitch says so. Untitled and dirty editors must be saved first. Binary files and text files larger than 4 MiB are outside this first slice.
 
@@ -35,7 +38,7 @@ Git inspection happens on your machine, using system Git. No analytics, telemetr
 
 ## Screenshots
 
-![Bugsnitch history, line provenance, and commit inspection](docs/screenshots/webview-dark.jpg)
+![Bugsnitch ancestry graph, tag entry point, line evidence, and merge inspection](docs/screenshots/webview-dark.jpg)
 
 The built webview, displaying a real disposable Git fixture during browser verification with VS Code dark theme variables. The VS Code shell is not shown.
 
@@ -59,7 +62,7 @@ Open this repository in VS Code and press **F5**, selecting **Bugsnitch Extensio
 
 ```sh
 pnpm package
-code --install-extension apps/vscode/bugsnitch-0.1.0.vsix
+code --install-extension apps/vscode/bugsnitch-0.2.0.vsix
 ```
 
 If the `code` CLI is unavailable, use **Extensions: Install from VSIX…** in VS Code and select the generated file. Packaging is local and does not publish. The manifest currently uses the explicitly temporary publisher `bugsnitch-dev-placeholder`. Configure the official Marketplace publisher before releasing; Bugsnitch is not advertised as available on the Marketplace yet.

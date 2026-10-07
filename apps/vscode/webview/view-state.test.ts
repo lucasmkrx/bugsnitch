@@ -29,7 +29,10 @@ const investigation: Investigation = {
     uncommitted: false,
   },
 };
-const history = (append: boolean, commits: Commit[]): HostMessage => ({
+const history = (
+  append: boolean,
+  commits: Commit[],
+): Extract<HostMessage, { type: 'history' }> => ({
   version: 1,
   type: 'history',
   repository: {
@@ -41,6 +44,8 @@ const history = (append: boolean, commits: Commit[]): HostMessage => ({
     status: { staged: 0, modified: 0, untracked: 0, conflicted: 0 },
   },
   anchor: { kind: 'head', hash, label: 'main' },
+  returnAnchor: null,
+  references: { references: [], truncated: false },
   page: { commits, hasMore: true },
   append,
 });
@@ -60,6 +65,18 @@ it('preserves selected commit, detail, and line evidence through refresh and pag
   });
   const detail = state.detail;
   state = receive(state, history(false, []));
+  expect(state.selectedHash).toBe(hash);
+  expect(state.detail).toBe(detail);
+  expect(state.investigation).toBe(investigation);
+  state = receive(state, {
+    ...history(false, []),
+    anchor: {
+      kind: 'ref',
+      hash: 'b'.repeat(40),
+      label: 'other',
+      ref: 'refs/heads/other',
+    },
+  });
   expect(state.selectedHash).toBe(hash);
   expect(state.detail).toBe(detail);
   expect(state.investigation).toBe(investigation);

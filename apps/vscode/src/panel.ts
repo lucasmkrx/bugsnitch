@@ -4,6 +4,8 @@ import {
   inspectCommit,
   recentHistory,
   repositorySnapshot,
+  listReferences,
+  GitError,
 } from '@bugsnitch/git';
 import { parseWebviewMessage } from '@bugsnitch/shared';
 import type {
@@ -11,6 +13,7 @@ import type {
   Investigation,
   CommitDetail,
   HistoryAnchor,
+  ReferencePage,
   RepositorySnapshot,
 } from '@bugsnitch/shared';
 import { webviewHtml } from './webview-html';
@@ -35,6 +38,8 @@ export class BugsnitchPanel implements vscode.Disposable {
   private shownInvestigation: Investigation | undefined;
   private lastDetail: CommitDetail | undefined;
   private anchor: HistoryAnchor | undefined;
+  private returnAnchor: HistoryAnchor | null = null;
+  private references: ReferencePage = { references: [], truncated: false };
   private readonly knownCommits = new Set<string>();
 
   constructor(
@@ -78,9 +83,17 @@ export class BugsnitchPanel implements vscode.Disposable {
         if (!message || this.busy || this.disposed) return;
         if (message.type === 'ready') {
           this.ready = true;
+          // VS Code can recreate a hidden webview; replay its context.
+          this.shownInvestigation = undefined;
           void this.task(async () => {
             await this.history(false);
             await this.publishInvestigation();
+            if (this.lastDetail)
+              await this.post({
+                version: 1,
+                type: 'commit',
+                detail: this.lastDetail,
+              });
           });
         } else if (message.type === 'refresh')
           void this.task(() => this.history(false));
@@ -101,14 +114,31 @@ export class BugsnitchPanel implements vscode.Disposable {
               label: `Commit ${message.hash.slice(0, 8)}`,
             }),
           );
-        else if (
+        else if (message.type === 'returnToHistory' && this.returnAnchor)
+          void this.task(() => this.history(false, this.returnAnchor!));
+        else if (message.type === 'selectRef') {
+          const ref = this.references.references.find(
+            (ref) => ref.name === message.name,
+          );
+          if (ref)
+            void this.task(() =>
+              this.history(false, {
+                kind: 'ref',
+                hash: ref.hash,
+                label: ref.label,
+                ref: ref.name,
+              }),
+            );
+        } else if (
           message.type === 'inspectCommit' &&
           this.knownCommits.has(message.hash)
         )
           void this.task(async () => {
+            const investigation = this.pendingInvestigation;
             const detail = await inspectCommit(this.root, message.hash, {
               signal: this.controller.signal,
             });
+            if (investigation !== this.pendingInvestigation) return;
             this.lastDetail = detail;
             for (const parent of detail.commit.parents)
               this.knownCommits.add(parent);
@@ -135,6 +165,8 @@ export class BugsnitchPanel implements vscode.Disposable {
 
   async showInvestigation(investigation: Investigation): Promise<void> {
     this.pendingInvestigation = investigation;
+    if (this.lastDetail?.commit.hash !== investigation.commit?.hash)
+      this.lastDetail = undefined;
     if (investigation.commit) this.knownCommits.add(investigation.commit.hash);
     this.reveal();
     if (this.ready && !this.busy) await this.publishInvestigation();
@@ -183,13 +215,40 @@ export class BugsnitchPanel implements vscode.Disposable {
     const snapshot = append
       ? this.snapshot
       : await repositorySnapshot(this.root, options);
+    const references = append
+      ? this.references
+      : await listReferences(this.root, options);
     const offset = append ? this.offset : 0;
     if (!snapshot) return;
     const current = requested ?? this.anchor;
-    const anchor: HistoryAnchor =
+    let anchor: HistoryAnchor =
       current?.kind === 'commit'
         ? current
         : { kind: 'head', hash: snapshot.head, label: snapshot.branch };
+    if (current?.kind === 'ref') {
+      const reference = references.references.find(
+        (ref) => ref.name === current.ref,
+      );
+      if (!reference)
+        throw new GitError(
+          'failed',
+          'This reference is no longer available in the local reference list. Choose another entry point.',
+        );
+      anchor = append
+        ? current
+        : {
+            kind: 'ref',
+            hash: reference.hash,
+            label: reference.label,
+            ref: reference.name,
+          };
+    }
+    const returnAnchor =
+      requested?.kind === 'commit' && this.anchor?.kind !== 'commit'
+        ? (this.anchor ?? null)
+        : requested && requested.kind !== 'commit'
+          ? null
+          : this.returnAnchor;
     const configured = vscode.workspace
       .getConfiguration('bugsnitch')
       .get<number>('historyPageSize', 50);
@@ -208,6 +267,8 @@ export class BugsnitchPanel implements vscode.Disposable {
     // mixing the previous list with a new snapshot during pagination.
     this.snapshot = snapshot;
     this.anchor = anchor;
+    this.returnAnchor = returnAnchor;
+    this.references = references;
     this.offset = offset + page.commits.length;
     if (!append) {
       this.knownCommits.clear();
@@ -228,6 +289,8 @@ export class BugsnitchPanel implements vscode.Disposable {
       page,
       append,
       anchor,
+      returnAnchor,
+      references,
     });
   }
 }

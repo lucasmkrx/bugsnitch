@@ -12,7 +12,7 @@ The focused 0.2.0 milestone:
 
 - Stable ancestry lanes alongside history, including branches, merges, and page continuations (implemented).
 - Connect line provenance, commit inspection, and graph selection without losing investigation context (implemented).
-- Browse branches and tags without checking them out or changing the working tree.
+- Browse branches and tags without checking them out or changing the working tree (implemented).
 
 A commit attributed to a line is an investigation lead, not proof that it introduced a regression. This milestone adds no mutating Git operations, AI, billing, or cloud services.
 

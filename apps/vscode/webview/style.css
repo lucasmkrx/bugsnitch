@@ -38,6 +38,37 @@ pre:focus-visible {
   outline: 2px solid var(--vscode-focusBorder);
   outline-offset: 3px;
 }
+select:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 3px;
+}
+.history-picker {
+  margin-bottom: 14px;
+}
+.history-picker label {
+  display: block;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.history-picker select {
+  font: inherit;
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+  background: var(
+    --vscode-dropdown-background,
+    var(--vscode-editor-background)
+  );
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-panel-border));
+  padding: 8px;
+  width: 100%;
+  max-width: 100%;
+}
+.history-picker .hint {
+  margin: 6px 0;
+}
+body.vscode-high-contrast select,
+body.vscode-high-contrast-light select {
+  border-color: var(--vscode-contrastBorder);
+}
 h1,
 h2,
 h3,

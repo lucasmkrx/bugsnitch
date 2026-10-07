@@ -31,10 +31,20 @@ export interface HistoryPage {
   hasMore: boolean;
 }
 
-export interface HistoryAnchor {
-  kind: 'head' | 'commit';
-  hash: string | null;
+export type HistoryAnchor =
+  | { kind: 'head'; hash: string | null; label: string }
+  | { kind: 'commit'; hash: string; label: string }
+  | { kind: 'ref'; hash: string; label: string; ref: string };
+
+export interface RepositoryReference {
+  name: string;
   label: string;
+  kind: 'branch' | 'remote' | 'tag';
+  hash: string;
+}
+export interface ReferencePage {
+  references: RepositoryReference[];
+  truncated: boolean;
 }
 
 export interface LineProvenance {

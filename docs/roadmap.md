@@ -18,12 +18,12 @@ A commit attributed to a line is an investigation lead, not proof that it introd
 
 Later visual Git work:
 
-- Commit comparison and richer diffs.
-- File history and function/symbol history.
+- Historical per-file and arbitrary merge-parent comparisons (implemented in 0.3.0); richer diff presentation remains future work.
+- Rename-following file history (implemented in 0.3.0); function/symbol history remains future work.
 
 ## Phase 3 — Git Forensics
 
-- Investigation sessions and good/bad regression ranges.
+- In-memory investigation sessions, ancestor-validated good/bad ranges, manual notes and explicit export (implemented in 0.3.0). Persistent/importable sessions remain future work.
 - Visual Git bisect with careful confirmation for working-tree changes.
 - Related-change analysis and suspicious commit ranking with explainable evidence.
 - “What changed around this code?”

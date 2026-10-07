@@ -4,5 +4,12 @@
 !CHANGELOG.md
 !LICENSE
 !TRADEMARKS.md
-!dist/**
-dist/**/*.map
+!dist/extension.cjs
+!dist/THIRD_PARTY_NOTICES.txt
+!dist/BUNDLED_DEPENDENCIES.json
+!dist/webview/webview.js
+!dist/webview/webview.css
+!dist/brand/README.md
+!dist/brand/bugsnitch-icon.png
+!dist/brand/bugsnitch-logo.svg
+!dist/brand/bugsnitch-logo-dark.svg

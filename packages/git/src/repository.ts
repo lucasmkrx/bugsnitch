@@ -8,7 +8,7 @@ import type {
   LineProvenance,
   RepositorySnapshot,
 } from '@bugsnitch/shared';
-import { isCommitHash } from '@bugsnitch/shared';
+import { isCommitHash, isRepositoryPath } from '@bugsnitch/shared';
 import { GitError } from './errors';
 import { gitText, hasContentFilters, runGit } from './process';
 import type { GitRunOptions } from './process';
@@ -56,17 +56,12 @@ export function relativeGitPath(root: string, file: string): string {
   return path.split(sep).join('/');
 }
 
-function validatePath(path: string): void {
-  if (
-    !path ||
-    path.includes('\0') ||
-    isAbsolute(path) ||
-    path.split('/').includes('..')
-  )
+export function validatePath(path: string): void {
+  if (!isRepositoryPath(path) || isAbsolute(path))
     throw new GitError('invalidInput', 'Choose a file inside the repository.');
 }
 
-function validateHash(hash: string): void {
+export function validateHash(hash: string): void {
   if (!isCommitHash(hash))
     throw new GitError(
       'invalidInput',
@@ -83,10 +78,16 @@ export async function repositorySnapshot(
     runGit(root, ['rev-parse', '--verify', 'HEAD'], options),
     gitText(
       root,
-      ['status', '--porcelain=v1', '-z', '--untracked-files=normal'],
+      [
+        'status',
+        '--porcelain=v1',
+        '-z',
+        '--untracked-files=normal',
+        '--ignore-submodules=all',
+      ],
       options,
     ),
-    hasContentFilters(root),
+    hasContentFilters(root, options),
   ]);
   const hash = head.exitCode === 0 ? head.stdout.trim() : null;
   if (hash !== null && !isCommitHash(hash))
@@ -182,13 +183,19 @@ export async function readCommit(
 export async function inspectCommit(
   root: string,
   hash: string,
-  options: GitRunOptions = {},
+  options: GitRunOptions & { parent?: string; path?: string } = {},
 ): Promise<CommitDetail> {
   validateHash(hash);
   const commit = await readCommit(root, hash, options);
-  const revisions = commit.parents[0]
-    ? [commit.parents[0], hash]
-    : ['--root', hash];
+  const parent = options.parent ?? commit.parents[0];
+  if (options.parent && !commit.parents.includes(options.parent))
+    throw new GitError(
+      'invalidInput',
+      'Choose a parent of the inspected commit.',
+    );
+  if (options.path) validatePath(options.path);
+  const paths = options.path ? [options.path] : [];
+  const revisions = parent ? [parent, hash] : ['--root', hash];
   const [files, diff] = await Promise.all([
     gitText(
       root,
@@ -203,22 +210,24 @@ export async function inspectCommit(
         '--no-textconv',
         ...revisions,
         '--',
+        ...paths,
       ],
       options,
     ),
     runGit(
       root,
       [
-        'show',
-        '--format=',
-        '--first-parent',
+        ...(parent
+          ? ['diff', parent, hash]
+          : ['show', '--root', '--format=', hash]),
+        '--submodule=short',
         '--no-ext-diff',
         '--no-textconv',
         '--no-renames',
         '--no-color',
         '--unified=3',
-        hash,
         '--',
+        ...paths,
       ],
       { ...options, maxBytes: 256 * 1024, truncate: true },
     ),
@@ -233,6 +242,8 @@ export async function inspectCommit(
     files: parseChangedFiles(files),
     diff: diff.stdout,
     diffTruncated: diff.truncated,
+    comparisonParent: parent ?? null,
+    selectedPath: options.path ?? null,
   };
 }
 

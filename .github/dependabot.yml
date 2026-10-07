@@ -4,6 +4,16 @@ updates:
     directory: /
     schedule: { interval: weekly }
     open-pull-requests-limit: 5
+    ignore:
+      # Match the declared Node toolchain; major upgrades need a compatibility review.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
+      # Type-check against the minimum supported VS Code API, not the newest host.
+      - dependency-name: '@types/vscode'
+        versions: ['*']
+      # Upgrade compiler majors together with the parser/tooling support matrix.
+      - dependency-name: typescript
+        update-types: ['version-update:semver-major']
     groups:
       development-tooling:
         dependency-type: development

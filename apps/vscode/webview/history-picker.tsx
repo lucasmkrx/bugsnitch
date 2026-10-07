@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+import { useState } from 'react';
 import type { HistoryAnchor, ReferencePage } from '@bugsnitch/shared';
 
 export function HistoryPicker({
@@ -12,8 +13,17 @@ export function HistoryPicker({
   disabled: boolean;
   onSelect: (name: string | null) => void;
 }) {
+  const [query, setQuery] = useState('');
   return (
     <div className="history-picker">
+      <label htmlFor="ref-search">Find a branch or tag</label>
+      <input
+        id="ref-search"
+        type="search"
+        value={query}
+        onChange={(event) => setQuery(event.target.value)}
+        placeholder="Filter local refs"
+      />
       <label htmlFor="history-entry">History entry point</label>
       <select
         id="history-entry"
@@ -42,7 +52,12 @@ export function HistoryPicker({
           ] as const
         ).map(([kind, label]) => {
           const options = references.references.filter(
-            (ref) => ref.kind === kind,
+            (ref) =>
+              ref.kind === kind &&
+              (ref.label
+                .toLocaleLowerCase()
+                .includes(query.toLocaleLowerCase()) ||
+                (anchor.kind === 'ref' && anchor.ref === ref.name)),
           );
           return options.length ? (
             <optgroup key={kind} label={label}>

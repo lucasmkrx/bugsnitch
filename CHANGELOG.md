@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.0 — Preview
+
+- Compare any merge parent, preview one file, open read-only historical VS Code diffs, and follow file history across renames.
+- Freeze an ancestor-validated known-good/known-bad range; add manual verdicts and evidence notes with explicit JSON export.
+- Restore complete panel state after webview recreation and capture immutable, ordered editor requests.
+- Harden root-commit patches, malformed Git output, shared cancellation, deadlines, inherited Git environment and submodule helper suppression.
+- Add production-browser accessibility checks, an exact installed-VSIX smoke, generated ancestry checks, measured benchmarks, clean build inventory and dependency-derived notices.
+- Keep previews under the temporary publisher until the owner establishes a permanent Marketplace identity.
+
 ## 0.2.0 — Preview
 
 - Draw real parent ancestry beside commit history, including branches and merges, with stable lanes across pagination and explicit continuations at page boundaries.

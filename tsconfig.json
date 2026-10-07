@@ -6,6 +6,9 @@
     "apps/**/*.mts",
     "packages/**/*.ts",
     "packages/**/*.tsx",
-    "vitest.config.ts"
+    "vitest.config.ts",
+    "playwright.config.ts",
+    "scripts/browser/**/*.ts",
+    "scripts/benchmark.ts"
   ]
 }

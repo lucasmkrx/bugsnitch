@@ -7,6 +7,8 @@ import type {
   Investigation,
   RepositorySnapshot,
   ReferencePage,
+  FileHistory,
+  InvestigationSession,
 } from '@bugsnitch/shared';
 
 export interface ViewState {
@@ -22,6 +24,8 @@ export interface ViewState {
   busy: boolean;
   hasMore: boolean;
   error: string;
+  fileHistory: FileHistory | null;
+  session: InvestigationSession;
 }
 export const initialViewState: ViewState = {
   repository: null,
@@ -36,6 +40,8 @@ export const initialViewState: ViewState = {
   busy: true,
   hasMore: false,
   error: '',
+  fileHistory: null,
+  session: { good: null, bad: null, range: null, annotations: [] },
 };
 export type ViewAction =
   | { type: 'host'; message: HostMessage }
@@ -57,6 +63,10 @@ export function reduceViewState(
   if (action.type === 'revealed') return { ...state, revealHash: null };
   const message = action.message;
   switch (message.type) {
+    case 'fileHistory':
+      return { ...state, fileHistory: message.history, error: '' };
+    case 'session':
+      return { ...state, session: message.session, error: '' };
     case 'history':
       return {
         ...state,

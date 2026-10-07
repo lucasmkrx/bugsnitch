@@ -1,6 +1,6 @@
 {
   "name": "bugsnitch-workspace",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "license": "MPL-2.0",
@@ -19,15 +19,24 @@
     "test:watch": "vitest",
     "test:extension": "pnpm build && node scripts/test-extension.mjs",
     "demo": "node scripts/create-demo.mjs",
-    "package": "pnpm build && pnpm --filter bugsnitch package"
+    "package": "pnpm build && pnpm --filter bugsnitch package",
+    "test:browser": "pnpm build && playwright test",
+    "test:coverage": "vitest run --coverage",
+    "validate:release": "node scripts/validate-release.mjs",
+    "validate:package": "node scripts/validate-package.mjs",
+    "test:package": "pnpm package && pnpm validate:package && node scripts/test-extension.mjs --installed",
+    "benchmark": "node scripts/benchmark.mjs"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.13.0",
     "@eslint/js": "10.0.1",
+    "@playwright/test": "1.63.0",
     "@resvg/resvg-js": "2.6.2",
     "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/vscode": "1.105.0",
+    "@vitest/coverage-v8": "5.0.3",
     "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "4.0.0",
     "esbuild": "0.28.2",

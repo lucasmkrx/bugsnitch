@@ -1,6 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { pathToFileURL } from 'node:url';
@@ -30,6 +39,126 @@ afterEach(async () => {
 });
 
 describe('local Git inspection', () => {
+  it('discovers linked worktrees, nested repositories, symlink aliases and rejects bare roots', async () => {
+    const root = await repo();
+    const hash = await commitFile(root, 'file.txt', 'contents\n');
+    const linked = await mkdtemp(join(tmpdir(), 'bugsnitch worktree '));
+    roots.push(linked);
+    await fixtureGit(root, 'worktree', 'add', '--detach', linked, hash);
+    expect(await findRepository(linked)).toBe(await realpath(linked));
+    expect((await repositorySnapshot(linked)).head).toBe(hash);
+    expect((await recentHistory(linked)).commits[0]?.hash).toBe(hash);
+    await fixtureGit(root, 'worktree', 'remove', linked);
+    const nested = join(root, 'nested');
+    await mkdir(nested);
+    await fixtureGit(nested, 'init', '-b', 'main');
+    expect(await findRepository(nested)).toBe(nested);
+    const bare = await mkdtemp(join(tmpdir(), 'bugsnitch bare '));
+    roots.push(bare);
+    await fixtureGit(bare, 'init', '--bare');
+    expect(await findRepository(bare)).toBeNull();
+    if (process.platform !== 'win32') {
+      const alias = join(root, 'alias');
+      await symlink(nested, alias);
+      expect(await findRepository(alias)).toBe(nested);
+    }
+  });
+  it('shows root patches despite ambient root and submodule diff settings', async () => {
+    const root = await repo();
+    const hash = await commitFile(root, 'root.txt', 'root evidence\n');
+    await fixtureGit(root, 'config', 'log.showRoot', 'false');
+    await fixtureGit(root, 'config', 'diff.submodule', 'diff');
+    const detail = await inspectCommit(root, hash);
+    expect(detail.files).toEqual([{ status: 'A', path: 'root.txt' }]);
+    expect(detail.diff).toContain('+root evidence');
+  });
+  it('classifies a deleted directory separately from a missing executable', async () => {
+    const root = await repo();
+    await rm(root, { recursive: true, force: true });
+    await expect(runGit(root, ['status'])).rejects.toMatchObject({
+      code: 'notRepository',
+    });
+  });
+  it('never expands submodule patches or reads submodule working-tree filters', async () => {
+    const child = await repo();
+    await commitFile(child, '.gitattributes', '*.txt filter=evil\n');
+    await commitFile(child, 'tracked.txt', 'before\n');
+    const parent = await repo();
+    await commitFile(parent, 'parent.txt', 'parent\n');
+    await fixtureGit(
+      parent,
+      '-c',
+      'protocol.file.allow=always',
+      'submodule',
+      'add',
+      child,
+      'module',
+    );
+    await fixtureGit(parent, 'commit', '-m', 'Add submodule');
+    await commitFile(child, 'tracked.txt', 'after\n');
+    await fixtureGit(
+      join(parent, 'module'),
+      '-c',
+      'protocol.file.allow=always',
+      'fetch',
+    );
+    await fixtureGit(
+      join(parent, 'module'),
+      'checkout',
+      await fixtureGit(child, 'rev-parse', 'HEAD'),
+    );
+    await fixtureGit(parent, 'add', 'module');
+    await fixtureGit(parent, 'commit', '-m', 'Update gitlink');
+    const module = join(parent, 'module');
+    const grandchild = await repo();
+    await commitFile(grandchild, '.gitattributes', '*.txt filter=evil\n');
+    await commitFile(grandchild, 'tracked.txt', 'nested contents\n');
+    await fixtureGit(
+      module,
+      '-c',
+      'protocol.file.allow=always',
+      'submodule',
+      'add',
+      grandchild,
+      'nested',
+    );
+    const marker = join(parent, 'helper-ran');
+    const script = join(parent, 'helper.cjs');
+    await writeFile(
+      script,
+      `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'ran');`,
+    );
+    const helper = `node "${script.replaceAll('\\', '/')}"`;
+    for (const [key, value] of [
+      ['filter.evil.clean', helper],
+      ['filter.evil.process', helper],
+      ['diff.external', helper],
+      ['diff.evil.textconv', helper],
+      ['core.fsmonitor', helper],
+    ])
+      for (const childRoot of [module, join(module, 'nested')])
+        await fixtureGit(childRoot, 'config', key!, value!);
+    await fixtureGit(parent, 'config', 'diff.submodule', 'diff');
+    await writeFile(join(module, 'tracked.txt'), 'dirty\n');
+    await writeFile(join(module, 'nested', 'tracked.txt'), 'nested dirty\n');
+    const head = await fixtureGit(parent, 'rev-parse', 'HEAD');
+    const indexPath = await fixtureGit(
+      parent,
+      'rev-parse',
+      '--git-path',
+      'index',
+    );
+    const index = await readFile(join(parent, indexPath));
+    await repositorySnapshot(parent);
+    const detail = await inspectCommit(parent, head);
+    expect(detail.diff).toContain('Subproject commit');
+    await expect(readFile(marker)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await readFile(join(parent, indexPath))).toEqual(index);
+    expect(await readFile(join(module, 'tracked.txt'), 'utf8')).toBe('dirty\n');
+    expect(await readFile(join(module, 'nested', 'tracked.txt'), 'utf8')).toBe(
+      'nested dirty\n',
+    );
+  });
   it('detects repositories and keeps empty repository history useful', async () => {
     const root = await repo();
     expect(await findRepository(root)).toBe(root);
@@ -171,6 +300,12 @@ describe('local Git inspection', () => {
     expect(detail.commit.parents).toHaveLength(2);
     expect(detail.files).toEqual([{ status: 'A', path: 'feature.txt' }]);
     expect(detail.diff).toContain('+feature');
+    const secondParent = await inspectCommit(root, hash, {
+      parent: detail.commit.parents[1]!,
+    });
+    expect(secondParent.files).toEqual([{ status: 'A', path: 'main.txt' }]);
+    expect(secondParent.diff).toContain('+main');
+    expect(secondParent.comparisonParent).toBe(detail.commit.parents[1]);
     await fixtureGit(root, 'checkout', '--detach', hash);
     expect((await repositorySnapshot(root)).branch).toContain('Detached HEAD');
   });
@@ -257,9 +392,10 @@ describe('local Git inspection', () => {
   });
   it('caps large patches, rejects large metadata and supports cancellation and missing Git', async () => {
     const root = await repo();
-    const hash = await commitFile(root, 'large.txt', `${'x'.repeat(300000)}\n`);
+    const hash = await commitFile(root, 'large.txt', `${'🙂'.repeat(80000)}\n`);
     const detail = await inspectCommit(root, hash);
     expect(detail.diffTruncated).toBe(true);
+    expect(detail.diff).not.toContain('\uFFFD');
     expect(Buffer.byteLength(detail.diff)).toBeLessThanOrEqual(256 * 1024);
     await expect(
       runGit(root, ['log', '-1'], { maxBytes: 4 }),

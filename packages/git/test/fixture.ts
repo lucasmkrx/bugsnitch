@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -12,9 +12,14 @@ export async function fixtureGit(
 ): Promise<string> {
   const result = await execute('git', ['-C', root, ...args], {
     env: {
-      ...process.env,
+      ...Object.fromEntries(
+        Object.entries(process.env).filter(
+          ([key]) => !key.toUpperCase().startsWith('GIT_'),
+        ),
+      ),
       GIT_CONFIG_NOSYSTEM: '1',
       GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+      GIT_TERMINAL_PROMPT: '0',
       GIT_AUTHOR_DATE: '2026-01-02T10:00:00Z',
       GIT_COMMITTER_DATE: '2026-01-02T10:00:00Z',
     },
@@ -23,12 +28,17 @@ export async function fixtureGit(
 }
 export async function createRepository(): Promise<string> {
   const root = await realpath(await mkdtemp(join(tmpdir(), 'bugsnitch test ')));
-  await fixtureGit(root, 'init', '-b', 'main');
-  await fixtureGit(root, 'config', 'user.name', 'Lúcia 山田');
-  await fixtureGit(root, 'config', 'user.email', 'fixture@example.invalid');
-  await fixtureGit(root, 'config', 'commit.gpgsign', 'false');
-  await fixtureGit(root, 'config', 'core.autocrlf', 'false');
-  return root;
+  try {
+    await fixtureGit(root, 'init', '-b', 'main');
+    await fixtureGit(root, 'config', 'user.name', 'Lúcia 山田');
+    await fixtureGit(root, 'config', 'user.email', 'fixture@example.invalid');
+    await fixtureGit(root, 'config', 'commit.gpgsign', 'false');
+    await fixtureGit(root, 'config', 'core.autocrlf', 'false');
+    return root;
+  } catch (error) {
+    await rm(root, { recursive: true, force: true });
+    throw error;
+  }
 }
 export async function commitFile(
   root: string,

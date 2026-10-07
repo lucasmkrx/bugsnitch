@@ -43,6 +43,11 @@ export function CommitRow({
             </time>
             {commit.parents.length > 1 ? ' · Merge commit' : ''}
           </span>
+          <span className="sr-only">
+            {commit.parents.length
+              ? `Parents: ${commit.parents.map((parent) => parent.slice(0, 8)).join(', ')}.`
+              : 'Root commit with no parents.'}
+          </span>
           {commit.refs.length > 0 && (
             <span className="refs" aria-label="References">
               {commit.refs.map((ref) => (

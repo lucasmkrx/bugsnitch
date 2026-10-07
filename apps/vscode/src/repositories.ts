@@ -4,9 +4,18 @@ import { dirname } from 'node:path';
 import { findRepository, GitError } from '@bugsnitch/git';
 
 export async function selectRepository(): Promise<string> {
+  const failures: unknown[] = [];
+  const discover = async (directory: string) => {
+    try {
+      return await findRepository(directory);
+    } catch (error) {
+      failures.push(error);
+      return null;
+    }
+  };
   const editor = vscode.window.activeTextEditor;
   if (editor?.document.uri.scheme === 'file') {
-    const root = await findRepository(dirname(editor.document.uri.fsPath));
+    const root = await discover(dirname(editor.document.uri.fsPath));
     if (root) return root;
   }
   const folders = vscode.workspace.workspaceFolders ?? [];
@@ -16,7 +25,7 @@ export async function selectRepository(): Promise<string> {
         await Promise.all(
           folders
             .filter((folder) => folder.uri.scheme === 'file')
-            .map((folder) => findRepository(folder.uri.fsPath)),
+            .map((folder) => discover(folder.uri.fsPath)),
         )
       ).filter((root): root is string => root !== null),
     ),
@@ -30,6 +39,7 @@ export async function selectRepository(): Promise<string> {
     if (selected) return selected.root;
     throw new GitError('cancelled', 'Repository selection was cancelled.');
   }
+  if (failures.length) throw failures[0];
   throw new GitError(
     'notRepository',
     'Open a Git repository folder or a tracked file, then run Bugsnitch again.',

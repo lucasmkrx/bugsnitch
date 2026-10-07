@@ -25,3 +25,5 @@ Desktop.ini
 apps/vscode/LICENSE
 apps/vscode/TRADEMARKS.md
 apps/vscode/CHANGELOG.md
+test-results/
+playwright-report/

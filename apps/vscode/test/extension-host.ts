@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isHostMessage } from '@bugsnitch/shared';
 import type { HostMessage, WebviewMessage } from '@bugsnitch/shared';
 import vscode from 'vscode';
 
@@ -55,7 +56,13 @@ export async function run(): Promise<void> {
   };
   assert.ok(fixture.root && fixture.good && fixture.suspect && fixture.head);
   const manifest = JSON.parse(
-    await readFile(join(__dirname, '../../package.json'), 'utf8'),
+    await readFile(
+      join(
+        process.env.BUGSNITCH_TEST_EXTENSION_PATH ?? join(__dirname, '../..'),
+        'package.json',
+      ),
+      'utf8',
+    ),
   ) as {
     publisher: string;
     name: string;
@@ -68,6 +75,7 @@ export async function run(): Promise<void> {
   const errors: string[] = [];
   const createPanel = vscode.window.createWebviewPanel;
   const showError = vscode.window.showErrorMessage;
+  const showSave = vscode.window.showSaveDialog;
   vscode.window.showErrorMessage = (async (message: string) => {
     errors.push(message);
     return undefined;
@@ -78,6 +86,10 @@ export async function run(): Promise<void> {
     records.push(record);
     const post = panel.webview.postMessage.bind(panel.webview);
     panel.webview.postMessage = (message: HostMessage) => {
+      assert.ok(
+        isHostMessage(message),
+        `Malformed host response: ${message.type}`,
+      );
       record.messages.push(message);
       return post(message);
     };
@@ -175,6 +187,79 @@ export async function run(): Promise<void> {
     assert.equal(history(record.messages).anchor.hash, fixture.good);
     await request(record, { version: 1, type: 'returnToHead' });
     assert.equal(history(record.messages).anchor.hash, fixture.head);
+    await request(record, {
+      version: 1,
+      type: 'markBad',
+      hash: fixture.suspect,
+    });
+    await request(record, { version: 1, type: 'markGood', hash: fixture.good });
+    await request(record, { version: 1, type: 'viewRange' });
+    const session = [...record.messages]
+      .reverse()
+      .find((message) => message.type === 'session');
+    assert.ok(session?.type === 'session' && session.session.range);
+    assert.ok(
+      session.session.range.commits.some(
+        (commit) => commit.hash === fixture.suspect,
+      ),
+    );
+    await request(record, {
+      version: 1,
+      type: 'annotate',
+      hash: fixture.suspect,
+      note: 'Reproduced with two items.',
+      verdict: 'confirmed',
+    });
+    await request(record, {
+      version: 1,
+      type: 'inspectCommit',
+      hash: fixture.suspect,
+    });
+    await request(record, {
+      version: 1,
+      type: 'inspectFile',
+      hash: fixture.suspect,
+      path: 'checkout.js',
+    });
+    await request(record, {
+      version: 1,
+      type: 'fileHistory',
+      hash: fixture.suspect,
+      path: 'checkout.js',
+    });
+    assert.ok(
+      record.messages.some(
+        (message) =>
+          message.type === 'fileHistory' && message.history.commits.length > 0,
+      ),
+    );
+    await request(record, {
+      version: 1,
+      type: 'openDiff',
+      hash: fixture.suspect,
+      path: 'checkout.js',
+    });
+    assert.ok(
+      vscode.window.tabGroups.all
+        .flatMap((group) => group.tabs)
+        .some((tab) => tab.input instanceof vscode.TabInputTextDiff),
+      'Native historical diff opens',
+    );
+    const native = vscode.window.tabGroups.all
+      .flatMap((group) => group.tabs)
+      .find((tab) => tab.input instanceof vscode.TabInputTextDiff)?.input;
+    assert.ok(native instanceof vscode.TabInputTextDiff);
+    const historical = await vscode.workspace.openTextDocument(native.modified);
+    assert.ok(historical.uri.scheme.startsWith('bugsnitch-'));
+    assert.ok(historical.getText().includes('sum + item.price, 0)'));
+    vscode.window.showSaveDialog = async () =>
+      vscode.Uri.file(join(fixture.root, 'evidence-export.json'));
+    await request(record, { version: 1, type: 'exportInvestigation' });
+    const exported = JSON.parse(
+      await readFile(join(fixture.root, 'evidence-export.json'), 'utf8'),
+    );
+    assert.equal(exported.annotations[0].verdict, 'confirmed');
+    assert.ok(!JSON.stringify(exported).includes(fixture.root));
     const count = record.messages.length;
     for (const handler of record.handlers)
       handler({ version: 1, type: 'selectRef', name: 'refs/heads/unknown' });
@@ -198,11 +283,12 @@ export async function run(): Promise<void> {
     assert.equal(result.stdout.trim(), fixture.head, 'Checkout unchanged');
     assert.deepEqual(errors, []);
     console.log(
-      'PASS: VS Code host — Open, line attribution, pagination, inspection, parent/ref navigation, graph focus, unchanged checkout/index/file',
+      'PASS: VS Code host — Open, line attribution, pagination, inspection, parent/ref navigation, graph focus, native diff, file history, evidence export, unchanged checkout/index/file',
     );
   } finally {
     vscode.window.createWebviewPanel = createPanel;
     vscode.window.showErrorMessage = showError;
+    vscode.window.showSaveDialog = showSave;
     for (const record of records) record.panel.dispose();
   }
 }

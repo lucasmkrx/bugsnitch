@@ -125,3 +125,35 @@ it('preserves merge edges and marks parents outside the loaded page', () => {
   ]);
   expect(graph.nodes[0]?.row).toBe(0);
 });
+
+it('preserves drawn ancestry and prefix stability for deterministic generated DAGs', () => {
+  let state = 0x51a7;
+  const random = () => {
+    state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+    return state / 2 ** 32;
+  };
+  for (let sample = 0; sample < 30; sample++) {
+    const size = 12 + Math.floor(random() * 28);
+    const commits = Array.from({ length: size }, (_, row) => {
+      const remaining = size - row - 1;
+      const parents = new Set<string>();
+      for (let i = 0; i < Math.min(remaining, Math.floor(random() * 4)); i++)
+        parents.add(String(row + 1 + Math.floor(random() * remaining)));
+      if (random() < 0.15) parents.add(`outside-${sample}`);
+      return fixture(String(row), [...parents]);
+    });
+    const full = createCommitGraph(commits);
+    for (let prefix = 1; prefix <= size; prefix++) {
+      expect(createCommitGraph(commits.slice(0, prefix)).nodes).toEqual(
+        full.nodes.slice(0, prefix),
+      );
+      assertDrawnAncestry(commits.slice(0, prefix));
+    }
+    expect(full.edges).toHaveLength(
+      commits.reduce((count, commit) => count + commit.parents.length, 0),
+    );
+    expect(new Set(full.boundaries.map((boundary) => boundary.hash)).size).toBe(
+      full.boundaries.length,
+    );
+  }
+});

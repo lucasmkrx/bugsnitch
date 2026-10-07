@@ -19,11 +19,13 @@ Bugsnitch turns a line of code into a trail through local Git history. Inspect i
 
 **[Download the preview VSIX](https://github.com/lucasmkrx/bugsnitch/releases) · [Try a guided investigation](docs/demo.md) · [Read the engineering case study](docs/engineering.md)**
 
-**0.2.0 is an early development preview.** Regression range and bisect workflows remain future work. A line-associated commit is an investigation lead, not proof that it introduced a bug.
+**0.3.0 is the current source preview.** Historical file comparisons and manual good/bad investigations are implemented; automatic regression detection and bisect remain future work. A line-associated commit is an investigation lead, not proof that it introduced a bug.
 
 ![Bugsnitch ancestry graph, tag entry point, line evidence, and merge inspection](docs/screenshots/investigation-dark.jpg)
 
-The production webview displaying a real disposable Git repository with VS Code dark theme colors. This capture shows the webview; the VS Code shell is outside the image.
+The 0.2.0 production webview displaying a real disposable Git repository with VS Code dark theme colors. This capture shows the webview; the VS Code shell is outside the image.
+
+[Watch the 0.3.0 production-webview test journey](docs/screenshots/investigation.webm) or [see its current evidence view](docs/screenshots/investigation-current.png). The recording uses a real disposable Git repository and production UI through the browser test adapter; it does not show the VS Code shell.
 
 ## Investigate in three steps
 
@@ -35,7 +37,7 @@ All Git inspection runs locally. No account, telemetry, AI API, cloud upload, or
 
 ## Install and try it
 
-Requires **VS Code 1.105.0+**, **system Git on `PATH`**, and a **trusted local Git workspace**.
+Requires **VS Code 1.105.0+**, **Git 2.39+ on `PATH`**, and a **trusted local Git workspace**.
 
 Download the `.vsix` from [GitHub Releases](https://github.com/lucasmkrx/bugsnitch/releases). In VS Code, run **Extensions: Install from VSIX…** and select the file. Open a Git repository, then run **Bugsnitch: Open** from the Command Palette.
 
@@ -48,7 +50,9 @@ The preview uses the temporary publisher `bugsnitch-dev-placeholder`; it is dist
 - **Bugsnitch: Open** shows the repository path, branch, working-tree summary, and recent commits with authors, dates, and refs.
 - Graph lanes show the selected entry point's reachable ancestry, including branches and merges. Loading older pages preserves existing lane positions; dashed lanes indicate parents outside the loaded history.
 - Browse local branches, remote-tracking branches, and commit tags from the **History entry point** selector. No checkout or fetch occurs; the repository overview always shows the actual checkout. Annotated tags are peeled to their commits.
-- Select a commit to inspect its full message, changed files, and a bounded patch preview. Merge patches compare against the first parent.
+- Select a commit to inspect its full message, changed files, and a bounded patch preview. Merge patches start with the first parent and let you choose another parent. Per-file patches, native historical diffs and rename-following file history connect the evidence.
+- Mark known-good and known-bad commits, freeze an ancestor-validated candidate range, record manual assessments and explicitly export notes.
+- Search loaded commits and filter local refs.
 - Refresh history or load another page. Opening Bugsnitch does not load the entire history.
 - **Bugsnitch: Snitch on Current Line** traces one saved line to its originating commit and original filename/line, including committed renames where Git can follow them.
 - Local changes, empty repositories, untracked files, and unavailable Git receive contextual explanations.
@@ -75,7 +79,7 @@ Open this repository in VS Code and press **F5**, selecting **Bugsnitch Extensio
 
 ```sh
 pnpm package
-code --install-extension apps/vscode/bugsnitch-0.2.0.vsix
+code --install-extension apps/vscode/bugsnitch-0.3.0.vsix
 ```
 
 If the `code` CLI is unavailable, use **Extensions: Install from VSIX…** in VS Code and select the generated file. Packaging is local and does not publish. The manifest currently uses the explicitly temporary publisher `bugsnitch-dev-placeholder`. Configure the official Marketplace publisher before releasing; Bugsnitch is not advertised as available on the Marketplace yet.
@@ -89,6 +93,9 @@ pnpm typecheck
 pnpm test
 pnpm build
 pnpm test:extension
+pnpm test:package
+pnpm exec playwright install chromium
+pnpm test:browser
 ```
 
 `pnpm format` formats source and docs. Tests create disposable Git repositories and do not depend on your history or identity. `test:extension` launches an isolated VS Code using Microsoft's test runner; its first run downloads VS Code. See [validation](docs/validation.md) for platform coverage and the scope of each check.
@@ -107,11 +114,11 @@ pnpm test:extension
 
 The project uses strict TypeScript and pnpm workspaces, esbuild for the extension host, Vite for the React webview, and Vitest for tests. There is no separate desktop app or cloud backend.
 
-The [engineering case study](docs/engineering.md) explains stable graph pagination, investigation state, and the Git/webview trust boundary. The [architecture](docs/architecture.md) describes package responsibilities and data flow.
+See the [measured performance report](docs/performance.md) and [compatibility contract](docs/compatibility.md). The [engineering case study](docs/engineering.md) explains stable graph pagination, investigation state, and the Git/webview trust boundary. The [architecture](docs/architecture.md) describes package responsibilities and data flow.
 
 ## Roadmap
 
-The 0.2.0 milestone connects visual ancestry, line investigation, and commit selection, and adds read-only branch/tag entry points. Later: richer comparisons, file/symbol history, investigation sessions, good/bad regression ranges, visual bisect, and related changes. Optional integrations and intelligence may follow; the local core must remain valuable on its own. See the [roadmap](docs/roadmap.md); no release dates are promised.
+The 0.3.0 source adds historical comparisons, file history, in-memory sessions and manual good/bad ranges to visual ancestry and line investigation. Later: symbol history, visual bisect, and related changes. Optional integrations and intelligence may follow; the local core must remain valuable on its own. See the [roadmap](docs/roadmap.md); no release dates are promised.
 
 ## Contributing and support
 

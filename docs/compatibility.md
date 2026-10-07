@@ -1,0 +1,21 @@
+# Compatibility contract
+
+Bugsnitch targets VS Code 1.105.0 or newer and system Git 2.39 or newer. Git 2.39.5 (Apple Git-154) is the local reference baseline; lower Git versions are outside the supported contract. Contributors use Node 24 and pinned pnpm 11.25.0. The extension bundle targets the minimum editor's Node 22 runtime; users do not install Node or pnpm.
+
+| Environment / repository         | Behavior and evidence                                                                                                                                                                                       |
+| -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Local Linux, macOS, Windows      | CI is configured for VS Code 1.105.0 on all three; current stable on Linux. The changed CI has to run remotely before its new results can be claimed.                                                       |
+| Linked worktree / detached HEAD  | Fixture tests discover the canonical worktree root and inspect its own HEAD.                                                                                                                                |
+| Nested repository                | The active local document's nearest repository wins. No recursive repository scan.                                                                                                                          |
+| Multi-root workspace             | Active repository preferred; otherwise deduplicated roots and a picker. One inaccessible sibling does not hide valid roots.                                                                                 |
+| Symlink workspace alias          | Canonicalized on macOS/Linux; Windows symlink creation requires OS permissions and is not covered by this fixture.                                                                                          |
+| Empty / bare repository          | Empty working repos show no commits; bare repos have no usable working root and are not selected.                                                                                                           |
+| Shallow clone                    | Inspect available local history; range investigation refuses incomplete ancestry.                                                                                                                           |
+| Partial clone                    | Never hydrate missing objects; local missing-object errors preserve the execution boundary.                                                                                                                 |
+| Submodules                       | Parent status ignores submodule dirtiness, historical patches show gitlink IDs. Opening an initialized child as its own workspace inspects that repository separately. No recursive child helper execution. |
+| Saved modified file              | Exact line input uses the captured saved document. A line without a committed origin is labeled uncommitted.                                                                                                |
+| Dirty, untitled, non-file editor | Save to a trusted local working repository first. Browser-only VS Code/virtual workspaces are unsupported.                                                                                                  |
+| Remote extension host            | No dedicated remote-host integration test yet. The runtime requires local filesystem access and Git in the extension host; do not claim verified SSH/WSL/container compatibility.                           |
+| SHA-256 object IDs               | Contracts accept 64 hex digits; comprehensive SHA-256 repository interoperability is not yet certified.                                                                                                     |
+
+Configured content filters are disabled; line tracing filtered files is unavailable. External diff/textconv/fsmonitor/signature helpers and Git transports are disabled. Git's safe-directory and permission checks remain in force. [Usage](usage.md) documents bounds and [validation](validation.md) distinguishes local results from configured CI.

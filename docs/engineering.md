@@ -38,6 +38,12 @@ Git runs asynchronously with argument arrays and no shell. Reads have cancellati
 
 The [architecture document](architecture.md) details these decisions; [Git tests](../packages/git/src/repository.test.ts) check literal paths, helper suppression, partial clones, and failure behavior. The [extension-host test](../apps/vscode/test/extension-host.ts) exercises both commands and navigation inside VS Code while verifying that HEAD, index bytes, and working files remain unchanged.
 
-## What is still unproven
+## Evidence review and release validation
 
-Automated host checks observe command execution and the host/webview protocol; they do not inspect rendered pixels or prove every keyboard interaction. Theme and accessibility review remain manual. There is no production benchmark, regression classifier, or claim that blame proves causation. The [validation guide](validation.md) distinguishes automated coverage from manual verification.
+The production browser harness uses the actual panel controller and webview bundle with a narrow VS Code API adapter and real temporary Git repositories. It clicks through pagination, inspection, known-good/bad ranges, notes and file history, checks focus and runs axe WCAG A/AA scans at narrow and wide widths in representative light/dark/high-contrast colors. This complements the editor host test rather than pretending Chromium is VS Code.
+
+The installed smoke packages and validates a VSIX, installs those exact bytes into a disposable editor profile and runs the real commands, bundled webview readiness, native historical diff and explicit export. Adding the observer runner beside the installed resources gives it the same VS Code API scope; the packaged manifest and runtime resources are unchanged. A regression found here was that native diff navigation could replace the investigation editor group and dispose its content provider. Opening beside the panel fixed that observable lifecycle bug.
+
+Known-good and known-bad endpoints must pass ancestry validation. The resulting candidate set freezes full object IDs and metadata, with explicit truncation. Assessments and notes are deliberately human-authored: the tool supplies evidence while the reproduction input/output supports the conclusion. Export is explicit, and session data stays in memory. Blame alone never proves causation.
+
+[Performance measurements](performance.md) document fixture shape, warm caches, sample counts, graph width and memory limitations. [Validation](validation.md) records automated boundaries and outstanding human checks. This project demonstrates editor integration, React UI, process isolation, versioned contracts, asynchronous ordering, graph algorithms and artifact verification; it has no server backend or production adoption claim.

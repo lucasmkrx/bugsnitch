@@ -1,0 +1,57 @@
+name: Release preview
+on: workflow_dispatch
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  validate:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/ci.yml
+  draft:
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: bugsnitch-vsix
+          path: release-artifacts
+      - name: Validate package identity and prepare notes
+        run: |
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from 'node:fs';
+          import { createHash } from 'node:crypto';
+          const manifest = JSON.parse(readFileSync('apps/vscode/package.json', 'utf8'));
+          const workspace = JSON.parse(readFileSync('package.json', 'utf8'));
+          const version = manifest.version;
+          if (!/^\d+\.\d+\.\d+$/.test(version) || workspace.version !== version)
+            throw new Error('Expected matching release versions');
+          const file = `bugsnitch-${version}.vsix`;
+          const bytes = readFileSync(`release-artifacts/${file}`);
+          writeFileSync('release-artifacts/SHA256SUMS', `${createHash('sha256').update(bytes).digest('hex')}  ${file}\n`);
+          const notes = readFileSync(`docs/releases/${version}.md`, 'utf8');
+          const url = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+          writeFileSync('release-notes.md', `${notes}\nSource commit: ${process.env.GITHUB_SHA}\n\n[Validation and build run](${url})\n`);
+          writeFileSync(process.env.GITHUB_ENV, `RELEASE_VERSION=${version}\n`, { flag: 'a' });
+          NODE
+      - name: Create draft preview with checked artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "Release already exists; refusing to replace it."
+            exit 1
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$RELEASE_VERSION" >/dev/null 2>&1; then
+            echo "Tag already exists; refusing to move it."
+            exit 1
+          fi
+          gh release create "v$RELEASE_VERSION" --target "$GITHUB_SHA" --draft --prerelease \
+            --title "Bugsnitch $RELEASE_VERSION preview" --notes-file release-notes.md \
+            "release-artifacts/bugsnitch-$RELEASE_VERSION.vsix" release-artifacts/SHA256SUMS

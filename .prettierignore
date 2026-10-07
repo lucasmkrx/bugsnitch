@@ -1,0 +1,6 @@
+pnpm-lock.yaml
+LICENSE
+assets/brand/*.svg
+node_modules
+dist
+coverage

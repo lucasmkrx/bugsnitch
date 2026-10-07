@@ -1,0 +1,14 @@
+name: Feature proposal
+description: Propose an improvement to local Git investigation
+body:
+  - type: textarea
+    id: problem
+    attributes: { label: What investigation problem are you trying to solve? }
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes: { label: Proposed behavior }
+    validations: { required: true }
+  - type: textarea
+    id: alternatives
+    attributes: { label: Alternatives and tradeoffs }

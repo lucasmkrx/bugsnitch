@@ -1,0 +1,326 @@
+/* SPDX-License-Identifier: MPL-2.0 */
+:root {
+  color-scheme: light dark;
+  font-family: var(--vscode-font-family, system-ui);
+  font-size: var(--vscode-font-size, 13px);
+  color: var(--vscode-foreground);
+  background: var(--vscode-editor-background);
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+main {
+  max-width: 1500px;
+  margin: 0 auto;
+  padding: 28px 32px;
+}
+button {
+  font: inherit;
+  cursor: pointer;
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+  border: 1px solid var(--vscode-contrastBorder, transparent);
+  border-radius: 3px;
+  padding: 8px 12px;
+}
+button:hover {
+  background: var(--vscode-button-hoverBackground);
+}
+button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+button:focus-visible,
+pre:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 3px;
+}
+h1,
+h2,
+h3,
+p {
+  margin: 0 0 12px;
+}
+h1 {
+  font-size: 23px;
+  font-weight: 600;
+  letter-spacing: -0.5px;
+}
+h2 {
+  font-size: 18px;
+  font-weight: 600;
+}
+h3 {
+  font-size: 14px;
+  margin-top: 20px;
+}
+p {
+  line-height: 1.6;
+}
+code,
+pre {
+  font-family: var(--vscode-editor-font-family, monospace);
+}
+.masthead,
+.identity,
+.repository,
+.section-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.identity {
+  justify-content: flex-start;
+}
+.identity img {
+  background: white;
+  padding: 8px;
+  border-radius: 3px;
+  object-fit: contain;
+}
+.identity p {
+  color: var(--vscode-descriptionForeground);
+  margin: 0;
+}
+.secondary {
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+}
+.secondary:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+.local-note,
+footer {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+.local-note {
+  margin-top: 24px;
+}
+.local-note span {
+  margin: 0 8px;
+}
+.activity {
+  min-height: 20px;
+  font-size: 12px;
+}
+.repository {
+  padding: 20px 0;
+  border-top: 1px solid var(--vscode-panel-border);
+  border-bottom: 1px solid var(--vscode-panel-border);
+  align-items: flex-start;
+}
+.repository-state {
+  text-align: right;
+}
+.repository-state p {
+  margin-top: 8px;
+  color: var(--vscode-descriptionForeground);
+}
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground);
+  margin-bottom: 8px;
+}
+.path,
+.full-hash {
+  overflow-wrap: anywhere;
+  color: var(--vscode-descriptionForeground);
+}
+.path {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 12px;
+  margin: 0;
+}
+.workspace {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(300px, 1fr);
+  margin-top: 24px;
+}
+.history {
+  min-width: 0;
+  padding-right: 24px;
+}
+.inspection {
+  min-width: 0;
+  border-left: 1px solid var(--vscode-panel-border);
+  padding: 0 0 0 24px;
+}
+.section-heading {
+  margin-bottom: 12px;
+}
+.section-heading h2 {
+  margin: 0;
+}
+.count {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  font-weight: 400;
+}
+.commit-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+.commit-row {
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+.commit-button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  color: var(--vscode-foreground);
+  background: transparent;
+  padding: 14px 10px;
+  border: 1px solid transparent;
+}
+.commit-button:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+.commit-button[aria-pressed='true'] {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+  border-color: var(--vscode-focusBorder);
+}
+.commit-top {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+}
+.commit-top code {
+  font-size: 11px;
+  flex-shrink: 0;
+}
+.commit-top strong {
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+.commit-meta {
+  display: block;
+  font-size: 11px;
+  margin-top: 7px;
+  opacity: 0.85;
+  line-height: 1.6;
+}
+.refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+.ref {
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 3px;
+  padding: 2px 5px;
+  font-size: 10px;
+  overflow-wrap: anywhere;
+}
+.empty {
+  padding: 26px 0;
+  color: var(--vscode-descriptionForeground);
+}
+.empty h2 {
+  color: var(--vscode-foreground);
+}
+.load-more {
+  margin: 16px 0;
+}
+.investigation {
+  border: 1px solid var(--vscode-focusBorder);
+  padding: 20px;
+  margin-top: 24px;
+  border-radius: 3px;
+}
+.facts {
+  display: grid;
+  grid-template-columns: 130px minmax(0, 1fr);
+  gap: 8px;
+  line-height: 1.6;
+}
+.facts dt {
+  color: var(--vscode-descriptionForeground);
+}
+.facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.message {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.7;
+  margin: 18px 0;
+}
+.files {
+  padding: 0;
+  list-style: none;
+}
+.files li {
+  display: flex;
+  gap: 12px;
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+}
+.files code {
+  font-weight: 600;
+}
+.diff {
+  padding: 14px;
+  overflow: auto;
+  max-height: 600px;
+  font-size: 11px;
+  line-height: 1.6;
+  background: var(--vscode-textCodeBlock-background);
+  border: 1px solid var(--vscode-panel-border);
+}
+.hint {
+  font-size: 12px;
+  color: var(--vscode-descriptionForeground);
+}
+.error {
+  border: 1px solid var(--vscode-inputValidation-errorBorder);
+  background: var(--vscode-inputValidation-errorBackground);
+  padding: 12px;
+  margin-bottom: 16px;
+}
+footer {
+  border-top: 1px solid var(--vscode-panel-border);
+  padding-top: 18px;
+  margin-top: 28px;
+}
+body.vscode-high-contrast button,
+body.vscode-high-contrast-light button,
+body.vscode-high-contrast .ref,
+body.vscode-high-contrast-light .ref {
+  border-color: var(--vscode-contrastBorder);
+}
+@media (max-width: 800px) {
+  main {
+    padding: 20px;
+  }
+  .workspace {
+    grid-template-columns: 1fr;
+  }
+  .history {
+    padding: 0;
+  }
+  .inspection {
+    border-left: 0;
+    border-top: 1px solid var(--vscode-panel-border);
+    margin-top: 24px;
+    padding: 24px 0 0;
+  }
+  .masthead,
+  .repository {
+    flex-wrap: wrap;
+  }
+  .repository-state {
+    text-align: left;
+  }
+}

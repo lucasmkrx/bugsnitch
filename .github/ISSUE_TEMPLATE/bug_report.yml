@@ -1,0 +1,45 @@
+name: Bug report
+description: Report a reproducible problem in Bugsnitch
+body:
+  - type: markdown
+    attributes:
+      value: Do not paste secrets, tokens, or unnecessary proprietary code. Report exploitable vulnerabilities privately using SECURITY.md.
+  - type: input
+    id: bugsnitch
+    attributes: { label: Bugsnitch version }
+    validations: { required: true }
+  - type: input
+    id: vscode
+    attributes: { label: VS Code version }
+    validations: { required: true }
+  - type: input
+    id: os
+    attributes: { label: Operating system and version }
+    validations: { required: true }
+  - type: input
+    id: git
+    attributes: { label: Git version }
+    validations: { required: true }
+  - type: textarea
+    id: steps
+    attributes:
+      {
+        label: Reproduction steps,
+        description: Use a minimal disposable repository when possible.,
+      }
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes: { label: Expected result }
+    validations: { required: true }
+  - type: textarea
+    id: actual
+    attributes: { label: Actual result }
+    validations: { required: true }
+  - type: textarea
+    id: logs
+    attributes:
+      {
+        label: Relevant messages or logs,
+        description: Redact credentials and private repository content.,
+      }

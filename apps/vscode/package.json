@@ -1,0 +1,93 @@
+{
+  "name": "bugsnitch",
+  "displayName": "Bugsnitch",
+  "description": "Open-source Git forensics for VS Code. Find what changed and where the bug started.",
+  "version": "0.1.0",
+  "publisher": "bugsnitch-dev-placeholder",
+  "private": true,
+  "license": "MPL-2.0",
+  "author": "Lucas Marques",
+  "homepage": "https://bugsnitch.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lucasmkrx/bugsnitch.git"
+  },
+  "bugs": {
+    "url": "https://github.com/lucasmkrx/bugsnitch/issues"
+  },
+  "engines": {
+    "vscode": "^1.105.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "git",
+    "history",
+    "blame",
+    "forensics",
+    "debugging"
+  ],
+  "icon": "dist/brand/bugsnitch-icon.png",
+  "main": "./dist/extension.cjs",
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false,
+      "description": "Local Git inspection requires a trusted workspace."
+    },
+    "virtualWorkspaces": {
+      "supported": false,
+      "description": "Bugsnitch uses system Git and local files."
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "bugsnitch.open",
+        "title": "Open",
+        "category": "Bugsnitch"
+      },
+      {
+        "command": "bugsnitch.snitchLine",
+        "title": "Snitch on Current Line",
+        "category": "Bugsnitch"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "bugsnitch.snitchLine",
+          "when": "resourceScheme == file",
+          "group": "navigation@100"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Bugsnitch",
+      "properties": {
+        "bugsnitch.historyPageSize": {
+          "type": "number",
+          "default": 50,
+          "minimum": 10,
+          "maximum": 200,
+          "description": "Number of commits fetched per history page."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "package": "vsce package --no-dependencies"
+  },
+  "dependencies": {
+    "@bugsnitch/git": "workspace:*",
+    "@bugsnitch/graph": "workspace:*",
+    "@bugsnitch/forensics": "workspace:*",
+    "@bugsnitch/shared": "workspace:*",
+    "@bugsnitch/ui": "workspace:*",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  }
+}

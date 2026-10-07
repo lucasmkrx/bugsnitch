@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - packages/*
+
+allowBuilds:
+  '@vscode/vsce-sign': false
+  esbuild: true
+
+minimumReleaseAgeExclude:
+  - vite@8.3.3

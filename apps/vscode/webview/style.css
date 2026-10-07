@@ -434,3 +434,95 @@ body.vscode-high-contrast-light .graph-node {
     text-align: left;
   }
 }
+.action-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 10px 0;
+}
+.action-group button {
+  padding: 5px 8px;
+  font-size: 12px;
+}
+.regression {
+  border: 1px solid var(--vscode-panel-border);
+  padding: 16px;
+  margin-top: 16px;
+}
+.regression form {
+  display: grid;
+  gap: 8px;
+  max-width: 700px;
+}
+.regression select,
+.regression textarea,
+.commit-detail select {
+  font: inherit;
+  color: var(--vscode-input-foreground, var(--vscode-foreground));
+  background: var(--vscode-input-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+  padding: 8px;
+  width: 100%;
+}
+textarea:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 2px;
+}
+.candidate-list {
+  max-height: 300px;
+  overflow: auto;
+  padding-left: 24px;
+}
+.candidate-list li {
+  padding: 4px 0;
+}
+.candidate-list button {
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.candidate-list span {
+  margin-left: 10px;
+}
+.error button {
+  display: block;
+  margin-top: 8px;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+input[type='search'] {
+  display: block;
+  width: 100%;
+  margin: 6px 0 14px;
+  padding: 8px;
+  font: inherit;
+  color: var(--vscode-input-foreground, var(--vscode-foreground));
+  background: var(--vscode-input-background, var(--vscode-editor-background));
+  border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+}
+input:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--vscode-focusBorder);
+  outline-offset: 3px;
+}
+.regression summary {
+  cursor: pointer;
+}
+.regression summary h2 {
+  display: inline;
+}
+.regression details[open] summary {
+  margin-bottom: 16px;
+}
+.search-results {
+  margin-bottom: 16px;
+}

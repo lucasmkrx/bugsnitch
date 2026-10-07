@@ -75,4 +75,31 @@ export interface CommitDetail {
   files: ChangedFile[];
   diff: string;
   diffTruncated: boolean;
+  comparisonParent?: string | null;
+  selectedPath?: string | null;
+}
+
+export interface FileHistory {
+  path: string;
+  tip: string;
+  commits: Commit[];
+  hasMore: boolean;
+}
+
+export interface RegressionRange {
+  good: string;
+  bad: string;
+  commits: Commit[];
+  hasMore: boolean;
+}
+
+export interface InvestigationSession {
+  good: Commit | null;
+  bad: Commit | null;
+  range: RegressionRange | null;
+  annotations: {
+    hash: string;
+    note: string;
+    verdict: 'candidate' | 'confirmed' | 'excluded';
+  }[];
 }

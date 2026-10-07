@@ -5,9 +5,11 @@ import { findRepository, GitError, relativeGitPath } from '@bugsnitch/git';
 import { investigateLine } from '@bugsnitch/forensics';
 import { BugsnitchPanel } from './panel';
 import { selectRepository } from './repositories';
+import { InvestigationRequests } from './investigation-requests';
 
 export function activate(context: vscode.ExtensionContext): void {
   const panels = new Map<string, BugsnitchPanel>();
+  const requests = new InvestigationRequests();
   const panelFor = (root: string) => {
     let panel = panels.get(root);
     if (!panel) {
@@ -59,14 +61,11 @@ export function activate(context: vscode.ExtensionContext): void {
             'invalidInput',
             'Save your changes before investigating this line so the result matches the saved file.',
           );
-        const root = await findRepository(dirname(document.uri.fsPath));
-        if (!root)
-          throw new GitError(
-            'notRepository',
-            'This file is outside a Git repository. Open a tracked file to investigate.',
-          );
-        const path = relativeGitPath(root, document.uri.fsPath);
+        const file = document.uri.fsPath;
+        const version = document.version;
+        const contents = document.getText();
         const line = editor.selection.active.line + 1;
+        const request = requests.begin(file);
         await vscode.window.withProgress(
           {
             location: vscode.ProgressLocation.Notification,
@@ -74,19 +73,34 @@ export function activate(context: vscode.ExtensionContext): void {
             cancellable: true,
           },
           async (_progress, token) => {
-            const controller = new AbortController();
             const subscription = token.onCancellationRequested(() =>
-              controller.abort(),
+              request.cancel(),
             );
             try {
+              if (token.isCancellationRequested) request.cancel();
+              const root = await findRepository(dirname(file), {
+                signal: request.signal,
+              });
+              if (!root)
+                throw new GitError(
+                  'notRepository',
+                  'This file is outside a Git repository. Open a tracked file to investigate.',
+                );
+              if (!request.claim(root)) return;
+              const path = relativeGitPath(root, file);
               const investigation = await investigateLine(
-                { repository: root, path, line, contents: document.getText() },
-                { signal: controller.signal },
+                { repository: root, path, line, contents },
+                { signal: request.signal },
               );
-              if (!token.isCancellationRequested)
+              if (
+                request.current(root) &&
+                document.version === version &&
+                !document.isDirty
+              )
                 await panelFor(root).showInvestigation(investigation);
             } finally {
               subscription.dispose();
+              request.finish();
             }
           },
         );
@@ -94,6 +108,7 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
     {
       dispose: () => {
+        requests.dispose();
         for (const panel of [...panels.values()]) panel.dispose();
       },
     },

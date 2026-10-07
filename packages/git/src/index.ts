@@ -4,3 +4,4 @@ export * from './process';
 export * from './parsers';
 export * from './repository';
 export * from './references';
+export * from './evidence';

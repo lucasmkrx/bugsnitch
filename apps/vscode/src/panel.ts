@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 import * as vscode from 'vscode';
+import { basename } from 'node:path';
 import {
   inspectCommit,
   recentHistory,
@@ -15,8 +16,10 @@ import type {
   HistoryAnchor,
   ReferencePage,
   RepositorySnapshot,
+  Commit,
 } from '@bugsnitch/shared';
 import { webviewHtml } from './webview-html';
+import { EvidenceController } from './evidence-controller';
 
 function errorMessage(error: unknown): string {
   return error instanceof Error
@@ -41,6 +44,10 @@ export class BugsnitchPanel implements vscode.Disposable {
   private returnAnchor: HistoryAnchor | null = null;
   private references: ReferencePage = { references: [], truncated: false };
   private readonly knownCommits = new Set<string>();
+  private loadedCommits: Commit[] = [];
+  private replayPending = false;
+  private lastError = '';
+  private readonly evidence: EvidenceController;
 
   constructor(
     context: vscode.ExtensionContext,
@@ -50,7 +57,7 @@ export class BugsnitchPanel implements vscode.Disposable {
     const resources = vscode.Uri.joinPath(context.extensionUri, 'dist');
     this.panel = vscode.window.createWebviewPanel(
       'bugsnitch',
-      'Bugsnitch',
+      `Bugsnitch · ${basename(root)}`,
       vscode.ViewColumn.Beside,
       {
         enableScripts: true,
@@ -63,6 +70,19 @@ export class BugsnitchPanel implements vscode.Disposable {
       'bugsnitch-icon.png',
     );
     const webview = this.panel.webview;
+    this.evidence = new EvidenceController({
+      root,
+      signal: this.controller.signal,
+      known: (hash) => this.knownCommits.has(hash),
+      addKnown: (hash) => this.knownCommits.add(hash),
+      detail: () => this.lastDetail,
+      setDetail: async (detail) => {
+        if (this.lastDetail?.commit.hash !== detail.commit.hash) return;
+        this.lastDetail = detail;
+        await this.post({ version: 1, type: 'commit', detail });
+      },
+      post: (message) => this.post(message),
+    });
     webview.html = webviewHtml(
       webview.cspSource,
       webview
@@ -80,22 +100,27 @@ export class BugsnitchPanel implements vscode.Disposable {
     this.subscriptions.push(
       webview.onDidReceiveMessage((value: unknown) => {
         const message = parseWebviewMessage(value);
-        if (!message || this.busy || this.disposed) return;
+        if (!message || this.disposed) return;
         if (message.type === 'ready') {
           this.ready = true;
-          // VS Code can recreate a hidden webview; replay its context.
           this.shownInvestigation = undefined;
+          if (this.busy) {
+            this.replayPending = true;
+            return;
+          }
           void this.task(async () => {
-            await this.history(false);
-            await this.publishInvestigation();
-            if (this.lastDetail)
-              await this.post({
-                version: 1,
-                type: 'commit',
-                detail: this.lastDetail,
-              });
+            if (!this.snapshot) await this.history(false);
+            else await this.replay();
           });
-        } else if (message.type === 'refresh')
+          return;
+        }
+        if (this.busy) return;
+        const evidenceAction = this.evidence.handle(message);
+        if (evidenceAction) {
+          void this.task(evidenceAction);
+          return;
+        }
+        if (message.type === 'refresh')
           void this.task(() => this.history(false));
         else if (message.type === 'loadMore' && this.hasMore)
           void this.task(() => this.history(true));
@@ -150,6 +175,7 @@ export class BugsnitchPanel implements vscode.Disposable {
       this.panel.onDidDispose(() => {
         this.disposed = true;
         this.controller.abort();
+        this.evidence.dispose();
         for (const subscription of this.subscriptions) subscription.dispose();
         onDispose();
       }),
@@ -180,12 +206,34 @@ export class BugsnitchPanel implements vscode.Disposable {
       investigation === this.shownInvestigation
     )
       return;
-    this.shownInvestigation = investigation;
-    await this.post({ version: 1, type: 'investigation', investigation });
+    if (await this.post({ version: 1, type: 'investigation', investigation }))
+      this.shownInvestigation = investigation;
   }
 
-  private async post(message: HostMessage): Promise<void> {
-    if (!this.disposed) await this.panel.webview.postMessage(message);
+  private async post(message: HostMessage): Promise<boolean> {
+    return !this.disposed && (await this.panel.webview.postMessage(message));
+  }
+
+  private async replay(): Promise<void> {
+    this.replayPending = false;
+    if (this.snapshot && this.anchor)
+      await this.post({
+        version: 1,
+        type: 'history',
+        repository: this.snapshot,
+        page: { commits: this.loadedCommits, hasMore: this.hasMore },
+        append: false,
+        anchor: this.anchor,
+        returnAnchor: this.returnAnchor,
+        references: this.references,
+      });
+    this.shownInvestigation = undefined;
+    await this.publishInvestigation();
+    if (this.lastDetail)
+      await this.post({ version: 1, type: 'commit', detail: this.lastDetail });
+    if (this.lastError)
+      await this.post({ version: 1, type: 'error', message: this.lastError });
+    await this.evidence.replay();
   }
 
   private async task(action: () => Promise<void>): Promise<void> {
@@ -193,15 +241,18 @@ export class BugsnitchPanel implements vscode.Disposable {
     await this.post({ version: 1, type: 'busy', busy: true });
     try {
       await action();
+      this.lastError = '';
     } catch (error: unknown) {
+      this.lastError = errorMessage(error);
       if (!this.disposed)
         await this.post({
           version: 1,
           type: 'error',
-          message: errorMessage(error),
+          message: this.lastError,
         });
     } finally {
       this.busy = false;
+      if (this.replayPending && !this.disposed) await this.replay();
       await this.publishInvestigation();
       await this.post({ version: 1, type: 'busy', busy: false });
     }
@@ -272,6 +323,8 @@ export class BugsnitchPanel implements vscode.Disposable {
     this.offset = offset + page.commits.length;
     if (!append) {
       this.knownCommits.clear();
+      for (const hash of this.evidence.knownHashes())
+        this.knownCommits.add(hash);
       if (this.pendingInvestigation?.commit)
         this.knownCommits.add(this.pendingInvestigation.commit.hash);
       if (this.lastDetail) {
@@ -281,6 +334,10 @@ export class BugsnitchPanel implements vscode.Disposable {
       }
     }
     this.hasMore = page.hasMore;
+    this.loadedCommits = append
+      ? [...this.loadedCommits, ...page.commits]
+      : page.commits;
+    this.lastError = '';
     for (const commit of page.commits) this.knownCommits.add(commit.hash);
     await this.post({
       version: 1,

@@ -129,3 +129,47 @@ it('validates ref targets and anchors before the selector or graph receives them
     }),
   ).toBe(false);
 });
+
+it('bounds evidence requests and rejects path traversal and extra capabilities', () => {
+  const base = {
+    version: 1,
+    type: 'openDiff',
+    hash: 'a'.repeat(40),
+    path: 'src/λ file.ts',
+  };
+  expect(parseWebviewMessage(base)).not.toBeNull();
+  for (const path of [
+    '',
+    '/etc/passwd',
+    '../secrets',
+    'src/../secrets',
+    'nul\0path',
+    '..\\secrets',
+    'C:\\secrets',
+    '\\server\\secrets',
+    'x'.repeat(4097),
+  ])
+    expect(parseWebviewMessage({ ...base, path })).toBeNull();
+  expect(parseWebviewMessage({ ...base, command: 'checkout' })).toBeNull();
+  const annotation = {
+    version: 1,
+    type: 'annotate',
+    hash: base.hash,
+    note: 'Reproduction',
+    verdict: 'confirmed',
+  };
+  expect(parseWebviewMessage(annotation)).not.toBeNull();
+  expect(
+    parseWebviewMessage({ ...annotation, note: 'x'.repeat(4001) }),
+  ).toBeNull();
+  expect(
+    parseWebviewMessage({ ...annotation, verdict: 'automatic' }),
+  ).toBeNull();
+  expect(
+    parseWebviewMessage({
+      version: 1,
+      type: 'exportInvestigation',
+      destination: '/secret',
+    }),
+  ).toBeNull();
+});

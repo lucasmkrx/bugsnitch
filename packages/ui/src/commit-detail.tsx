@@ -7,11 +7,24 @@ export function CommitInspection({
   disabled = false,
   onInspect,
   onShowInGraph,
+  onCopyHash,
+  onMarkGood,
+  onMarkBad,
+  onFileAction,
+  onCompareParent,
 }: {
   detail: CommitDetail;
   disabled?: boolean;
   onInspect?: (hash: string) => void;
   onShowInGraph?: (hash: string) => void;
+  onCopyHash?: (hash: string) => void;
+  onMarkGood?: (hash: string) => void;
+  onMarkBad?: (hash: string) => void;
+  onFileAction?: (
+    path: string,
+    action: 'patch' | 'diff' | 'history' | 'copy',
+  ) => void;
+  onCompareParent?: (parent: string) => void;
 }) {
   return (
     <section aria-labelledby="commit-title" className="commit-detail">
@@ -23,6 +36,35 @@ export function CommitInspection({
         {detail.commit.author} · {formatDate(detail.commit.authorDate)}
       </p>
       <code className="full-hash">{detail.commit.hash}</code>
+      <div className="action-group">
+        {onCopyHash && (
+          <button
+            className="secondary"
+            disabled={disabled}
+            onClick={() => onCopyHash(detail.commit.hash)}
+          >
+            Copy commit hash
+          </button>
+        )}
+        {onMarkGood && (
+          <button
+            className="secondary"
+            disabled={disabled}
+            onClick={() => onMarkGood(detail.commit.hash)}
+          >
+            Mark known good
+          </button>
+        )}
+        {onMarkBad && (
+          <button
+            className="secondary"
+            disabled={disabled}
+            onClick={() => onMarkBad(detail.commit.hash)}
+          >
+            Mark known bad
+          </button>
+        )}
+      </div>
       {onShowInGraph && (
         <p className="inspection-actions">
           <button
@@ -61,8 +103,30 @@ export function CommitInspection({
       )}
       {detail.commit.parents.length > 1 && (
         <p className="hint">
-          Merge changes are compared with the first parent.
+          Merge changes are compared with{' '}
+          {detail.comparisonParent === detail.commit.parents[0] ||
+          !detail.comparisonParent
+            ? 'the first parent'
+            : 'the selected parent'}
+          .
         </p>
+      )}
+      {detail.commit.parents.length > 1 && onCompareParent && (
+        <label>
+          Compare changes against
+          <select
+            aria-label="Comparison parent"
+            disabled={disabled}
+            value={detail.comparisonParent ?? detail.commit.parents[0]}
+            onChange={(event) => onCompareParent(event.target.value)}
+          >
+            {detail.commit.parents.map((hash, index) => (
+              <option key={hash} value={hash}>
+                Parent {index + 1} · {hash.slice(0, 8)}
+              </option>
+            ))}
+          </select>
+        </label>
       )}
       <h3>
         Changed files <span className="count">{detail.files.length}</span>
@@ -71,15 +135,63 @@ export function CommitInspection({
         <ul className="files">
           {detail.files.map((file) => (
             <li key={file.path}>
-              <code>{file.status}</code>
-              <span>{file.path}</span>
+              <code>
+                {(
+                  {
+                    A: 'Added',
+                    M: 'Modified',
+                    D: 'Deleted',
+                    T: 'Type changed',
+                    U: 'Unmerged',
+                  } as Record<string, string>
+                )[file.status] ?? file.status}
+              </code>
+              <div>
+                <span>{file.path}</span>
+                {onFileAction && (
+                  <div className="action-group">
+                    <button
+                      className="secondary"
+                      disabled={disabled}
+                      onClick={() => onFileAction(file.path, 'patch')}
+                      aria-label={`Preview patch for ${file.path}`}
+                    >
+                      Patch
+                    </button>
+                    <button
+                      className="secondary"
+                      disabled={disabled}
+                      onClick={() => onFileAction(file.path, 'diff')}
+                      aria-label={`Open diff for ${file.path}`}
+                    >
+                      Open diff
+                    </button>
+                    <button
+                      className="secondary"
+                      disabled={disabled}
+                      onClick={() => onFileAction(file.path, 'history')}
+                      aria-label={`File history for ${file.path}`}
+                    >
+                      History
+                    </button>
+                    <button
+                      className="secondary"
+                      disabled={disabled}
+                      onClick={() => onFileAction(file.path, 'copy')}
+                      aria-label={`Copy path ${file.path}`}
+                    >
+                      Copy path
+                    </button>
+                  </div>
+                )}
+              </div>
             </li>
           ))}
         </ul>
       ) : (
         <p>No file changes against the first parent.</p>
       )}
-      <h3>Patch</h3>
+      <h3>Patch{detail.selectedPath ? ` · ${detail.selectedPath}` : ''}</h3>
       {detail.diffTruncated && (
         <p role="status">
           Patch preview is limited to 256 KiB. Use your Git tools for the

@@ -12,6 +12,9 @@ import {
 
 const mock = vi.hoisted(() => ({
   messages: [] as HostMessage[],
+  destination: undefined as { path: string } | undefined,
+  writes: [] as { path: string; contents: string }[],
+  clipboard: [] as string[],
   receive: undefined as ((value: unknown) => void) | undefined,
   dispose: undefined as (() => void) | undefined,
 }));
@@ -22,8 +25,26 @@ vi.mock('vscode', () => ({
     }),
   },
   ViewColumn: { Beside: 2 },
-  workspace: { getConfiguration: () => ({ get: () => 10 }) },
+  env: {
+    clipboard: {
+      writeText: async (text: string) => {
+        mock.clipboard.push(text);
+      },
+    },
+  },
+  workspace: {
+    getConfiguration: () => ({ get: () => 10 }),
+    fs: {
+      writeFile: async (uri: { path: string }, contents: Uint8Array) => {
+        mock.writes.push({
+          path: uri.path,
+          contents: Buffer.from(contents).toString('utf8'),
+        });
+      },
+    },
+  },
   window: {
+    showSaveDialog: async () => mock.destination,
     createWebviewPanel: () => ({
       webview: {
         cspSource: 'local:',
@@ -107,6 +128,20 @@ it('allows graph focus and parent navigation only for host-supplied commits and 
       () => {},
     );
     await request({ version: 1, type: 'ready' });
+    await request({ version: 1, type: 'loadMore' });
+    const loadedHashes = mock.messages
+      .filter((message) => message.type === 'history')
+      .flatMap((message) => message.page.commits.map((commit) => commit.hash));
+    await request({ version: 1, type: 'ready' });
+    expect(lastHistory().page.commits.map((commit) => commit.hash)).toEqual(
+      loadedHashes,
+    );
+    // A ready handshake during an active read is deferred, never dropped.
+    const refreshing = request({ version: 1, type: 'refresh' });
+    mock.receive?.({ version: 1, type: 'ready' });
+    await refreshing;
+    expect(lastHistory().append).toBe(false);
+    expect(lastHistory().page.commits).toHaveLength(10);
     const boundary = lastHistory().page.commits.at(-1)!;
     const parent = boundary.parents[0]!;
     // A new editor investigation arriving during a read wins over its older
@@ -216,6 +251,86 @@ it('allows graph focus and parent navigation only for host-supplied commits and 
     expect(await readFile(join(root, '.git/index'))).toEqual(index);
   } finally {
     panel?.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it('exports only on an explicit save and restores frozen assessments while denying unknown evidence identities', async () => {
+  const root = await createRepository();
+  mock.messages = [];
+  mock.writes = [];
+  mock.clipboard = [];
+  let panel: BugsnitchPanel | undefined;
+  try {
+    const good = await commitFile(root, 'code.ts', 'good\n');
+    const bad = await commitFile(root, 'code.ts', 'bad\n');
+    panel = new BugsnitchPanel(
+      {
+        extensionUri: { path: 'file:///extension' },
+      } as unknown as ExtensionContext,
+      root,
+      () => {},
+    );
+    await request({ version: 1, type: 'ready' });
+    await request({ version: 1, type: 'markGood', hash: good });
+    await request({ version: 1, type: 'markBad', hash: bad });
+    await request({ version: 1, type: 'viewRange' });
+    await request({
+      version: 1,
+      type: 'annotate',
+      hash: bad,
+      note: 'Reproduction <script> text',
+      verdict: 'confirmed',
+    });
+    const session = [...mock.messages]
+      .reverse()
+      .find((message) => message.type === 'session');
+    expect(session).toMatchObject({
+      session: { annotations: [{ hash: bad, verdict: 'confirmed' }] },
+    });
+    await request({ version: 1, type: 'markBad', hash: bad });
+    expect(
+      [...mock.messages]
+        .reverse()
+        .find((message) => message.type === 'session'),
+    ).toEqual(session);
+    const count = mock.messages.length;
+    for (const message of [
+      { version: 1, type: 'markBad', hash: 'f'.repeat(40) },
+      {
+        version: 1,
+        type: 'annotate',
+        hash: good,
+        note: 'Not a candidate',
+        verdict: 'confirmed',
+      },
+      { version: 1, type: 'openDiff', hash: bad, path: 'not-issued.ts' },
+      { version: 1, type: 'compareParent', hash: bad, parent: 'f'.repeat(40) },
+    ])
+      mock.receive?.(message);
+    expect(mock.messages).toHaveLength(count);
+    expect(mock.writes).toEqual([]);
+    mock.destination = undefined;
+    await request({ version: 1, type: 'exportInvestigation' });
+    expect(mock.writes).toEqual([]);
+    mock.destination = { path: join(root, 'explicit-export.json') };
+    await request({ version: 1, type: 'exportInvestigation' });
+    expect(mock.writes).toHaveLength(1);
+    const exported = JSON.parse(mock.writes[0]!.contents);
+    expect(exported.annotations[0].note).toContain('<script>');
+    expect(mock.writes[0]!.contents).not.toContain(root);
+    expect(exported).not.toHaveProperty('diff');
+    await request({ version: 1, type: 'ready' });
+    expect(
+      [...mock.messages]
+        .reverse()
+        .find((message) => message.type === 'session'),
+    ).toEqual(session);
+    await request({ version: 1, type: 'copyHash', hash: bad });
+    expect(mock.clipboard).toEqual([bad]);
+  } finally {
+    panel?.dispose();
+    mock.destination = undefined;
     await rm(root, { recursive: true, force: true });
   }
 });

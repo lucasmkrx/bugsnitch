@@ -22,17 +22,20 @@ pnpm format
 pnpm lint
 pnpm format:check
 pnpm typecheck
-pnpm test
+pnpm test:coverage
 pnpm build
+pnpm test:package
+pnpm exec playwright install chromium
+pnpm test:browser
 ```
 
-`pnpm package` additionally validates local VSIX packaging. It does not publish anything. The publisher placeholder must be replaced for an official release.
+`pnpm package` creates a local VSIX; `pnpm validate:package` checks its inventory and identity, and `pnpm test:package` tests the installed artifact. It does not publish anything. The publisher placeholder must be replaced for an official release.
 
 ## Boundaries and tests
 
 Keep VS Code APIs in `apps/vscode`, Git invocation/parsing in `packages/git`, investigation logic in `packages/forensics`, graph concepts in `packages/graph`, presentation in `packages/ui`, and protocol/types in `packages/shared`. Favor small modules and pure parsers. Use explicit process argument arrays, bounded asynchronous reads, validated messages, and escaped text. Keep the local core offline and read-only. Do not add telemetry, cloud prerequisites, or destructive Git operations as incidental changes.
 
-Add tests for meaningful behavior and edge cases. Integration tests should create and remove temporary repositories, set their own identity, and avoid user repositories/global configuration. For UI changes, check keyboard use and light/dark/high-contrast themes in VS Code. Describe validation and limits in your PR.
+Add tests for meaningful behavior and edge cases. Integration tests should create and remove temporary repositories, set their own identity, and avoid user repositories/global configuration. For UI changes, check keyboard use and light/dark/high-contrast themes in VS Code. Describe validation and limits in your PR. CI checks browser/core import boundaries and minimum coverage. See the [compatibility contract](docs/compatibility.md), [performance method](docs/performance.md), and [scoped contribution backlog](docs/usability.md).
 
 ## Pull requests
 

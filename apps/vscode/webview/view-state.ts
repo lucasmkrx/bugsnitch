@@ -6,12 +6,15 @@ import type {
   HostMessage,
   Investigation,
   RepositorySnapshot,
+  ReferencePage,
 } from '@bugsnitch/shared';
 
 export interface ViewState {
   repository: RepositorySnapshot | null;
   commits: Commit[];
   anchor: HistoryAnchor | null;
+  returnAnchor: HistoryAnchor | null;
+  references: ReferencePage;
   investigation: Investigation | null;
   detail: CommitDetail | null;
   selectedHash: string | null;
@@ -24,6 +27,8 @@ export const initialViewState: ViewState = {
   repository: null,
   commits: [],
   anchor: null,
+  returnAnchor: null,
+  references: { references: [], truncated: false },
   investigation: null,
   detail: null,
   selectedHash: null,
@@ -57,6 +62,8 @@ export function reduceViewState(
         ...state,
         repository: message.repository,
         anchor: message.anchor,
+        returnAnchor: message.returnAnchor,
+        references: message.references,
         commits: message.append
           ? [...state.commits, ...message.page.commits]
           : message.page.commits,

@@ -7,6 +7,7 @@ import type { WebviewMessage } from '@bugsnitch/shared';
 import { createCommitGraph } from '@bugsnitch/graph';
 import { GraphLanes } from './graph-lanes';
 import { initialViewState, reduceViewState } from './view-state';
+import { HistoryPicker } from './history-picker';
 import './style.css';
 
 declare function acquireVsCodeApi(): {
@@ -28,6 +29,8 @@ function App({ logo }: { logo: string }) {
     selectedHash,
     anchor,
     revealHash,
+    references,
+    returnAnchor,
   } = state;
   useEffect(() => {
     const receive = (event: MessageEvent<unknown>) => {
@@ -132,18 +135,32 @@ function App({ logo }: { logo: string }) {
             <span className="count">{graph.nodes.length} loaded</span>
           </div>
           {anchor && (
+            <HistoryPicker
+              anchor={anchor}
+              references={references}
+              disabled={busy}
+              onSelect={(name) =>
+                send(
+                  name === null
+                    ? { version: 1, type: 'returnToHead' }
+                    : { version: 1, type: 'selectRef', name },
+                )
+              }
+            />
+          )}
+          {anchor && (
             <div className="history-context">
               <p className="hint">
                 Graph from {anchor.label}. The working tree stays on{' '}
                 {repository?.branch}.
               </p>
-              {anchor.kind === 'commit' && (
+              {anchor.kind === 'commit' && returnAnchor && (
                 <button
                   className="secondary"
                   disabled={busy}
-                  onClick={() => send({ version: 1, type: 'returnToHead' })}
+                  onClick={() => send({ version: 1, type: 'returnToHistory' })}
                 >
-                  Return to checkout history
+                  Return to {returnAnchor.label} history
                 </button>
               )}
             </div>

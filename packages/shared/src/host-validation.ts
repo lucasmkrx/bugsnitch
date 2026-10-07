@@ -3,12 +3,14 @@ import type {
   Commit,
   CommitDetail,
   HistoryPage,
+  HistoryAnchor,
+  ReferencePage,
   Investigation,
   LineProvenance,
   RepositorySnapshot,
 } from './models';
 import type { HostMessage } from './protocol';
-import { isCommitHash, isRecord } from './protocol';
+import { isCommitHash, isRecord, isReferenceName } from './protocol';
 
 const strings = (value: unknown): value is string[] =>
   Array.isArray(value) &&
@@ -50,6 +52,35 @@ function page(value: unknown): value is HistoryPage {
     Array.isArray(value.commits) &&
     value.commits.every(commit) &&
     typeof value.hasMore === 'boolean'
+  );
+}
+function anchor(value: unknown): value is HistoryAnchor {
+  return (
+    isRecord(value) &&
+    typeof value.label === 'string' &&
+    ((value.kind === 'head' &&
+      (value.hash === null || isCommitHash(value.hash))) ||
+      (value.kind === 'commit' && isCommitHash(value.hash)) ||
+      (value.kind === 'ref' &&
+        isCommitHash(value.hash) &&
+        isReferenceName(value.ref)))
+  );
+}
+function references(value: unknown): value is ReferencePage {
+  return (
+    isRecord(value) &&
+    typeof value.truncated === 'boolean' &&
+    Array.isArray(value.references) &&
+    value.references.every(
+      (ref: unknown) =>
+        isRecord(ref) &&
+        isReferenceName(ref.name) &&
+        typeof ref.label === 'string' &&
+        (ref.kind === 'branch' ||
+          ref.kind === 'remote' ||
+          ref.kind === 'tag') &&
+        isCommitHash(ref.hash),
+    )
   );
 }
 function provenance(value: unknown): value is LineProvenance {
@@ -100,10 +131,9 @@ export function isHostMessage(value: unknown): value is HostMessage {
         repository(value.repository) &&
         page(value.page) &&
         typeof value.append === 'boolean' &&
-        isRecord(value.anchor) &&
-        (value.anchor.kind === 'head' || value.anchor.kind === 'commit') &&
-        (value.anchor.hash === null || isCommitHash(value.anchor.hash)) &&
-        typeof value.anchor.label === 'string'
+        anchor(value.anchor) &&
+        (value.returnAnchor === null || anchor(value.returnAnchor)) &&
+        references(value.references)
       );
     case 'investigation':
       return investigation(value.investigation);

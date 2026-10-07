@@ -20,7 +20,7 @@ flowchart LR
 ## Package boundaries
 
 - `apps/vscode` owns activation, trusted-workspace checks, commands, repository selection, cancellation, panels, resource URIs, and message routing. It is the only package importing VS Code APIs.
-- `packages/git` discovers a repository with `rev-parse`, reads status/branch/HEAD, paginates history, inspects commits, and traces one line. Parsing is independently testable. Git is resolved from system `PATH`; missing executables produce a contextual error.
+- `packages/git` discovers a repository with `rev-parse`, reads status/branch/HEAD and local refs, peels tags in a batched local object read, paginates history, inspects commits, and traces one line. Parsing is independently testable. Git is resolved from system `PATH`; missing executables produce a contextual error.
 - `packages/forensics` combines line blame with the originating full commit. It does not infer suspicious commits or claim regression detection yet.
 - `packages/graph` lays out child-before-parent history with reserved parent lanes, including branches and multi-parent merges. Appending a page preserves prior node and line positions. Dashed continuations identify parents outside loaded history. The webview draws these lanes beside the shared commit rows; Git data, rather than decoration text or commit dates, determines ancestry.
 - `packages/ui` provides semantic React history and investigation components, with VS Code light/dark/high-contrast colors and visible keyboard focus.
@@ -32,13 +32,15 @@ flowchart LR
 
 Each panel reads a snapshot and at most 50 commits by default (configurable 10–200), plus one lookahead. Subsequent pages use a frozen history anchor's full commit ID and an offset, avoiding duplicates if the branch moves. Refresh resets pagination. Refs and status update on refresh; no filesystem watchers or indexer run in the background. Concurrent requests in one panel are serialized and commit requests are restricted to IDs already supplied to that panel, its line investigation, or an inspected commit's parents.
 
-Selection, commit detail, and line evidence are independent of the loaded graph. Show in graph focuses an already loaded row; for an unloaded selected commit, it reads a bounded history anchored at that commit rather than preloading every intervening page. Return to checkout history resets the anchor to HEAD while keeping investigation context. The repository overview always describes the actual checkout.
+Selection, commit detail, and line evidence are independent of the loaded graph. Show in graph focuses an already loaded row; for an unloaded selected commit, it reads a bounded history anchored at that commit rather than preloading every intervening page. A return anchor preserves the previous branch/tag/HEAD entry point while keeping investigation context. The repository overview always describes the actual checkout.
+
+The history selector lists up to 2,000 local branch, remote-tracking, and tag refs, disclosing truncation. `for-each-ref` supplies names; one `cat-file --batch-check` read peels each name with `^{commit}`, including nested annotated tags. Non-commit tags are omitted. Webview ref requests must match a host-supplied name, and history is anchored at the resulting full commit ID. Only refresh or an entry-point change re-reads refs. A failed read preserves the prior snapshot, ref list, anchor, pagination offset, and allowlist. No checkout or fetch is performed.
 
 Git processes are asynchronous, cancellable, and time out after 30 seconds. Output is bounded to 8 MiB; patch previews retain at most 256 KiB and disclose truncation. Blame accepts text up to 4 MiB. Closing a panel cancels its reads. Line investigation uses VS Code's cancellable progress UI. No entire-history preload or database is required, although a user can explicitly load successive pages into panel memory.
 
 ## Trust boundaries
 
-The extension host treats the webview as untrusted. Only `ready`, `refresh`, `loadMore`, `inspectCommit`, `focusCommit`, and `returnToHead` are supported. Messages require a protocol version and exact fields; commit IDs must be complete SHA-1 or SHA-256 hexadecimal object IDs, then pass the panel allowlist. No message supplies a process command or repository path.
+The extension host treats the webview as untrusted. Only `ready`, `refresh`, `loadMore`, `inspectCommit`, `focusCommit`, `selectRef`, `returnToHead`, and `returnToHistory` are supported. Messages require a protocol version and exact fields; commit IDs must be complete SHA-1 or SHA-256 hexadecimal object IDs, then pass the panel allowlist. Ref names must pass shape validation and match the host's current local ref list. No message supplies a process command or repository path.
 
 Git commands use `spawn` with argument arrays and `shell: false`. Pathspecs are literal, revisions are validated, and file paths must remain inside the selected root. Read commands suppress optional locks and configured external diff/textconv/fsmonitor execution. Ambient `GIT_*` variables are removed to prevent unexpected repository redirection. Git's safe-directory checks are respected. Repository content is never inserted into HTML; React escapes textual values.
 

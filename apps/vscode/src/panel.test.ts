@@ -87,6 +87,17 @@ it('allows graph focus and parent navigation only for host-supplied commits and 
         `Change ${i}`,
       );
     const head = await fixtureGit(root, 'rev-parse', 'HEAD');
+    const parentHead = await fixtureGit(root, 'rev-parse', 'HEAD^');
+    await fixtureGit(root, 'branch', 'feature/山', head);
+    await fixtureGit(
+      root,
+      'tag',
+      '-a',
+      'v0.2.0',
+      '-m',
+      'Fixture tag',
+      parentHead,
+    );
     const index = await readFile(join(root, '.git/index'));
     panel = new BugsnitchPanel(
       {
@@ -136,10 +147,71 @@ it('allows graph focus and parent navigation only for host-supplied commits and 
       hash: parent,
     });
     expect(lastHistory().page.commits[0]?.hash).toBe(parent);
+    await request({
+      version: 1,
+      type: 'selectRef',
+      name: 'refs/heads/feature/山',
+    });
+    expect(lastHistory().anchor).toMatchObject({
+      kind: 'ref',
+      hash: head,
+      ref: 'refs/heads/feature/山',
+    });
+    await fixtureGit(root, 'update-ref', 'refs/heads/feature/山', parentHead);
+    await request({ version: 1, type: 'loadMore' });
+    expect(lastHistory().anchor.hash).toBe(head);
+    expect(lastHistory().append).toBe(true);
+    await request({ version: 1, type: 'refresh' });
+    expect(lastHistory().anchor.hash).toBe(parentHead);
+    await request({ version: 1, type: 'focusCommit', hash: parent });
+    expect(lastHistory().returnAnchor).toMatchObject({
+      kind: 'ref',
+      ref: 'refs/heads/feature/山',
+    });
+    await request({ version: 1, type: 'returnToHistory' });
+    expect(lastHistory().anchor).toMatchObject({
+      kind: 'ref',
+      hash: parentHead,
+    });
+    await request({ version: 1, type: 'selectRef', name: 'refs/tags/v0.2.0' });
+    expect(lastHistory().page.commits[0]?.hash).toBe(parentHead);
+    const tagAnchor = lastHistory().anchor;
+    await fixtureGit(root, 'tag', '-d', 'v0.2.0');
+    await request({ version: 1, type: 'refresh' });
+    expect(mock.messages.at(-2)).toMatchObject({ type: 'error' });
+    expect(lastHistory().anchor).toEqual(tagAnchor);
+    await request({ version: 1, type: 'loadMore' });
+    expect(lastHistory().anchor).toEqual(tagAnchor);
+    const messageCount = mock.messages.length;
+    mock.receive?.({
+      version: 1,
+      type: 'selectRef',
+      name: 'refs/heads/unknown',
+    });
+    expect(mock.messages).toHaveLength(messageCount);
     await request({ version: 1, type: 'returnToHead' });
     expect(lastHistory().anchor).toMatchObject({ kind: 'head', hash: head });
     await request({ version: 1, type: 'focusCommit', hash: parent });
     expect(lastHistory().page.commits[0]?.hash).toBe(parent);
+    const replayStart = mock.messages.length;
+    await request({ version: 1, type: 'ready' });
+    expect(
+      mock.messages
+        .slice(replayStart)
+        .some(
+          (message) =>
+            message.type === 'investigation' &&
+            message.investigation.commit?.hash === boundary.hash,
+        ),
+    ).toBe(true);
+    expect(
+      mock.messages
+        .slice(replayStart)
+        .some(
+          (message) =>
+            message.type === 'commit' && message.detail.commit.hash === parent,
+        ),
+    ).toBe(true);
     expect(await fixtureGit(root, 'rev-parse', 'HEAD')).toBe(head);
     expect(await readFile(join(root, '.git/index'))).toEqual(index);
   } finally {

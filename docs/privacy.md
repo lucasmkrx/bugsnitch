@@ -1,6 +1,6 @@
 # Privacy
 
-Bugsnitch 0.1.0 is local first. The extension runs system Git in the repository selected from your editor or workspace. It reads repository metadata, the index/status, commit history, changed filenames, textual diffs, and line blame. The active saved document is passed to Git over stdin to match current line numbers; it is not uploaded or saved as a temporary file by Bugsnitch.
+Bugsnitch is local first. The extension runs system Git in the repository selected from your editor or workspace. It reads repository metadata, local branch/tag refs, the index/status, commit history, changed filenames, textual diffs, and line blame. The active saved document is passed to Git over stdin to match current line numbers; it is not uploaded or saved as a temporary file by Bugsnitch.
 
 There is no analytics, telemetry, tracking, authentication, Bugsnitch account, AI API, cloud upload, hosted indexing, hidden network request, or dependency on bugsnitch.com. The webview blocks network connections with Content Security Policy. Runtime inspection works offline. Installing dependencies, GitHub CI, and future manual Marketplace distribution are separate developer/distribution activities, not extension runtime data collection.
 

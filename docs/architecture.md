@@ -22,7 +22,7 @@ flowchart LR
 - `apps/vscode` owns activation, trusted-workspace checks, commands, repository selection, cancellation, panels, resource URIs, and message routing. It is the only package importing VS Code APIs.
 - `packages/git` discovers a repository with `rev-parse`, reads status/branch/HEAD, paginates history, inspects commits, and traces one line. Parsing is independently testable. Git is resolved from system `PATH`; missing executables produce a contextual error.
 - `packages/forensics` combines line blame with the originating full commit. It does not infer suspicious commits or claim regression detection yet.
-- `packages/graph` creates commit nodes, parent edges and flags parents outside a bounded page. Layout/lane assignment is future work. The UI accurately calls the current interface a history list.
+- `packages/graph` lays out child-before-parent history with reserved parent lanes, including branches and multi-parent merges. Appending a page preserves prior node and line positions. Dashed continuations identify parents outside loaded history. The webview draws these lanes beside the shared commit rows; Git data, rather than decoration text or commit dates, determines ancestry.
 - `packages/ui` provides semantic React history and investigation components, with VS Code light/dark/high-contrast colors and visible keyboard focus.
 - `packages/shared` defines serializable data and validates both protocol directions. It depends on neither VS Code nor Node.
 

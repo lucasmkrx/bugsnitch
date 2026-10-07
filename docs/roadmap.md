@@ -8,8 +8,16 @@ Implemented: repository detection, bounded recent history, commit inspection wit
 
 ## Phase 2 — Visual Git
 
-- Proper commit graph with lanes (the graph model exists; lane visualization does not).
-- Branches and tags as navigable history entry points.
+The focused 0.2.0 milestone:
+
+- Stable ancestry lanes alongside history, including branches, merges, and page continuations (implemented).
+- Connect line provenance, commit inspection, and graph selection without losing investigation context.
+- Browse branches and tags without checking them out or changing the working tree.
+
+A commit attributed to a line is an investigation lead, not proof that it introduced a regression. This milestone adds no mutating Git operations, AI, billing, or cloud services.
+
+Later visual Git work:
+
 - Commit comparison and richer diffs.
 - File history and function/symbol history.
 

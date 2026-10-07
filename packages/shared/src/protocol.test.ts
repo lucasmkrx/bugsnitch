@@ -15,6 +15,16 @@ it('accepts only versioned, bounded commands and complete object IDs', () => {
       hash: 'a'.repeat(40),
     }),
   ).not.toBeNull();
+  expect(
+    parseWebviewMessage({
+      version: 1,
+      type: 'focusCommit',
+      hash: 'a'.repeat(40),
+    }),
+  ).not.toBeNull();
+  expect(
+    parseWebviewMessage({ version: 1, type: 'returnToHead' }),
+  ).not.toBeNull();
   for (const value of [
     null,
     [],
@@ -23,6 +33,14 @@ it('accepts only versioned, bounded commands and complete object IDs', () => {
     { version: 1, type: 'inspectCommit', hash: '--help' },
     { version: 1, type: 'refresh', command: 'reset' },
     { version: 1, type: 'deleteBranch' },
+    { version: 1, type: 'focusCommit', hash: '--all' },
+    {
+      version: 1,
+      type: 'focusCommit',
+      hash: 'a'.repeat(40),
+      path: '/elsewhere',
+    },
+    { version: 1, type: 'returnToHead', checkout: true },
   ])
     expect(parseWebviewMessage(value)).toBeNull();
 });

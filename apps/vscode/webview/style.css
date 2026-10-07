@@ -230,6 +230,29 @@ footer {
 .graph-boundary {
   margin: 12px 0;
 }
+.history-context {
+  margin-bottom: 16px;
+}
+.selection-note {
+  padding: 12px;
+  border: 1px solid var(--vscode-focusBorder);
+  font-size: 12px;
+}
+.selection-note button {
+  margin-top: 8px;
+}
+.inspection-actions {
+  margin-top: 12px;
+}
+.parents {
+  padding-left: 20px;
+}
+.parents li {
+  margin: 8px 0;
+}
+.commit-button:focus-visible {
+  outline-offset: -2px;
+}
 .commit-button:hover {
   background: var(--vscode-list-hoverBackground);
 }

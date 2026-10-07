@@ -1,17 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useReducer } from 'react';
 import { createRoot } from 'react-dom/client';
 import { CommitInspection, CommitRow, InvestigationCard } from '@bugsnitch/ui';
 import { isHostMessage } from '@bugsnitch/shared';
-import type {
-  Commit,
-  CommitDetail,
-  Investigation,
-  RepositorySnapshot,
-  WebviewMessage,
-} from '@bugsnitch/shared';
+import type { WebviewMessage } from '@bugsnitch/shared';
 import { createCommitGraph } from '@bugsnitch/graph';
 import { GraphLanes } from './graph-lanes';
+import { initialViewState, reduceViewState } from './view-state';
 import './style.css';
 
 declare function acquireVsCodeApi(): {
@@ -21,47 +16,24 @@ const vscode = acquireVsCodeApi();
 const send = (message: WebviewMessage) => vscode.postMessage(message);
 
 function App({ logo }: { logo: string }) {
-  const [repository, setRepository] = useState<RepositorySnapshot | null>(null);
-  const [commits, setCommits] = useState<Commit[]>([]);
-  const [investigation, setInvestigation] = useState<Investigation | null>(
-    null,
-  );
-  const [detail, setDetail] = useState<CommitDetail | null>(null);
-  const [busy, setBusy] = useState(true);
-  const [hasMore, setHasMore] = useState(false);
-  const [error, setError] = useState('');
+  const [state, dispatch] = useReducer(reduceViewState, initialViewState);
+  const {
+    repository,
+    commits,
+    investigation,
+    detail,
+    busy,
+    hasMore,
+    error,
+    selectedHash,
+    anchor,
+    revealHash,
+  } = state;
   useEffect(() => {
     const receive = (event: MessageEvent<unknown>) => {
       const message = event.data;
       if (!isHostMessage(message)) return;
-      switch (message.type) {
-        case 'history':
-          setRepository(message.repository);
-          setCommits((previous) =>
-            message.append
-              ? [...previous, ...message.page.commits]
-              : message.page.commits,
-          );
-          setHasMore(message.page.hasMore);
-          if (!message.append) setDetail(null);
-          setError('');
-          break;
-        case 'investigation':
-          setInvestigation(message.investigation);
-          setDetail(null);
-          setError('');
-          break;
-        case 'commit':
-          setDetail(message.detail);
-          setError('');
-          break;
-        case 'busy':
-          setBusy(message.busy);
-          break;
-        case 'error':
-          setError(message.message);
-          break;
-      }
+      dispatch({ type: 'host', message });
     };
     window.addEventListener('message', receive);
     send({ version: 1, type: 'ready' });
@@ -70,8 +42,24 @@ function App({ logo }: { logo: string }) {
   useEffect(() => {
     if (detail) document.getElementById('commit-title')?.focus();
   }, [detail]);
-  const inspect = (hash: string) =>
+  useEffect(() => {
+    if (!revealHash) return;
+    const row = document.getElementById(`commit-${revealHash}`);
+    if (row && !busy) {
+      row.scrollIntoView({ block: 'center' });
+      row.focus({ preventScroll: true });
+      dispatch({ type: 'revealed' });
+    }
+  }, [commits, revealHash, busy]);
+  const inspect = (hash: string) => {
+    dispatch({ type: 'select', hash });
     send({ version: 1, type: 'inspectCommit', hash });
+  };
+  const showInGraph = (hash: string) => {
+    dispatch({ type: 'reveal', hash });
+    if (!commits.some((commit) => commit.hash === hash))
+      send({ version: 1, type: 'focusCommit', hash });
+  };
   const graph = useMemo(() => createCommitGraph(commits), [commits]);
   return (
     <main>
@@ -143,6 +131,37 @@ function App({ logo }: { logo: string }) {
             <h2 id="history-title">Commit graph</h2>
             <span className="count">{graph.nodes.length} loaded</span>
           </div>
+          {anchor && (
+            <div className="history-context">
+              <p className="hint">
+                Graph from {anchor.label}. The working tree stays on{' '}
+                {repository?.branch}.
+              </p>
+              {anchor.kind === 'commit' && (
+                <button
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() => send({ version: 1, type: 'returnToHead' })}
+                >
+                  Return to checkout history
+                </button>
+              )}
+            </div>
+          )}
+          {selectedHash &&
+            !commits.some((commit) => commit.hash === selectedHash) && (
+              <p className="selection-note">
+                Selected commit <code>{selectedHash.slice(0, 8)}</code> is
+                outside this loaded graph.{' '}
+                <button
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() => showInGraph(selectedHash)}
+                >
+                  Show selected commit in graph
+                </button>
+              </p>
+            )}
           {!commits.length && !busy && (
             <p className="empty">
               {repository?.head
@@ -155,7 +174,7 @@ function App({ logo }: { logo: string }) {
               <CommitRow
                 key={commit.hash}
                 commit={commit}
-                selected={detail?.commit.hash === commit.hash}
+                selected={selectedHash === commit.hash}
                 disabled={busy}
                 onInspect={inspect}
                 graph={
@@ -187,7 +206,12 @@ function App({ logo }: { logo: string }) {
         </section>
         <aside className="inspection" aria-label="Investigation details">
           {detail ? (
-            <CommitInspection detail={detail} />
+            <CommitInspection
+              detail={detail}
+              disabled={busy}
+              onInspect={inspect}
+              onShowInGraph={showInGraph}
+            />
           ) : (
             <div className="empty">
               <p className="eyebrow">Follow the evidence</p>

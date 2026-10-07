@@ -30,7 +30,8 @@ export async function findRepository(
     options,
   );
   if (result.exitCode !== 0) return null;
-  return result.stdout.replace(/\r?\n$/, '');
+  // Match native filesystem paths, including Git's forward slashes on Windows.
+  return realpathSync(result.stdout.replace(/\r?\n$/, ''));
 }
 
 export function relativeGitPath(root: string, file: string): string {

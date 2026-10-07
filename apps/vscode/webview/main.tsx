@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { CommitInspection, CommitRow, InvestigationCard } from '@bugsnitch/ui';
 import { isHostMessage } from '@bugsnitch/shared';
@@ -11,6 +11,7 @@ import type {
   WebviewMessage,
 } from '@bugsnitch/shared';
 import { createCommitGraph } from '@bugsnitch/graph';
+import { GraphLanes } from './graph-lanes';
 import './style.css';
 
 declare function acquireVsCodeApi(): {
@@ -71,7 +72,7 @@ function App({ logo }: { logo: string }) {
   }, [detail]);
   const inspect = (hash: string) =>
     send({ version: 1, type: 'inspectCommit', hash });
-  const graph = createCommitGraph(commits);
+  const graph = useMemo(() => createCommitGraph(commits), [commits]);
   return (
     <main>
       <header className="masthead">
@@ -139,7 +140,7 @@ function App({ logo }: { logo: string }) {
           aria-busy={busy}
         >
           <div className="section-heading">
-            <h2 id="history-title">Recent history</h2>
+            <h2 id="history-title">Commit graph</h2>
             <span className="count">{graph.nodes.length} loaded</span>
           </div>
           {!commits.length && !busy && (
@@ -150,16 +151,30 @@ function App({ logo }: { logo: string }) {
             </p>
           )}
           <ol className="commit-list">
-            {commits.map((commit) => (
+            {commits.map((commit, row) => (
               <CommitRow
                 key={commit.hash}
                 commit={commit}
                 selected={detail?.commit.hash === commit.hash}
                 disabled={busy}
                 onInspect={inspect}
+                graph={
+                  <GraphLanes
+                    node={graph.nodes[row]!}
+                    laneCount={graph.laneCount}
+                    boundary={
+                      row === commits.length - 1 && graph.boundaries.length > 0
+                    }
+                  />
+                }
               />
             ))}
           </ol>
+          {graph.boundaries.length > 0 && (
+            <p className="hint graph-boundary">
+              Dashed lanes continue to parents outside the loaded history.
+            </p>
+          )}
           {hasMore && (
             <button
               className="secondary load-more"
@@ -188,7 +203,7 @@ function App({ logo }: { logo: string }) {
         </aside>
       </div>
       <footer>
-        Early development · History list; visual graph layout is on the roadmap.
+        Local ancestry graph · Lines connect commits to their parents.
       </footer>
     </main>
   );

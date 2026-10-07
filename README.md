@@ -8,11 +8,12 @@
 
 Bugsnitch helps developers investigate code through local Git history: trace a line, read the change that introduced it, and follow the evidence in surrounding commits.
 
-**Status: early development, version 0.1.0.** This is a working foundation, with a history list and local line provenance. A visual commit graph and regression investigation workflows are future work.
+**Status: early development, building toward 0.2.0.** Version 0.1.0 is the foundation. Development now adds visual ancestry alongside the history list; regression investigation workflows remain future work.
 
 ## What works today
 
 - **Bugsnitch: Open** shows the repository path, branch, working-tree summary, and recent commits with authors, dates, and refs.
+- Graph lanes show parent ancestry, including branches and merges. Loading older pages preserves existing lane positions; dashed lanes indicate parents outside the loaded history.
 - Select a commit to inspect its full message, changed files, and a bounded patch preview. Merge patches compare against the first parent.
 - Refresh history or load another page. Opening Bugsnitch does not load the entire history.
 - **Bugsnitch: Snitch on Current Line** traces one saved line to its originating commit and original filename/line, including committed renames where Git can follow them.
@@ -75,21 +76,21 @@ pnpm build
 
 ## Repository architecture
 
-| Location             | Responsibility                                                          |
-| -------------------- | ----------------------------------------------------------------------- |
-| `apps/vscode`        | Commands, editor integration, discovery, webview host and React entry   |
-| `packages/git`       | Safe Git processes, history/status/blame parsing, commit inspection     |
-| `packages/graph`     | Bounded nodes, parent edges and page-boundary model; no lane layout yet |
-| `packages/forensics` | Local line investigation and commit enrichment                          |
-| `packages/ui`        | Accessible React presentation using VS Code theme variables             |
-| `packages/shared`    | Models and validated, versioned message contracts                       |
-| `assets/brand`       | Official brand assets, governed separately from source licensing        |
+| Location             | Responsibility                                                        |
+| -------------------- | --------------------------------------------------------------------- |
+| `apps/vscode`        | Commands, editor integration, discovery, webview host and React entry |
+| `packages/git`       | Safe Git processes, history/status/blame parsing, commit inspection   |
+| `packages/graph`     | Stable ancestry lanes, parent edges, and page continuations           |
+| `packages/forensics` | Local line investigation and commit enrichment                        |
+| `packages/ui`        | Accessible React presentation using VS Code theme variables           |
+| `packages/shared`    | Models and validated, versioned message contracts                     |
+| `assets/brand`       | Official brand assets, governed separately from source licensing      |
 
 The project uses strict TypeScript and pnpm workspaces, esbuild for the extension host, Vite for the React webview, and Vitest for tests. There is no separate desktop app or cloud backend.
 
 ## Roadmap
 
-Next: proper graph lanes, richer comparisons and file/symbol history. Later: investigation sessions, good/bad regression ranges, visual bisect, and related changes. Optional integrations and intelligence may follow; the local core must remain valuable on its own. See the [roadmap](docs/roadmap.md); no release dates are promised.
+The 0.2.0 milestone connects visual ancestry, line investigation, and commit selection, and adds read-only branch/tag entry points. Later: richer comparisons, file/symbol history, investigation sessions, good/bad regression ranges, visual bisect, and related changes. Optional integrations and intelligence may follow; the local core must remain valuable on its own. See the [roadmap](docs/roadmap.md); no release dates are promised.
 
 ## Contributing and support
 

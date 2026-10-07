@@ -18,7 +18,7 @@ export function InvestigationCard({
       <h2 id="investigation-title">
         {line.uncommitted
           ? 'This line has local changes'
-          : 'Where this line started'}
+          : 'Commit associated with this line'}
       </h2>
       <p className="path">
         {line.path}:{line.currentLine}
@@ -31,6 +31,10 @@ export function InvestigationCard({
       ) : (
         <>
           <h3>{investigation.commit?.subject || line.subject}</h3>
+          <p className="hint">
+            Git attributes this line to this commit. It is an investigation
+            lead, not proof that the commit introduced a bug.
+          </p>
           <dl className="facts">
             <dt>Commit</dt>
             <dd>

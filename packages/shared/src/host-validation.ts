@@ -99,7 +99,11 @@ export function isHostMessage(value: unknown): value is HostMessage {
       return (
         repository(value.repository) &&
         page(value.page) &&
-        typeof value.append === 'boolean'
+        typeof value.append === 'boolean' &&
+        isRecord(value.anchor) &&
+        (value.anchor.kind === 'head' || value.anchor.kind === 'commit') &&
+        (value.anchor.hash === null || isCommitHash(value.anchor.hash)) &&
+        typeof value.anchor.label === 'string'
       );
     case 'investigation':
       return investigation(value.investigation);

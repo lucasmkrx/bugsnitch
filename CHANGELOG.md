@@ -3,6 +3,8 @@
 ## 0.2.0 — Unreleased
 
 - Draw real parent ancestry beside commit history, including branches and merges, with stable lanes across pagination and explicit continuations at page boundaries.
+- Preserve line evidence and commit selection across history reads; add parent inspection, Show in graph, and bounded history from a selected commit.
+- Label line attribution as an investigation lead, without claiming it proves a regression.
 
 ## 0.1.0 — 2026-10-06
 

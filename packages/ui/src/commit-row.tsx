@@ -23,6 +23,7 @@ export function CommitRow({
   return (
     <li className="commit-row">
       <button
+        id={`commit-${commit.hash}`}
         className="commit-button"
         aria-pressed={selected}
         disabled={disabled}

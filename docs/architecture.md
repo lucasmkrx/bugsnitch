@@ -30,13 +30,15 @@ flowchart LR
 
 `Open` prefers the active file's repository, then workspace roots. Multiple roots use a picker; nested repositories are discovered from the active file. This release does not recursively scan workspaces for every repository.
 
-Each panel reads a snapshot and at most 50 commits by default (configurable 10–200), plus one lookahead. Subsequent pages use the snapshot's full HEAD object ID and an offset, avoiding duplicates if the branch moves. Refresh resets pagination. Refs and status update on refresh; no filesystem watchers or indexer run in the background. Concurrent requests in one panel are serialized and commit requests are restricted to IDs already supplied to that panel or its line investigation.
+Each panel reads a snapshot and at most 50 commits by default (configurable 10–200), plus one lookahead. Subsequent pages use a frozen history anchor's full commit ID and an offset, avoiding duplicates if the branch moves. Refresh resets pagination. Refs and status update on refresh; no filesystem watchers or indexer run in the background. Concurrent requests in one panel are serialized and commit requests are restricted to IDs already supplied to that panel, its line investigation, or an inspected commit's parents.
+
+Selection, commit detail, and line evidence are independent of the loaded graph. Show in graph focuses an already loaded row; for an unloaded selected commit, it reads a bounded history anchored at that commit rather than preloading every intervening page. Return to checkout history resets the anchor to HEAD while keeping investigation context. The repository overview always describes the actual checkout.
 
 Git processes are asynchronous, cancellable, and time out after 30 seconds. Output is bounded to 8 MiB; patch previews retain at most 256 KiB and disclose truncation. Blame accepts text up to 4 MiB. Closing a panel cancels its reads. Line investigation uses VS Code's cancellable progress UI. No entire-history preload or database is required, although a user can explicitly load successive pages into panel memory.
 
 ## Trust boundaries
 
-The extension host treats the webview as untrusted. Only `ready`, `refresh`, `loadMore`, and `inspectCommit` are supported. Messages require a protocol version and exact fields; commit IDs must be complete SHA-1 or SHA-256 hexadecimal object IDs, then pass the panel allowlist. No message supplies a process command or repository path.
+The extension host treats the webview as untrusted. Only `ready`, `refresh`, `loadMore`, `inspectCommit`, `focusCommit`, and `returnToHead` are supported. Messages require a protocol version and exact fields; commit IDs must be complete SHA-1 or SHA-256 hexadecimal object IDs, then pass the panel allowlist. No message supplies a process command or repository path.
 
 Git commands use `spawn` with argument arrays and `shell: false`. Pathspecs are literal, revisions are validated, and file paths must remain inside the selected root. Read commands suppress optional locks and configured external diff/textconv/fsmonitor execution. Ambient `GIT_*` variables are removed to prevent unexpected repository redirection. Git's safe-directory checks are respected. Repository content is never inserted into HTML; React escapes textual values.
 

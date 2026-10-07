@@ -6,7 +6,7 @@
 
 > Find what changed. Find where the bug started.
 
-Bugsnitch helps developers investigate code through local Git history: trace a line, read the change that introduced it, and follow the evidence in surrounding commits.
+Bugsnitch helps developers investigate code through local Git history: trace a line, inspect its associated commit, and follow the evidence in surrounding commits.
 
 **Status: early development, building toward 0.2.0.** Version 0.1.0 is the foundation. Development now adds visual ancestry alongside the history list; regression investigation workflows remain future work.
 
@@ -21,7 +21,9 @@ Bugsnitch helps developers investigate code through local Git history: trace a l
 
 ### Snitch on Current Line
 
-Open a tracked text file, save any editor changes, and place the cursor on the line you want to investigate. Run **Bugsnitch: Snitch on Current Line** from the Command Palette or editor context menu. The investigation shows the author, author date, originating hash and subject, and original/current locations. Choose **Inspect this commit** for the full message, changed files, and patch.
+Open a tracked text file, save any editor changes, and place the cursor on the line you want to investigate. Run **Bugsnitch: Snitch on Current Line** from the Command Palette or editor context menu. The investigation shows the author, author date, associated hash and subject, and original/current locations. Choose **Inspect this commit** for the full message, changed files, and patch, then **Show in graph** to locate it alongside its ancestry. Parent buttons let you continue the investigation.
+
+Selection and line evidence survive refresh and pagination. If the selected commit is outside the loaded graph, **Show in graph** opens a bounded history from that commit. **Return to checkout history** restores the current checkout's history. The working tree never changes. A line-associated commit is an investigation lead, not proof that it introduced a bug.
 
 Saved working-tree changes are supported: if the selected line has no committed origin, Bugsnitch says so. Untitled and dirty editors must be saved first. Binary files and text files larger than 4 MiB are outside this first slice.
 

@@ -31,6 +31,12 @@ export interface HistoryPage {
   hasMore: boolean;
 }
 
+export interface HistoryAnchor {
+  kind: 'head' | 'commit';
+  hash: string | null;
+  label: string;
+}
+
 export interface LineProvenance {
   hash: string;
   author: string;

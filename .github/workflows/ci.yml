@@ -1,14 +1,30 @@
 name: CI
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
 permissions:
   contents: read
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+  validate:
+    name: validate (${{ matrix.os }}, VS Code ${{ matrix.vscode }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        vscode: ['1.105.0']
+        include:
+          - os: ubuntu-latest
+            vscode: stable
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
         with:
@@ -26,4 +42,29 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build
+      - name: Test inside VS Code
+        env:
+          BUGSNITCH_TEST_VSCODE_VERSION: ${{ matrix.vscode }}
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a pnpm test:extension
+          else
+            pnpm test:extension
+          fi
       - run: pnpm --filter bugsnitch package
+      - uses: actions/upload-artifact@v7
+        if: matrix.os == 'ubuntu-latest' && matrix.vscode == '1.105.0'
+        with:
+          name: bugsnitch-vsix
+          path: apps/vscode/*.vsix
+          if-no-files-found: error
+          retention-days: 14
+  check:
+    needs: validate
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every validation job to pass
+        env:
+          VALIDATION_RESULT: ${{ needs.validate.result }}
+        run: test "$VALIDATION_RESULT" = success

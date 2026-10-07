@@ -4,3 +4,5 @@ assets/brand/*.svg
 node_modules
 dist
 coverage
+.cache
+.vscode-test

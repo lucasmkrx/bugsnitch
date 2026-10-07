@@ -113,7 +113,9 @@ describe('local Git inspection', () => {
   });
   it('handles literal pathspec characters and leading dashes safely', async () => {
     const root = await repo();
-    const path = '-odd [file] *.txt';
+    // Windows cannot create a filename containing '*'; brackets remain literal.
+    const path =
+      process.platform === 'win32' ? '-odd [file].txt' : '-odd [file] *.txt';
     const hash = await commitFile(root, path, 'literal\n');
     expect((await blameLine(root, path, 1, 'literal\n')).hash).toBe(hash);
     expect(relativeGitPath(root, join(root, path))).toBe(path);

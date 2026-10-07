@@ -10,6 +10,7 @@ Install system Git and Node 24 LTS (`.nvmrc`), enable Corepack, and use pinned p
 corepack enable
 pnpm install --frozen-lockfile
 pnpm build
+pnpm test:extension
 ```
 
 Open the root in VS Code and press F5 using **Bugsnitch Extension**. Open a trusted fixture workspace in the development host. Use `pnpm dev` to watch both bundles; reload the host to pick up changes.

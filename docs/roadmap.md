@@ -4,7 +4,7 @@ No dates are promised. The local open-source core remains useful independently o
 
 ## Phase 1 — Foundation
 
-Implemented: repository detection, bounded recent history, commit inspection with changed files and patch previews, exact-line blame, and Snitch on Current Line. Remaining foundation work: extension-host automation, broader platform verification, release packaging and official publisher configuration.
+Implemented: repository detection, bounded recent history, commit inspection with changed files and patch previews, exact-line blame, Snitch on Current Line, automated VS Code host checks across Linux/macOS/Windows, and GitHub preview packaging. Remaining release work: official Marketplace publisher configuration and broader user feedback.
 
 ## Phase 2 — Visual Git
 

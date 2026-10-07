@@ -21,6 +21,7 @@ Desktop.ini
 *.swp
 *.tmp
 .cache/
+.vscode-test/
 apps/vscode/LICENSE
 apps/vscode/TRADEMARKS.md
 apps/vscode/CHANGELOG.md

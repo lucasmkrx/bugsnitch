@@ -7,6 +7,6 @@
   "exports": "./src/index.tsx",
   "dependencies": {
     "@bugsnitch/shared": "workspace:*",
-    "react": "19.3.0"
+    "react": "19.3.1"
   }
 }

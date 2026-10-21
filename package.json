@@ -28,25 +28,25 @@
     "benchmark": "node scripts/benchmark.mjs"
   },
   "devDependencies": {
-    "@axe-core/playwright": "4.13.0",
+    "@axe-core/playwright": "4.14.0",
     "@eslint/js": "10.0.1",
-    "@playwright/test": "1.63.0",
+    "@playwright/test": "1.64.1",
     "@resvg/resvg-js": "2.6.2",
-    "@types/node": "^24.0.0",
+    "@types/node": "^24.19.2",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@types/vscode": "1.105.0",
-    "@vitest/coverage-v8": "5.0.3",
+    "@vitest/coverage-v8": "5.0.5",
     "@vscode/test-electron": "3.1.0",
     "@vscode/vsce": "4.0.0",
     "esbuild": "0.28.2",
-    "eslint": "10.12.0",
+    "eslint": "10.13.0",
     "eslint-config-prettier": "^10.1.8",
     "globals": "^17.0.0",
-    "prettier": "3.9.9",
+    "prettier": "3.9.10",
     "typescript": "6.0.3",
-    "typescript-eslint": "8.71.1",
-    "vite": "8.3.3",
-    "vitest": "5.0.3"
+    "typescript-eslint": "8.71.2",
+    "vite": "8.3.4",
+    "vitest": "5.0.5"
   }
 }

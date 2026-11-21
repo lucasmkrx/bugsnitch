@@ -1,0 +1,14 @@
+# Optional Compose override for an owner-connected GitHub App.
+services:
+  server:
+    environment:
+      GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID:?set the installed App client ID}
+      GITHUB_APP_KEY_FILE: /run/bugsnitch/github-app.pem
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?set the App webhook secret}
+    volumes:
+      - type: bind
+        source: ${GITHUB_APP_KEY_PATH:?provide the absolute path to the App private key}
+        target: /run/bugsnitch/github-app.pem
+        read_only: true
+        bind:
+          create_host_path: false

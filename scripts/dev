@@ -1,0 +1,31 @@
+#!/bin/sh
+set -eu
+cd "$(dirname "$0")/.."
+umask 077
+mode=${1:-start}
+root=$(pwd -P)
+dir=$root/.local/dev
+pgbin=${PGBIN:-}
+if [ -z "$pgbin" ] && command -v pg_config >/dev/null; then pgbin=$(pg_config --bindir); fi
+if [ -z "$pgbin" ] && command -v brew >/dev/null; then pgbin="$(brew --prefix postgresql@17)/bin"; fi
+[ -x "$pgbin/pg_ctl" ] || { echo "Set PGBIN to the PostgreSQL 17 bin directory." >&2; exit 1; }
+mkdir -p "$dir/socket"
+if [ "$mode" = stop ]; then "$pgbin/pg_ctl" -D "$dir/data" stop -m fast; exit; fi
+if [ "$mode" != start ]; then echo "Usage: scripts/dev [start|stop]" >&2; exit 2; fi
+if [ ! -f "$dir/data/PG_VERSION" ]; then "$pgbin/initdb" --no-locale --encoding=UTF8 -A trust -U bugsnitch -D "$dir/data"; fi
+if ! "$pgbin/pg_ctl" -D "$dir/data" status >/dev/null; then
+  PGHOST="$dir/socket" "$pgbin/pg_ctl" -D "$dir/data" -l "$dir/postgres.log" -o "-k '$dir/socket' -c listen_addresses='' -p 54938" start
+fi
+export PGHOST="$dir/socket" PGPORT=54938 PGUSER=bugsnitch
+if ! "$pgbin/psql" -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname='bugsnitch'" | grep -q 1; then "$pgbin/createdb" bugsnitch; fi
+export DATABASE_URL="postgresql:///bugsnitch?sslmode=disable"
+for secret in owner-token plugin-token; do if [ ! -s "$dir/$secret" ]; then openssl rand -hex 32 > "$dir/$secret"; fi; done
+BUGSNITCH_OWNER_TOKEN=$(cat "$dir/owner-token")
+BUGSNITCH_MCP_TOKEN=$(cat "$dir/plugin-token")
+export BUGSNITCH_OWNER_TOKEN BUGSNITCH_MCP_TOKEN
+npm --prefix web ci
+npm --prefix web run build
+mkdir -p bin
+go build -o bin/bugsnitch-server ./cmd/bugsnitch-server
+echo "Open ${BUGSNITCH_ORIGIN:-http://localhost:8787} and use the credential in .local/dev/owner-token."
+exec bin/bugsnitch-server

@@ -1,0 +1,33 @@
+services:
+  db:
+    image: postgres:17.12-alpine
+    environment:
+      POSTGRES_DB: bugsnitch
+      POSTGRES_USER: bugsnitch
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set a random database password}
+    volumes:
+      - data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U bugsnitch]
+      interval: 5s
+      timeout: 3s
+      retries: 15
+  server:
+    build: {context: .., dockerfile: deploy/Dockerfile}
+    restart: unless-stopped
+    depends_on: {db: {condition: service_healthy}}
+    ports: ["127.0.0.1:8787:8787"]
+    environment:
+      BUGSNITCH_ORIGIN: ${BUGSNITCH_ORIGIN:-http://localhost:8787}
+      BUGSNITCH_OWNER_TOKEN: ${BUGSNITCH_OWNER_TOKEN:?set an owner credential}
+      BUGSNITCH_MCP_TOKEN: ${BUGSNITCH_MCP_TOKEN:-}
+      BUGSNITCH_MCP_SCOPES: ${BUGSNITCH_MCP_SCOPES:-}
+      MCP_OAUTH_ISSUER: ${MCP_OAUTH_ISSUER:-}
+      MCP_OAUTH_INTROSPECTION: ${MCP_OAUTH_INTROSPECTION:-}
+      MCP_OAUTH_CLIENT_ID: ${MCP_OAUTH_CLIENT_ID:-}
+      MCP_OAUTH_CLIENT_SECRET: ${MCP_OAUTH_CLIENT_SECRET:-}
+      MCP_OAUTH_OWNER_SUBJECT: ${MCP_OAUTH_OWNER_SUBJECT:-}
+      SENTRY_CLIENT_SECRET: ${SENTRY_CLIENT_SECRET:-}
+      DATABASE_URL: postgresql://bugsnitch:${POSTGRES_PASSWORD}@db/bugsnitch?sslmode=disable
+volumes:
+  data:

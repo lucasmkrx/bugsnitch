@@ -1,0 +1,12 @@
+.git
+.local
+bin
+**/node_modules
+**/dist
+**/test-results
+*.pem
+*.key
+.env*
+**/.env*
+secrets
+**/secrets

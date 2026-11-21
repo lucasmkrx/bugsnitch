@@ -1,0 +1,144 @@
+// SPDX-License-Identifier: MPL-2.0
+package incidents
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/lucasmkrx/bugsnitch/internal/github"
+	"github.com/lucasmkrx/bugsnitch/internal/protocol"
+)
+
+// CheckoutFixture connects production handlers and outbox processing to two
+// in-process provider fixtures. The external test uses the real runner package.
+type CheckoutFixture struct {
+	t      *testing.T
+	s      Store
+	issue  protocol.IssueSelection
+	body   string
+	writes int
+}
+
+func NewCheckoutFixture(t *testing.T) *CheckoutFixture {
+	f := &CheckoutFixture{t: t, s: disposableStore(t)}
+	old := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = old })
+	http.DefaultTransport = transportFixture(f.github)
+	return f
+}
+
+func (f *CheckoutFixture) github(r *http.Request) (*http.Response, error) {
+	const repo = "example/disposable"
+	if r.URL.Host != "api.github.com" {
+		return nil, errors.New("unexpected fixture host")
+	}
+	switch r.Method + " " + r.URL.Path {
+	case "GET /app":
+		return jsonResponse(200, map[string]any{"id": 50, "slug": "checkout-fixture"}), nil
+	case "POST /app/installations/88/access_tokens":
+		return jsonResponse(201, map[string]string{"token": "fixture-installation-token"}), nil
+	case "GET /repositories/99":
+		return jsonResponse(200, map[string]any{"id": 99, "full_name": repo}), nil
+	case "POST /repos/" + repo + "/issues":
+		var draft struct{ Title, Body string }
+		if err := json.NewDecoder(r.Body).Decode(&draft); err != nil {
+			return nil, err
+		}
+		if !strings.Contains(draft.Body, "ShippingThresholdError") {
+			return nil, errors.New("incident evidence missing from promoted issue")
+		}
+		f.writes++
+		f.body = draft.Body
+		f.issue = protocol.IssueSelection{Schema: 1, Repository: repo, Number: 7, State: "open", URL: "https://github.com/" + repo + "/issues/7", UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano), Title: draft.Title}
+		return jsonResponse(201, f.issueRecord()), nil
+	case "GET /repos/" + repo + "/issues/7":
+		return jsonResponse(200, f.issueRecord()), nil
+	}
+	return nil, errors.New("unexpected GitHub fixture operation")
+}
+
+func (f *CheckoutFixture) issueRecord() map[string]any {
+	i := f.issue
+	return map[string]any{"id": 55, "number": i.Number, "title": i.Title, "body": f.body, "state": i.State, "html_url": i.URL, "updated_at": i.UpdatedAt}
+}
+
+func (f *CheckoutFixture) Deliver(projected map[string]any, replay bool, expectedOccurrences int64) {
+	t := f.t
+	t.Helper()
+	e := make(map[string]any, len(projected)+3)
+	for k, v := range projected {
+		e[k] = v
+	}
+	occurred, ok := projected["timestamp"].(float64)
+	if !ok || occurred <= 0 {
+		t.Fatal("the captured browser envelope needs an occurrence timestamp")
+	}
+	e["project"], e["issue_id"], e["datetime"] = 21, "42", time.Unix(0, int64(occurred*1e9)).UTC()
+	payload, err := json.Marshal(map[string]any{"action": "created", "installation": map[string]string{"uuid": installation}, "data": map[string]any{"error": e}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func() {
+		t.Helper()
+		if status := signedEvent(f.s, payload); status != 202 {
+			t.Fatalf("signed error.created returned %d", status)
+		}
+	}
+	send()
+	if replay {
+		send()
+	}
+	if err = f.s.processOne(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := one(t, f.s); got.Occurrences != expectedOccurrences || got.Observed != "ShippingThresholdError reported by Sentry" {
+		t.Fatalf("wrong incident grouping: %s, %d occurrences", got.Observed, got.Occurrences)
+	}
+}
+
+func (f *CheckoutFixture) Promote() protocol.IssueSelection {
+	t := f.t
+	t.Helper()
+	ctx := context.Background()
+	inc := one(t, f.s)
+	for range 2 {
+		if err := f.s.Promote(ctx, "personal", "p", inc.ID, inc.Version); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := f.s.syncOne(ctx, fixtureApp(t)); err != nil {
+		t.Fatal(err)
+	}
+	inc = one(t, f.s)
+	if inc.IssueNumber == nil || *inc.IssueNumber != int64(f.issue.Number) || inc.Promotion == nil || *inc.Promotion != "linked" || f.writes != 1 {
+		t.Fatal("promotion did not produce one linked canonical ticket")
+	}
+	if err := f.s.DB.QueryRowContext(ctx, "SELECT issue_id FROM incident_issues WHERE workspace_id=$1 AND project_id=$2 AND incident_id=$3", "personal", "p", inc.ID).Scan(&f.issue.GitHubID); err != nil {
+		t.Fatal(err)
+	}
+	f.issue.RequirementsDigest = (github.Issue{Title: f.issue.Title, Body: f.body}).RequirementsDigest()
+	t.Logf("Incident %s: %d occurrences, one promoted issue %s (GitHub App fixture)", inc.ID, inc.Occurrences, f.issue.URL)
+	return f.issue
+}
+
+func (f *CheckoutFixture) Observe(r Receipt, want string) {
+	t := f.t
+	t.Helper()
+	inc := one(t, f.s)
+	if r.Kind != "" {
+		r.At, r.Version, r.CommandID = time.Now().UTC(), inc.Version, "checkout-"+r.Kind
+		if err := f.s.receipt(context.Background(), "personal", "p", inc.ID, r); err != nil {
+			t.Fatal(err)
+		}
+	}
+	v, err := f.s.verdict(context.Background(), "personal", "p", inc.ID, "bugsnitch-fixture")
+	if err != nil || v.Status != want {
+		t.Fatalf("verdict=%s want=%s err=%v", v.Status, want, err)
+	}
+	t.Logf("Incident %s: %s", inc.ID, v.Status)
+}

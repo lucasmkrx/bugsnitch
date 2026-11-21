@@ -20,7 +20,15 @@ type IssueSelection struct {
 	Criteria           []string `json:"criteria"`
 }
 
+// RunScope identifies the enrolled device and the approved scope observed by next.
+type RunScope struct {
+	Device  string `json:"deviceId"`
+	Project string `json:"projectId"`
+	Plan    string `json:"planId"`
+	Policy  int64  `json:"policyVersion"`
+}
 type Recommendation struct {
+	Scope     *RunScope       `json:"scope,omitempty"`
 	Selection *IssueSelection `json:"selection,omitempty"`
 	Reason    string          `json:"reason,omitempty"`
 }

@@ -54,6 +54,17 @@ func TestIndependentlyPassingChangesFailInCombination(t *testing.T) {
 	if err != nil || a.State != "completed" {
 		t.Fatal(a.State, err)
 	}
+	measured := map[string]bool{}
+	for _, e := range a.Evidence {
+		if e.DurationMS != nil && *e.DurationMS >= 0 {
+			measured[e.Phase] = true
+		}
+	}
+	for _, phase := range []string{"plan", "implement", "validate", "review"} {
+		if !measured[phase] {
+			t.Fatalf("missing measured activity duration for %s", phase)
+		}
+	}
 	mainRef := mustGit(dir, "symbolic-ref", "HEAD")
 	positive, err := CheckCombined(ctx, a.ID, mainRef)
 	if err != nil || positive.Status != "passed" || positive.ExitCode == nil || *positive.ExitCode != 0 || positive.TargetSHA != a.BaseSHA {

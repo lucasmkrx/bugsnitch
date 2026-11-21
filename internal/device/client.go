@@ -249,7 +249,11 @@ func syncOnce(ctx context.Context) error {
 				}
 				var evidence []protocol.StageEvidence
 				for _, e := range a.Evidence {
-					evidence = append(evidence, protocol.StageEvidence{Phase: e.Phase, CandidateSHA: e.CandidateSHA, ChangedFiles: e.ChangedFiles, ExitCode: e.ExitCode, ImportantFindings: e.ImportantFindings, MinorFindings: e.MinorFindings})
+					var duration *int64
+					if assigned.StageTimings {
+						duration = e.DurationMS
+					}
+					evidence = append(evidence, protocol.StageEvidence{DurationMS: duration, Phase: e.Phase, CandidateSHA: e.CandidateSHA, ChangedFiles: e.ChangedFiles, ExitCode: e.ExitCode, ImportantFindings: e.ImportantFindings, MinorFindings: e.MinorFindings})
 				}
 				reports = append(reports, protocol.Attempt{ReasonCode: a.ReasonCode, IssueUpdatedAt: a.IssueUpdatedAt, Evidence: evidence, ID: a.ID, ProjectID: pr.ID, IssueNumber: a.IssueNumber, BaseSHA: a.BaseSHA, CandidateSHA: a.CandidateSHA, Phase: a.Phase, State: a.State, Version: a.Version})
 			}

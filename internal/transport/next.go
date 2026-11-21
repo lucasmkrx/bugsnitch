@@ -49,13 +49,14 @@ func (s *Server) recommend(ctx context.Context, token, p string) (protocol.Recom
 	defer tx.Rollback()
 	var ws, d, repo string
 	var paused, stopped, mapped bool
+	var policy int64
 	var used, ticketLimit, turnLimit, deviceLimit int
-	err = tx.QueryRowContext(ctx, `SELECT w.id,d.id,p.repository,p.paused,w.stopped,w.ticket_limit,w.turn_limit,d.turn_limit,
+	err = tx.QueryRowContext(ctx, `SELECT w.id,d.id,p.repository,p.policy_version,p.paused,w.stopped,w.ticket_limit,w.turn_limit,d.turn_limit,
     EXISTS(SELECT FROM github_mappings g WHERE g.workspace_id=w.id AND g.project_id=p.id AND g.active),
     (SELECT count(*) FROM admission a WHERE a.workspace_id=w.id AND a.active)
     FROM device_projects m JOIN devices d ON (m.workspace_id,m.device_id)=(d.workspace_id,d.id) JOIN workspaces w ON w.id=d.workspace_id
     JOIN projects p ON (m.workspace_id,m.project_id)=(p.workspace_id,p.id)
-    WHERE p.id=$1 AND NOT d.revoked AND d.token_hash=$2`, p, hash(token)).Scan(&ws, &d, &repo, &paused, &stopped, &ticketLimit, &turnLimit, &deviceLimit, &mapped, &used)
+    WHERE p.id=$1 AND NOT d.revoked AND d.token_hash=$2`, p, hash(token)).Scan(&ws, &d, &repo, &policy, &paused, &stopped, &ticketLimit, &turnLimit, &deviceLimit, &mapped, &used)
 	if errors.Is(err, sql.ErrNoRows) {
 		return out, denied
 	}
@@ -112,6 +113,7 @@ func (s *Server) recommend(ctx context.Context, token, p string) (protocol.Recom
 			return out, err
 		}
 		if next.Selection != nil {
+			next.Scope = &protocol.RunScope{Device: d, Project: p, Plan: plan, Policy: policy}
 			return next, nil
 		}
 		if out.Reason == "" {

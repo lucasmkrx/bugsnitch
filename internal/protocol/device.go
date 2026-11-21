@@ -17,12 +17,14 @@ type Project struct {
 	Paused     bool   `json:"paused"`
 }
 type Enrollment struct {
-	Commands  []Control `json:"commands,omitempty"`
-	Workspace string    `json:"workspaceId"`
-	DeviceID  string    `json:"deviceId"`
-	Projects  []Project `json:"projects"`
+	StageTimings bool      `json:"stageTimings,omitempty"`
+	Commands     []Control `json:"commands,omitempty"`
+	Workspace    string    `json:"workspaceId"`
+	DeviceID     string    `json:"deviceId"`
+	Projects     []Project `json:"projects"`
 }
 type StageEvidence struct {
+	DurationMS        *int64 `json:"durationMs,omitempty"`
 	Phase             string `json:"phase"`
 	CandidateSHA      string `json:"candidateSha,omitempty"`
 	ChangedFiles      int    `json:"changedFiles"`
@@ -50,15 +52,16 @@ type Sync struct {
 }
 
 type Admission struct {
-	CriteriaHash string `json:"criteriaHash,omitempty"`
-	State        string `json:"state,omitempty"`
-	Protocol     int    `json:"protocol"`
-	AttemptID    string `json:"attemptId"`
-	ProjectID    string `json:"projectId"`
-	IssueNumber  int    `json:"issueNumber"`
-	BaseSHA      string `json:"baseSha"`
-	Operation    string `json:"operation"`
-	Sequence     int64  `json:"sequence"`
+	Scope        *RunScope `json:"scope,omitempty"`
+	CriteriaHash string    `json:"criteriaHash,omitempty"`
+	State        string    `json:"state,omitempty"`
+	Protocol     int       `json:"protocol"`
+	AttemptID    string    `json:"attemptId"`
+	ProjectID    string    `json:"projectId"`
+	IssueNumber  int       `json:"issueNumber"`
+	BaseSHA      string    `json:"baseSha"`
+	Operation    string    `json:"operation"`
+	Sequence     int64     `json:"sequence"`
 }
 
 type Control struct {

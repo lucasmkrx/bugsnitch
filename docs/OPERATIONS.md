@@ -46,3 +46,17 @@ On a completed attempt, `bugsnitch share-diff --id ATTEMPT` previews the redacte
 Supervised is the initial per-project preset. Explicit local selection, planned issue publication, owner incident promotion and reviewed draft PR requests are permitted. Assisted requires an approved plan and disables external issue and draft writes by default. Autonomous within limits additionally enables incident promotion when three distinct recent Sentry events occur in a shared known environment and release within 24 hours. Individual action overrides are available. Automatic production deployment and merge remain unavailable. Verify CI deployment behavior on the target branch before a human merge.
 
 For a consequential action, inspect the workspace event in the authenticated state API. A decision answer carries the selected option and authorized subject version. An accepted Sentry observation records the verified installation. Its subsequent grouping has a separate service event linked to the inbox row. Policy-gated publication records bind to the approved policy version. Audit metadata shares the transaction with the underlying state change. Migration 017 leaves existing event attribution unknown. [API fields](../api/README.md)
+
+## Workspace diagnostics
+
+Sign in and open `/api/v1/diagnostics` on the service origin. The owner-only JSON response takes one consistent database snapshot. It includes the following measurements.
+
+| Field | Measurement |
+| --- | --- |
+| `observedAt`, `queues` | Pending count and age in milliseconds of the oldest pending item for incident intake, incident issue creation, planned issue creation, draft PRs and unexpired attempt controls. Counts include reconciliation and backoff. A queue with more than 1000 pending items returns 1000 and `more: true`. An empty queue has a null age. |
+| `observations.attemptReasons` | Counts grouped by execution state and recorded reason code across the most recent 200 attempt reports. A failed historical report can have a null reason. |
+| `observations.stageActivity` | Count, measured count, mean and maximum milliseconds for each reported phase in that same sample. A worker measures a model-stage call from local adapter invocation through return, including runtime startup. It times the validation command separately. Waiting for the owner and time between phases are excluded. Only recorded stage results contribute. A null mean or maximum means there were no measurements for that phase. |
+| `observations.generalPermitHold` | Hosted elapsed milliseconds between acquisition and release for the 200 most recent completed planner, manager and proof permits. These intervals can include acknowledgement or reconnect delays. |
+| `observations.contact` | First tracked sync, tracked and total device count, and up to 1000 observed reconnects in the preceding 24 hours. A successful authenticated sync after a measured gap longer than two minutes records one reconnect. The first sync after upgrade establishes tracking. The count is null until a device has synced. Sleep, connectivity loss and a stopped runner can all create a gap. |
+
+The endpoint returns aggregates without device names, repository names, message text, tokens or command output. New runners send stage durations only when the server advertises timing support. Historical and older-runner stage results retain unknown durations. Subscription usage and cost require separate runtime-provided data.

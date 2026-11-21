@@ -30,7 +30,7 @@ Use the public HTTPS service origin on another computer. Each project checkout n
 
 - Inspect projects, connection status and recent execution reports. Queue a manual report with observed behavior, expected behavior and reproduction steps. Approved incident promotion uses a scoped GitHub App integration.
 - Propose and approve a versioned plan. Approved criteria, dependencies and shared resource declarations constrain local admission. Pausing closes the gate to new work. Resuming requires a decision bound to the current project version.
-- Use `bugsnitch next --project PROJECT_ID` to inspect the next eligible issue from the approved plan. Run selected work locally, validate its candidate and collect separate review evidence. Enrolled computers share ticket and model-turn limits. Initial limits are two active tickets per workspace and two model turns per workspace and per device.
+- Use `bugsnitch next --project PROJECT_ID` to inspect the next eligible issue from the approved plan. Start a bounded local pass with `bugsnitch local-run --project PROJECT_ID --limit 2 --parallel 2`. Each worker validates its own candidate and collects separate review evidence. Owner questions pause the affected work. Enrolled computers share ticket and model-turn limits. Initial limits are two active tickets per workspace and two model turns per workspace and per device.
 - Record deployment and validation evidence for the specific incident, environment and build. PR readiness, merging and deployment have separate evidence requirements.
 - Use the local MCP bridge or an OAuth-configured hosted MCP connection to read project and decision state, record reports and answer current decisions. Dashboard messages persist with their inference availability status.
 

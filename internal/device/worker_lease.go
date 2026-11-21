@@ -28,7 +28,7 @@ func CheckWorker(ctx context.Context, a runner.Summary, turn bool) (time.Duratio
 		return 0, runner.ErrAuthorityUnreachable
 	}
 	if row.Profile == nil {
-		if row.Device != "" {
+		if row.Device != "" || a.Scope != nil {
 			return 0, runner.ErrDeviceUnauthorized
 		}
 		return 0, nil
@@ -51,10 +51,13 @@ func CheckWorker(ctx context.Context, a runner.Summary, turn bool) (time.Duratio
 	if err != nil {
 		return 0, runner.ErrAuthorityUnreachable
 	}
+	if a.Scope != nil && (a.Scope.Device != row.Device || a.Scope.Project != project) {
+		return 0, runner.ErrDeviceUnauthorized
+	}
 	if project == "" || path == "" || path != a.LocalPath {
 		return 0, runner.ErrDeviceUnauthorized
 	}
-	req := protocol.WorkerLease{Protocol: 1, Workspace: a.Workspace, Project: project, Device: row.Device, Attempt: a.ID, Base: a.BaseSHA, Issue: a.IssueNumber, Sequence: row.Seq, SubjectVersion: a.Version, Turn: turn}
+	req := protocol.WorkerLease{Scope: a.Scope, Protocol: 1, Workspace: a.Workspace, Project: project, Device: row.Device, Attempt: a.ID, Base: a.BaseSHA, Issue: a.IssueNumber, Sequence: row.Seq, SubjectVersion: a.Version, Turn: turn}
 	var grant protocol.WorkerGrant
 	if err = send(ctx, p, "worker-lease", req, &grant); err != nil {
 		var status statusError

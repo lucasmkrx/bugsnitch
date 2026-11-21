@@ -195,6 +195,12 @@ func TestDeviceReplayRevocationAndBinding(t *testing.T) {
 		wg.Go(func() { syncReq(a, key, 200) })
 	}
 	wg.Wait()
+	invalid := a
+	invalid.Version++
+	invalid.Phase = "plan"
+	syncReq(invalid, key, 409)
+	invalid.State = "completed"
+	syncReq(invalid, key, 400)
 	a.Version = 2
 	a.Phase = "plan"
 	syncReq(a, key, 200)

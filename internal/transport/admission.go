@@ -56,6 +56,14 @@ func (s *Server) admission(w http.ResponseWriter, r *http.Request) error {
 		if err = tx.QueryRowContext(ctx, "SELECT paused,require_plan,policy_version FROM projects WHERE workspace_id=$1 AND id=$2 FOR SHARE", ws, a.ProjectID).Scan(&paused, &requirePlan, &policy); err != nil {
 			return err
 		}
+		if a.Scope != nil && (a.Operation == "admit" || a.Operation == "turn_start") {
+			if a.Scope.Device != device || a.Scope.Project != a.ProjectID {
+				return denied
+			}
+			if a.Scope.Plan == "" || a.Scope.Policy != policy {
+				return conflict("Local run plan or policy changed")
+			}
+		}
 		if (stopped || paused) && (a.Operation == "admit" || a.Operation == "turn_start") {
 			return conflict("Dispatch is stopped for this workspace or project")
 		}
@@ -86,6 +94,9 @@ func (s *Server) admission(w http.ResponseWriter, r *http.Request) error {
 			if err != nil {
 				return err
 			}
+			if a.Scope != nil && a.Scope.Plan != planID {
+				return conflict("Selected plan is no longer approved")
+			}
 			if requirePlan && planID == "" {
 				return conflict("Approve project scope before starting this issue")
 			}
@@ -101,6 +112,9 @@ func (s *Server) admission(w http.ResponseWriter, r *http.Request) error {
 			}
 			active = true
 		case "turn_start":
+			if a.Scope != nil && a.Scope.Plan != planID {
+				return conflict("Plan differs from the original admission")
+			}
 			if err = checkPlannedIssue(ctx, tx, ws, a.ProjectID, planID, a.IssueNumber, false); err != nil {
 				return err
 			}

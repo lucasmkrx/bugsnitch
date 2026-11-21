@@ -26,7 +26,7 @@ func notify(a runner.Summary, op string) error {
 		if e != nil {
 			return e
 		}
-		if bound != "" {
+		if bound != "" || a.Scope != nil {
 			return runner.ErrDeviceUnauthorized
 		}
 		return nil
@@ -44,6 +44,9 @@ func notify(a runner.Summary, op string) error {
 			project = pr.ID
 			break
 		}
+	}
+	if a.Scope != nil && (a.Scope.Device != p.Enrollment.DeviceID || a.Scope.Project != project) {
+		return runner.ErrDeviceUnauthorized
 	}
 	if project == "" {
 		return runner.ErrDeviceUnauthorized
@@ -75,7 +78,7 @@ func notify(a runner.Summary, op string) error {
 		if err = json.Unmarshal([]byte(state), &row); err != nil {
 			return err
 		}
-		req := protocol.Admission{Protocol: 1, CriteriaHash: a.CriteriaHash, ProjectID: project, AttemptID: a.ID, IssueNumber: a.IssueNumber, BaseSHA: a.BaseSHA, Operation: op, Sequence: row.Acked + 1}
+		req := protocol.Admission{Scope: a.Scope, Protocol: 1, CriteriaHash: a.CriteriaHash, ProjectID: project, AttemptID: a.ID, IssueNumber: a.IssueNumber, BaseSHA: a.BaseSHA, Operation: op, Sequence: row.Acked + 1}
 		if op == "finish" {
 			req.State = a.State
 		}

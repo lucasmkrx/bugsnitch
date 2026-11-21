@@ -9,8 +9,8 @@ body:
     attributes: { label: Bugsnitch version }
     validations: { required: true }
   - type: input
-    id: vscode
-    attributes: { label: VS Code version }
+    id: runner
+    attributes: { label: Runner or server version }
     validations: { required: true }
   - type: input
     id: os

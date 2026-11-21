@@ -22,16 +22,26 @@ import (
 
 const usage = `Usage: bugsnitch COMMAND [OPTIONS]
 
+  share-diff             Preview or share an approved candidate diff
   doctor                 Check local Git, SQLite and Codex versions
   models                 List models and reasoning settings on this runtime
+  usage                  Read available ChatGPT allowance windows
   proof                  Run a read-only ChatGPT authorization check
-  pair, unpair, status    Manage local device enrollment
+  pair, rotate, unpair, status    Manage local device enrollment
+  next --project ID      Print the next verified issue selection
   register               Map an assigned project to a local checkout
   sync [--watch]         Publish bounded local attempt metadata
+  plan-draft             Draft a local proposal for new tickets
+  manager                Ask the project manager a local read-only question
+  manager-history        Inspect the local project conversation
+  turns                  Show unfinished general model permits
+  turn-reconcile         Reconcile a local general model permit
   project-add            Register the checkout, approved files and validator
   local-start            Start work on one owner-selected GitHub issue
   local-continue         Approve a plan or request a bounded correction
   local-show             Inspect the complete local stage evidence
+  local-integrate-check  Validate a reviewed candidate with a selected target
+  local-integrations     Inspect combined-check receipts
   local-list             Show local attempt summaries
   local-recover          Reconcile a committed candidate after an interrupted write
   local-cleanup          Remove an owned, clean, terminal worktree
@@ -69,7 +79,9 @@ func run(ctx context.Context, args []string) error {
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	switch args[0] {
-	case "pair", "unpair", "register", "sync", "status":
+	case "share-diff":
+		return device.Share(args[1:])
+	case "next", "pair", "rotate", "unpair", "register", "sync", "status":
 		return device.RunCLI(args)
 	case "doctor":
 		fmt.Printf("Platform %s/%s\n", runtime.GOOS, runtime.GOARCH)
@@ -92,7 +104,7 @@ func run(ctx context.Context, args []string) error {
 			return fmt.Errorf("install Git, SQLite CLI and Codex %s on PATH", agent.Version)
 		}
 		return nil
-	case "models", "proof":
+	case "models", "usage":
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
 		c, err := agent.Open(ctx)
@@ -100,6 +112,13 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 		defer c.Close()
+		if args[0] == "usage" {
+			u, e := c.Usage()
+			if e != nil {
+				return e
+			}
+			return printJSON(u)
+		}
 		if args[0] == "models" {
 			m, err := c.Models()
 			if err != nil {
@@ -107,7 +126,9 @@ func run(ctx context.Context, args []string) error {
 			}
 			return printJSON(m)
 		}
-		r, err := c.Turn("Respond only with the requested marker. Use no tools.", "Reply with exactly BUGSNITCH_LOCAL_OK.", "", "", nil)
+		return errors.New("unknown runtime query")
+	case "proof":
+		r, err := runner.Proof(ctx)
 		if err != nil {
 			return err
 		}
@@ -115,6 +136,75 @@ func run(ctx context.Context, args []string) error {
 			return errors.New("completed turn did not return the expected marker")
 		}
 		return printJSON(map[string]string{"runtime": agent.Version, "auth": "chatgpt", "status": "completed", "model": r.Model, "thread": r.Thread, "turn": r.Turn, "response": "BUGSNITCH_LOCAL_OK"})
+	case "plan-draft":
+		workspace := fs.String("workspace", "personal", "local workspace id")
+		brief := fs.String("brief", "", "path to an owner-authored UTF-8 brief")
+		model := fs.String("model", "", "optional discovered model")
+		reason := fs.String("reasoning", "", "optional supported reasoning setting")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		f, err := os.Open(*brief)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		b, err := io.ReadAll(io.LimitReader(f, 16385))
+		if err != nil {
+			return err
+		}
+		p, err := runner.DraftPlan(ctx, *workspace, string(b), *model, *reason)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stderr, "Draft for owner review. Ticket numbers are provisional references within this proposal.")
+		return printJSON(p)
+	case "turns":
+		rows, err := runner.GeneralSessions()
+		if err != nil {
+			return err
+		}
+		return printJSON(rows)
+	case "turn-reconcile":
+		id := fs.String("id", "", "general model permit ID")
+		confirmed := fs.Bool("confirm-runtime-ended", false, "confirm independently verified termination on this computer")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return runner.ReconcileGeneral(*id, *confirmed)
+	case "manager", "manager-history":
+		ws := fs.String("workspace", "personal", "local workspace")
+		repo := fs.String("repository", "", "registered owner/repository")
+		id := fs.String("request-id", "", "stable 32-character hex ID for deduplication")
+		file := fs.String("question", "", "local question file")
+		model := fs.String("model", "", "optional model")
+		effort := fs.String("reasoning", "", "optional reasoning setting")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if args[0] == "manager-history" {
+			hist, err := runner.ManagerHistory(*ws, *repo)
+			if err != nil {
+				return err
+			}
+			return printJSON(hist)
+		}
+		f, err := os.Open(*file)
+		if err != nil {
+			return err
+		}
+		defer f.Close()
+		msg, err := io.ReadAll(io.LimitReader(f, 4097))
+		if err != nil {
+			return err
+		}
+		m, err := runner.Manager(ctx, *ws, *repo, *id, string(msg), *model, *effort)
+		if m.ID != "" {
+			if e := printJSON(m); e != nil {
+				return e
+			}
+		}
+		return err
 	case "project-add":
 		w := fs.String("workspace", "personal", "workspace id")
 		r := fs.String("repository", "", "GitHub owner/repository")
@@ -128,6 +218,26 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 		return runner.AddProject(*w, *r, *p, conf)
+	case "local-integrate-check", "local-integrations":
+		id := fs.String("id", "", "reviewed local attempt")
+		target := fs.String("target", "", "full local branch or origin tracking ref")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if args[0] == "local-integrations" {
+			checks, err := runner.Checks(*id)
+			if err != nil {
+				return err
+			}
+			return printJSON(checks)
+		}
+		receipt, err := runner.CheckCombined(ctx, *id, *target)
+		if receipt.ID != "" {
+			if e := printJSON(receipt); e != nil {
+				return e
+			}
+		}
+		return err
 	case "local-retry":
 		id := fs.String("id", "", "failed or cancelled attempt")
 		i := fs.String("issue", "", "current reviewed issue selection")
@@ -204,6 +314,8 @@ func run(ctx context.Context, args []string) error {
 	return fmt.Errorf("unknown command %q; run bugsnitch help", args[0])
 }
 func main() {
+	runner.CheckWorker = device.CheckWorker
+	runner.BindGeneral, runner.SubmitGeneral = device.BindGeneral, device.SubmitGeneral
 	runner.BeforeStart, runner.AfterFinish = device.Admit, device.Finish
 	runner.BeforeTurn, runner.AfterTurn = device.TurnStart, device.TurnEnd
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)

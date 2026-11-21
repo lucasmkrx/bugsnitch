@@ -6,8 +6,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"regexp"
-	"strings"
+	"strconv"
 	"time"
 
 	"github.com/lucasmkrx/bugsnitch/internal/github"
@@ -65,11 +66,22 @@ func assess(p *Pull, f flags, now time.Time) {
 	block(p.Review != "APPROVED", "GitHub review approval is missing")
 	block(p.Validation == "", "Combined validation evidence is missing")
 	block(p.IndependentReview == "", "Independent review evidence is missing")
-	p.Blockers = append(p.Blockers, "Automatic merge unavailable until an enforceable integration policy is verified")
+	if q := p.Queue; q != nil {
+		block(q.OwnerType == "User", "GitHub merge queues require an eligible organization-owned repository")
+		block(!q.Present, "GitHub returned no merge queue for this target")
+		if rules := q.Rules; rules != nil {
+			block(!rules.QueueRequired, "The active target rulesets do not require a merge queue")
+			block(rules.RequiredChecks == 0, "The active target rulesets have no required status checks")
+			block(rules.AppBoundChecks < rules.RequiredChecks, "Some required checks accept an unspecified producer")
+		} else {
+			block(true, "Active target rules could not be verified")
+		}
+	}
+	p.Blockers = append(p.Blockers, "Automatic merge unavailable. A required merge-group check must bind the approved target and project decision.")
 }
 
 const selectPull = `SELECT o.project_id,o.number,o.issue_number,o.version,o.snapshot,o.policy_version,o.plan_version,o.observed_at,
- coalesce(m.active,false),p.paused,o.policy_version=p.version AND o.plan_version=coalesce((SELECT max(version) FROM plan_versions v WHERE v.workspace_id=p.workspace_id AND v.project_id=p.id AND approved_at IS NOT NULL),0),
+ coalesce(m.active,false),p.paused,o.policy_version=p.policy_version AND o.plan_version=coalesce((SELECT max(version) FROM plan_versions v WHERE v.workspace_id=p.workspace_id AND v.project_id=p.id AND approved_at IS NOT NULL),0),
  coalesce((SELECT reference FROM pull_evidence e WHERE (e.workspace_id,e.project_id,e.number,e.version)=(o.workspace_id,o.project_id,o.number,o.version) AND e.kind='combined_validation'),''),
  coalesce((SELECT reference FROM pull_evidence e WHERE (e.workspace_id,e.project_id,e.number,e.version)=(o.workspace_id,o.project_id,o.number,o.version) AND e.kind='independent_review'),'')
  FROM pull_observations o JOIN projects p ON (o.workspace_id,o.project_id)=(p.workspace_id,p.id)
@@ -149,7 +161,7 @@ func (s Store) save(ctx context.Context, w, p string, n, issue, version, install
 	defer tx.Rollback()
 	// Lock the project before checking the snapshot version so two first observations cannot both win.
 	var policy, plan int64
-	err = tx.QueryRowContext(ctx, `SELECT p.version,coalesce((SELECT max(version) FROM plan_versions WHERE workspace_id=$1 AND project_id=$2 AND approved_at IS NOT NULL),0)
+	err = tx.QueryRowContext(ctx, `SELECT p.policy_version,coalesce((SELECT max(version) FROM plan_versions WHERE workspace_id=$1 AND project_id=$2 AND approved_at IS NOT NULL),0)
 	FROM projects p JOIN github_mappings m ON (p.workspace_id,p.id)=(m.workspace_id,m.project_id)
 	WHERE p.workspace_id=$1 AND p.id=$2 AND p.repository=$3 AND m.installation_id=$4 AND m.repository_id=$5 AND m.active FOR UPDATE OF p FOR SHARE OF m`, w, p, name, installation, repository).Scan(&policy, &plan)
 	if err != nil {
@@ -174,7 +186,8 @@ func (s Store) save(ctx context.Context, w, p string, n, issue, version, install
 		return empty, err
 	}
 	if !unchanged {
-		_, err = tx.ExecContext(ctx, `INSERT INTO events(workspace_id,project_id,kind,subject_id) VALUES($1,$2,'pull.inspected',$3::bigint::text)`, w, p, n)
+		ctx = audit.WithDetails(ctx, audit.Details{Reason: "Repository observation changed", PolicyVersion: policy, SubjectVersion: cur, EvidenceRef: obs.Head})
+		err = audit.Record(ctx, tx, w, p, "pull.inspected", strconv.FormatInt(n, 10))
 		if err != nil {
 			return empty, err
 		}
@@ -207,7 +220,7 @@ func (s Store) Record(ctx context.Context, w, p string, n int64, e Evidence) err
 	}
 	defer tx.Rollback()
 	var fresh bool
-	err = tx.QueryRowContext(ctx, `SELECT o.version=$4 AND m.active AND NOT p.paused AND p.version=o.policy_version AND o.plan_version=coalesce((SELECT max(version) FROM plan_versions WHERE workspace_id=$1 AND project_id=$2 AND approved_at IS NOT NULL),0)
+	err = tx.QueryRowContext(ctx, `SELECT o.version=$4 AND m.active AND NOT p.paused AND p.policy_version=o.policy_version AND o.plan_version=coalesce((SELECT max(version) FROM plan_versions WHERE workspace_id=$1 AND project_id=$2 AND approved_at IS NOT NULL),0)
 	FROM pull_observations o JOIN projects p ON (p.workspace_id,p.id)=(o.workspace_id,o.project_id)
 	JOIN github_mappings m ON (m.workspace_id,m.project_id)=(p.workspace_id,p.id)
 	WHERE o.workspace_id=$1 AND o.project_id=$2 AND o.number=$3 FOR SHARE OF o,m,p`, w, p, n, e.Version).Scan(&fresh)
@@ -217,14 +230,27 @@ func (s Store) Record(ctx context.Context, w, p string, n int64, e Evidence) err
 	if !fresh {
 		return ErrConflict
 	}
-	var ref string
-	err = tx.QueryRowContext(ctx, `INSERT INTO pull_evidence(workspace_id,project_id,number,version,kind,reference) VALUES($1,$2,$3,$4,$5,$6)
-	ON CONFLICT(workspace_id,project_id,number,version,kind) DO UPDATE SET reference=pull_evidence.reference RETURNING reference`, w, p, n, e.Version, e.Kind, e.Reference).Scan(&ref)
+	res, err := tx.ExecContext(ctx, `INSERT INTO pull_evidence(workspace_id,project_id,number,version,kind,reference) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, w, p, n, e.Version, e.Kind, e.Reference)
 	if err != nil {
 		return err
 	}
-	if !strings.EqualFold(ref, e.Reference) {
-		return ErrConflict
+	count, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if count == 1 {
+		ctx = audit.WithDetails(ctx, audit.Details{Reason: "Evidence attested against the current pull request snapshot", SubjectVersion: e.Version, PolicyVersion: current.PolicyVersion, EvidenceRef: e.Reference})
+		if err = audit.Record(ctx, tx, w, p, "pull."+e.Kind+"_attested", strconv.FormatInt(n, 10)); err != nil {
+			return err
+		}
+	} else {
+		var ref string
+		if err = tx.QueryRowContext(ctx, `SELECT reference FROM pull_evidence WHERE workspace_id=$1 AND project_id=$2 AND number=$3 AND version=$4 AND kind=$5`, w, p, n, e.Version, e.Kind).Scan(&ref); err != nil {
+			return err
+		}
+		if ref != e.Reference {
+			return ErrConflict
+		}
 	}
 	return tx.Commit()
 }

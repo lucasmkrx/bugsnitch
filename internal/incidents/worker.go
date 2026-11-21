@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"log/slog"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 
 // Run drains sanitized events independently of GitHub availability. Each external call has a deadline.
 func (s Store) Run(ctx context.Context, app *github.App) {
+	ctx = audit.WithActor(ctx, audit.Service, "incident-worker")
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
@@ -177,6 +179,7 @@ func recordIssue(ctx context.Context, tx *sql.Tx, j intent, i github.Issue) erro
 		if err != nil {
 			return err
 		}
+		ctx = audit.WithDetails(ctx, audit.Details{Reason: "GitHub issue identity, state or requirements changed", EvidenceRef: fmt.Sprintf("github-issue/%d", i.ID)})
 		if err = event(ctx, tx, j.workspace, j.project, "incident.issue_synchronized", j.id); err != nil {
 			return err
 		}
@@ -221,14 +224,19 @@ func (s Store) autoPromote(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO incident_issues(workspace_id,project_id,incident_id,installation_id,repository_id,marker,approved_version,status,policy_version)
- SELECT m.workspace_id,m.project_id,$3,m.installation_id,m.repository_id,$4,$5,'queued',p.policy_version FROM github_mappings m JOIN projects p ON p.id=m.project_id WHERE m.workspace_id=$1 AND m.project_id=$2 AND m.active AND p.auto_triage AND p.allow_promotion AND NOT p.paused ON CONFLICT DO NOTHING`, w, p, id, newID(), v)
+	var policyVersion int64
+	err = tx.QueryRowContext(ctx, `INSERT INTO incident_issues(workspace_id,project_id,incident_id,installation_id,repository_id,marker,approved_version,status,policy_version)
+ SELECT m.workspace_id,m.project_id,$3,m.installation_id,m.repository_id,$4,$5,'queued',p.policy_version FROM github_mappings m JOIN projects p ON p.id=m.project_id WHERE m.workspace_id=$1 AND m.project_id=$2 AND m.active AND p.auto_triage AND p.allow_promotion AND NOT p.paused ON CONFLICT DO NOTHING RETURNING policy_version`, w, p, id, newID(), v).Scan(&policyVersion)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, "UPDATE incidents SET version=version+1 WHERE id=$1", id); err != nil {
 		return err
 	}
+	ctx = audit.WithDetails(ctx, audit.Details{Reason: "Three recent events on the same build and environment qualified under project policy", SubjectVersion: v, PolicyVersion: policyVersion})
 	if err = event(ctx, tx, w, p, "incident.policy_qualified", id); err != nil {
 		return err
 	}

@@ -23,6 +23,7 @@ func TestInspectionReadsOnlyAndBindsChecksToExactHead(t *testing.T) {
 	checked := strings.Repeat("b", 40)
 	base := strings.Repeat("c", 40)
 	count := 3
+	allowRules := true
 	app := App{clientID: "fixture", key: key, base: "https://fixture.invalid"}
 	app.client = &http.Client{Transport: fixtureTransport(func(req *http.Request) (*http.Response, error) {
 		var result any
@@ -47,13 +48,23 @@ func TestInspectionReadsOnlyAndBindsChecksToExactHead(t *testing.T) {
 			status = 201
 		case "/repositories/42":
 			result = map[string]any{"id": 42, "full_name": "example/fixture"}
+		case "/repos/example/fixture/rules/branches/main":
+			if req.Method != "GET" {
+				t.Fatal("rule inspection requires GET")
+			}
+			if !allowRules {
+				status = 403
+				result = map[string]string{"message": "denied"}
+				break
+			}
+			result = []map[string]any{{"type": "merge_queue"}, {"type": "required_status_checks", "parameters": map[string]any{"required_status_checks": []any{map[string]any{"context": "ci", "integration_id": 17}, map[string]any{"context": "loose"}}}}}
 		case "/graphql":
 			var q struct{ Query string }
 			if json.NewDecoder(req.Body).Decode(&q) != nil || strings.Contains(q.Query, "mutation") || !strings.HasPrefix(q.Query, "query ") {
 				t.Fatal("inspection requested a mutation")
 			}
-			result = map[string]any{"data": map[string]any{"repository": map[string]any{"nameWithOwner": "example/fixture", "issue": map[string]any{"number": 3, "id": "canonical", "title": "Ticket", "body": "Must preserve behavior", "state": "OPEN"}, "pullRequest": map[string]any{
-				"number": 4, "title": "Fix", "state": "OPEN", "headRefOid": head, "baseRefName": "main", "baseRef": map[string]any{"target": map[string]string{"oid": base}}, "reviewDecision": "APPROVED", "commits": map[string]any{"nodes": []any{map[string]any{"commit": map[string]any{"oid": checked, "statusCheckRollup": map[string]any{"state": "SUCCESS", "contexts": map[string]int{"totalCount": count}}}}}},
+			result = map[string]any{"data": map[string]any{"repository": map[string]any{"nameWithOwner": "example/fixture", "owner": map[string]string{"__typename": "Organization"}, "issue": map[string]any{"number": 3, "id": "canonical", "title": "Ticket", "body": "Must preserve behavior", "state": "OPEN"}, "pullRequest": map[string]any{
+				"mergeQueue": map[string]string{"id": "opaque"}, "mergeQueueEntry": map[string]any{"state": "QUEUED", "position": 1, "headCommit": map[string]string{"oid": head}}, "number": 4, "title": "Fix", "state": "OPEN", "headRefOid": head, "baseRefName": "main", "baseRef": map[string]any{"target": map[string]string{"oid": base}}, "reviewDecision": "APPROVED", "commits": map[string]any{"nodes": []any{map[string]any{"commit": map[string]any{"oid": checked, "statusCheckRollup": map[string]any{"state": "SUCCESS", "contexts": map[string]int{"totalCount": count}}}}}},
 			}}}}
 		default:
 			t.Fatalf("unexpected request %s", req.URL)
@@ -80,5 +91,13 @@ func TestInspectionReadsOnlyAndBindsChecksToExactHead(t *testing.T) {
 	count = 3
 	if o := run(); o.Checks != "SUCCESS" || o.CheckCount != 3 || o.Head != head || o.Base != base || o.Review != "APPROVED" {
 		t.Fatal(o)
+	}
+	q := run().Queue
+	if q == nil || !q.Present || q.Rules == nil || !q.Rules.QueueRequired || q.Rules.RequiredChecks != 2 || q.Rules.AppBoundChecks != 1 || q.EntryHead != head {
+		t.Fatal("queue evidence incomplete", q)
+	}
+	allowRules = false
+	if q := run().Queue; q == nil || q.Rules != nil {
+		t.Fatal("unreadable rules were reported as verified", q)
 	}
 }

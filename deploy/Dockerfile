@@ -1,8 +1,9 @@
-FROM node:24-alpine AS dashboard
+FROM node:26.13.1-alpine AS dashboard
 WORKDIR /web
 COPY web/package*.json ./
 RUN npm ci
 COPY web/ ./
+COPY assets/brand /assets/brand
 RUN npm run build
 
 FROM golang:1.27.4-alpine AS build

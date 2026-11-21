@@ -87,6 +87,22 @@ func jsonResponse(status int, obj any) *http.Response {
 	b, _ := json.Marshal(obj)
 	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(b)))}
 }
+func fixtureApp(t *testing.T) *github.App {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(t.TempDir(), "fixture.pem")
+	if err = os.WriteFile(file, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	app, err := github.NewApp("fixture", file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return app
+}
 func TestPostgresReplayAndLostIssueResponse(t *testing.T) {
 	s := disposableStore(t)
 	ctx := context.Background()
@@ -118,6 +134,11 @@ func TestPostgresReplayAndLostIssueResponse(t *testing.T) {
 	if inc.Occurrences != 1 || inc.Source != "sentry" {
 		t.Fatal(inc)
 	}
+	var accepted, projected int
+	if err := s.DB.QueryRow(`SELECT count(*) FILTER(WHERE kind='sentry.event_accepted' AND actor_source='provider' AND actor_id=$1 AND evidence_ref IS NOT NULL),
+	count(*) FILTER(WHERE kind='incident.observed' AND actor_source='service' AND actor_id='incident-worker') FROM events WHERE workspace_id='personal' AND project_id='p'`, "sentry/"+installation).Scan(&accepted, &projected); err != nil || accepted != 1 || projected != 1 {
+		t.Fatalf("durable event attribution accepted=%d projected=%d err=%v", accepted, projected, err)
+	}
 	var sanitized string
 	if err := s.DB.QueryRow("SELECT row_to_json(b)::text FROM incident_inbox b").Scan(&sanitized); err != nil || strings.Contains(sanitized, markerSecret) {
 		t.Fatal("inbox contained unapproved data", err)
@@ -135,18 +156,7 @@ func TestPostgresReplayAndLostIssueResponse(t *testing.T) {
 	if err := s.Promote(ctx, "another-workspace", "p", inc.ID, inc.Version); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("cross-workspace promotion %v", err)
 	}
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	file := filepath.Join(t.TempDir(), "fixture.pem")
-	if err = os.WriteFile(file, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), 0600); err != nil {
-		t.Fatal(err)
-	}
-	app, err := github.NewApp("fixture", file)
-	if err != nil {
-		t.Fatal(err)
-	}
+	app := fixtureApp(t)
 	var body string
 	writes := 0
 	outage := true

@@ -7,3 +7,6 @@ bin
 *.pem
 *.key
 .env*
+**/.env*
+secrets
+**/secrets

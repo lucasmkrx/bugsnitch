@@ -5,14 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/lucasmkrx/bugsnitch/internal/protocol"
-	"github.com/lucasmkrx/bugsnitch/internal/runner"
 	"strconv"
 	"strings"
+
+	"github.com/lucasmkrx/bugsnitch/internal/protocol"
+	"github.com/lucasmkrx/bugsnitch/internal/runner"
 )
 
-func Admit(a runner.Summary) error     { return notify(a, "admit") }
-func Finish(a runner.Summary) error    { return notify(a, "finish") }
 func TurnStart(a runner.Summary) error { return notify(a, "turn_start") }
 func TurnEnd(a runner.Summary) error   { return notify(a, "turn_end") }
 
@@ -23,6 +22,13 @@ func notify(a runner.Summary, op string) error {
 		return err
 	}
 	if raw == "" {
+		bound, e := journal("SELECT device FROM authority WHERE attempt=" + sqlValue(a.ID) + ";")
+		if e != nil {
+			return e
+		}
+		if bound != "" {
+			return runner.ErrDeviceUnauthorized
+		}
 		return nil
 	}
 	var p profile
@@ -30,7 +36,7 @@ func notify(a runner.Summary, op string) error {
 		return err
 	}
 	if p.Enrollment.Workspace != a.Workspace {
-		return errors.New("local workspace does not match enrollment")
+		return runner.ErrDeviceUnauthorized
 	}
 	var project string
 	for _, pr := range p.Enrollment.Projects {
@@ -40,7 +46,7 @@ func notify(a runner.Summary, op string) error {
 		}
 	}
 	if project == "" {
-		return errors.New("paired runner is not assigned to this repository")
+		return runner.ErrDeviceUnauthorized
 	}
 	name := sqlValue(a.ID)
 	mapped, err := journal("SELECT path FROM mappings WHERE id=" + sqlValue(project) + ";")
@@ -48,7 +54,7 @@ func notify(a runner.Summary, op string) error {
 		return err
 	}
 	if mapped == "" || ((op == "admit" || op == "turn_start") && a.LocalPath != mapped) {
-		return errors.New("register the assigned local repository before execution")
+		return errors.Join(runner.ErrDeviceUnauthorized, errors.New("register the assigned local repository before execution"))
 	}
 	_, err = journal("INSERT OR IGNORE INTO authority(attempt,device) VALUES(" + name + "," + sqlValue(p.Enrollment.DeviceID) + ");")
 	if err != nil {
@@ -58,6 +64,9 @@ func notify(a runner.Summary, op string) error {
 		state, err := journal("SELECT json_object('acked',acked,'pending',pending) FROM authority WHERE attempt=" + name + " AND device=" + sqlValue(p.Enrollment.DeviceID) + ";")
 		if err != nil {
 			return err
+		}
+		if state == "" {
+			return runner.ErrDeviceUnauthorized
 		}
 		var row struct {
 			Acked   int64
@@ -91,12 +100,20 @@ func notify(a runner.Summary, op string) error {
 		filter := " WHERE attempt=" + name + " AND pending=" + sqlValue(row.Pending)
 		if err != nil {
 			var status statusError
-			if errors.As(err, &status) && (status == 409 || status == 403 || status == 400) {
+			errors.As(err, &status)
+			if req.Operation != "turn_end" && req.Operation != "finish" && (status == 409 || status == 403 || status == 400) {
 				if _, e := journal("UPDATE authority SET pending=''" + filter + ";"); e != nil {
 					return e
 				}
 			}
-			return err
+			switch status {
+			case 401, 403:
+				return errors.Join(runner.ErrDeviceUnauthorized, err)
+			case 400, 409, 426:
+				return errors.Join(runner.ErrAuthorityStale, err)
+			default:
+				return errors.Join(runner.ErrAuthorityUnreachable, err)
+			}
 		}
 		if ack.Sequence != req.Sequence {
 			return errors.New("invalid admission acknowledgment")

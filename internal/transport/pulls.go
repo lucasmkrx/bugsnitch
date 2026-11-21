@@ -52,3 +52,21 @@ func (s *Server) recordPull(w http.ResponseWriter, r *http.Request, ws string) e
 	}
 	return send(w, 201, object{"accepted": true})
 }
+
+func (s *Server) requestDraft(w http.ResponseWriter, r *http.Request, ws string) error {
+	var b integration.DraftRequest
+	if err := decode(w, r, &b); err != nil {
+		return err
+	}
+	d, err := s.pulls().RequestDraft(r.Context(), ws, r.PathValue("project"), r.PathValue("id"), b)
+	if errors.Is(err, integration.ErrConflict) {
+		return conflict("Draft requires a current completed attempt, validated candidate, independent review and project permission")
+	}
+	if errors.Is(err, integration.ErrUnavailable) {
+		return problem{503, "GitHub App unavailable. Configure an installation with pull request write access."}
+	}
+	if err != nil {
+		return pullError(err)
+	}
+	return send(w, 202, d)
+}

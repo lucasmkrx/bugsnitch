@@ -13,6 +13,7 @@ import (
 
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"github.com/lucasmkrx/bugsnitch/internal/incidents"
+	"github.com/lucasmkrx/bugsnitch/internal/integration"
 	"github.com/lucasmkrx/bugsnitch/internal/planning"
 	"github.com/lucasmkrx/bugsnitch/internal/storage"
 	"github.com/lucasmkrx/bugsnitch/internal/transport"
@@ -56,9 +57,11 @@ func run() error {
 		}
 	}
 	store := incidents.Store{DB: db}
-	service := transport.Server{GitHubApp: app, Plugin: transport.PluginAuth{LocalToken: os.Getenv("BUGSNITCH_MCP_TOKEN"), Issuer: os.Getenv("MCP_OAUTH_ISSUER"), Introspection: os.Getenv("MCP_OAUTH_INTROSPECTION"), ClientID: os.Getenv("MCP_OAUTH_CLIENT_ID"), ClientSecret: os.Getenv("MCP_OAUTH_CLIENT_SECRET"), OwnerSubject: os.Getenv("MCP_OAUTH_OWNER_SUBJECT")}, DB: db, OwnerToken: owner, Origin: origin, WebDir: env("BUGSNITCH_WEB_DIR", "web/dist"), Incidents: store, GitHubSecret: os.Getenv("GITHUB_WEBHOOK_SECRET"), SentrySecret: os.Getenv("SENTRY_CLIENT_SECRET")}
+	service := transport.Server{GitHubApp: app, Plugin: transport.PluginAuth{LocalScopes: os.Getenv("BUGSNITCH_MCP_SCOPES"), LocalToken: os.Getenv("BUGSNITCH_MCP_TOKEN"), Issuer: os.Getenv("MCP_OAUTH_ISSUER"), Introspection: os.Getenv("MCP_OAUTH_INTROSPECTION"), ClientID: os.Getenv("MCP_OAUTH_CLIENT_ID"), ClientSecret: os.Getenv("MCP_OAUTH_CLIENT_SECRET"), OwnerSubject: os.Getenv("MCP_OAUTH_OWNER_SUBJECT")}, DB: db, OwnerToken: owner, Origin: origin, WebDir: env("BUGSNITCH_WEB_DIR", "web/dist"), Incidents: store, GitHubSecret: os.Getenv("GITHUB_WEBHOOK_SECRET"), SentrySecret: os.Getenv("SENTRY_CLIENT_SECRET")}
 	server := http.Server{Addr: env("BUGSNITCH_LISTEN", "127.0.0.1:8787"), Handler: service.Handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 90 * time.Second, MaxHeaderBytes: 16 << 10}
+	go storage.Maintain(ctx, db)
 	go store.Run(ctx, app)
+	go (integration.Store{DB: db, App: app}).RunDrafts(ctx)
 	go (planning.Store{DB: db}).Run(ctx, app)
 	go func() {
 		<-ctx.Done()

@@ -1,13 +1,60 @@
-# Rebuild checkpoint
+# Rebuild verification ledger
 
-Started 2026-11-21 from a clean main at 833637906ffc7d7de633b0de64e58c0636cd3bfd in lucasmkrx/bugsnitch. The previous product was a TypeScript VS Code extension. Branch rebuild/bugsnitch-v2 preserves its history, MPL-2.0 license and brand terms.
+Branch `rebuild/bugsnitch-v2` starts from clean main at `833637906ffc7d7de633b0de64e58c0636cd3bfd` in lucasmkrx/bugsnitch. The previous application was a TypeScript VS Code extension. Its history, MPL-2.0 license, trademarks and brand assets are preserved. [Draft implementation PR](https://github.com/lucasmkrx/bugsnitch/pull/24)
 
-Implementation in progress. External prerequisites include a deliberately selected GitHub App test installation, Sentry test installation, and confirmation of eligibility for remotely initiated inference. No production deployment or DNS changes have been requested.
+## Milestones
 
-## Verified in this checkout
+|Milestone|Working implementation and evidence|Open acceptance work|
+|---|---|---|
+|0 · Repository and integration proof|Native development startup, transactional PostgreSQL migrations, two Go executables plus MCP bridge, React build, SQLite journal and versioned device protocol. A real local app-server STDIO turn returned the expected marker on ChatGPT sign-in.|OpenAI must establish the applicable authorization route for hosted-triggered inference. The service exposes its unavailable reason.|
+|1 · One development task|User-selected current GitHub issue revision, clean independent worktree, local worker plan, owner feedback, implementation, actual validator exit, fresh review session, PR description and candidate. The optional real model fixture passed. An installed GitHub App can request a draft PR for an explicitly published matching branch.|Run once with a real selected issue and App in an owner-authorized disposable repository. Draft creation and uncertain-write recovery have protocol/database tests.|
+|2 · Parallel execution and recovery|Two independent enrollments, atomic admission, workspace/device model capacity, dependency and resource checks, machine binding, outstanding receipt replay, local commit reconciliation, bounded revisions/retries, pause and stop acknowledgment, emergency controls, revocation and credential rotation.|The physical test used one Apple Silicon computer. A power-loss test on two physical machines remains open.|
+|3 · Planning and controlled integration|Local planner and manager, evidence-based delivery forecasts, immutable versioned scope, issue publication outbox and dependency remapping, policy presets and overrides, scoped decisions, PR checks/queue observations and disposable combined-candidate validation. Two passing branches failed when combined in the regression exercise.|Exercise a live multi-issue project. Automatic enqueue needs an enforceable merge-group check bound to the authorized destination and deployment effects. Retargeting can preserve a PR head.|
+|4 · Both interfaces and operations|Independent dashboard, on-demand redacted diffs, explicit demo, read-only and scope-gated MCP tools, real STDIO-to-HTTP calls and a shared PostgreSQL record. Chrome exercised phone/desktop navigation and stale decisions. Both macOS architecture binaries build.|Install and exercise the plugin in a configured ChatGPT host with its OAuth development tenant. LaunchAgent login lifecycle, Intel hardware execution and a public TLS host have separate live acceptance checks.|
+|5 · Incident to verified repair|Signed transient ingress, allowlist and redaction, Sentry event deduplication, manual fingerprinting, per-release observations, policy-controlled issue promotion, one current issue/attempt owner, build-specific validation and deployment evidence. An instrumented checkout reproduced its shipping error in Chrome and a real local worker fixed it. Browser validation on the served candidate and subsequent recurrence were exercised. Database tests distinguish old-build errors, contradictory evidence, rollbacks and missing coverage.|Connect an actual Sentry test project and GitHub installation, then retain one continuous external trace from original provider event to deployed-build validation.|
+|6 · Release readiness|Locked builds, native startup, readiness probes, request IDs, hashed credentials, versioned migrations, TTL content cleanup, scope/recovery tests, two enrollment profiles, dump/restore exercise and a draft PR.|Production provisioning, DNS and domain TLS, vendor registrations, deployment testing and the checks above remain owner/environment work.|
 
-- A real local ChatGPT app-server turn completed with Codex 0.171.0-alpha.13 and gpt-6.2-sol. The adapter confirmed ChatGPT sign-in and verified effective read-only thread restrictions before sending model input.
-- A live local worker on a deliberately temporary elapsed-time bug fixture planned, implemented, validated and reviewed candidate 6f885a997348adc8c2104474704b171b5399ffbb. A separate model thread performed the review. The issue input was synthetic. No remote PR was created by that run.
-- Two independent runner processes paired, mapped a temporary checkout and synchronized. The real local MCP STDIO bridge read a dashboard project and reported an incident that appeared through the browser API. A server restart preserved sessions and enrollments. pg_dump/pg_restore into a new database preserved the records and subsequent device revocation denied further sync.
-- PostgreSQL integration tests and race-enabled Go tests passed for competing admission, retained model/issue reservations, resource conflicts, dependencies, stale decision answers, issue outbox reconciliation, webhook data handling, environment verification and PR evidence invalidation. The external provider HTTP responses in these tests are fixtures.
-- Both macOS architectures cross-compiled; execution here used one Apple Silicon host. The dashboard production build passed.
+## Live local evidence
+
+On 2026-11-21 the supported local account path returned `BUGSNITCH_LOCAL_OK` using runtime `0.171.0-alpha.13` and model `gpt-6.2-sol`. The tested application never read model credentials. The adapter validated the account type, requested read-only sandbox, disabled connector capabilities for the thread and required a completed turn with the expected artifact. [Codex evidence](CODEX.md)
+
+The elapsed-time fixture initially failed its regression. Real Codex planning and implementation turns produced candidate `6f885a997348adc8c2104474704b171b5399ffbb` from `cf92d631c397ca2ff8e5529accc700eb33000aaf`. The real validation process returned zero. Independent review ran in a separate model thread. The local attempt was `f50615b9cc7f76aa9651a164eccdec13`; the test finished in 37.18 seconds. Issue input was a protocol fixture. [Runner guide](RUNNER.md)
+
+The native developer command initialized a private PostgreSQL 17.12 database, installed locked dependencies and served the built dashboard. The separate installation smoke exercised two independently launched runner profiles, an actual MCP client and service, a service restart, pg_dump/pg_restore into a fresh database, persisted owner sessions and revocation. Chrome signed in to the real service and viewed its incident and device records at 1440×900 and 360×800. The focused browser suite used explicit fixture responses to exercise lost responses, stale decisions and offline recovery. [Dashboard walkthrough and screenshots](DASHBOARD.md)
+
+The checkout fixture produced two distinct browser SDK events and one promoted GitHub issue on the App protocol fixture. Local worker attempt `29cdf31f817d4c0f372efe558d78ad93` repaired baseline `81567744402e3724bfa310cf8d289b247c0cdbc6`. Candidate `dc60cf5d28912414c207192d7aec5dde7cb4ead3` passed the unchanged threshold regression and received independent model review. Chrome clicked through the served candidate build, yielding a positive environment-specific verdict. A later old-build event preserved the verdict. A synthetic contradictory event on the fixed build returned the incident to triage. The run took 37.93 seconds. The browser, SDK, database, worker, validation command and loopback deployment were real. Sentry backend routing and GitHub App responses used test fixtures. [Reproduce the checkout exercise](../examples/checkout/README.md)
+
+The local race-enabled PostgreSQL suite passed, including forecast invalidation, authenticated event attribution, provider outbox recovery, credential rotation and retention. `bugsnitch next` rechecks scope, capacity and the current issue revision before recommending work. The forecast preserves the owner's target and reports insufficient evidence until it has observed integrated work on two distinct dates.
+
+## Required failure scenarios
+
+|Brief scenario|Evidence in the repository|
+|---|---|
+|1 · Duplicate and reordered delivery|TestDeviceReplayRevocationAndBinding and TestPairedWorkerAndDashboardEvidence check replay, version conflicts and ownership.|
+|2 · Crash after effect before acknowledgment|TestCommitBeforeJournalAcknowledgment recovers an existing Git commit. TestPostgresReplayAndLostIssueResponse, TestOrderedPublicationLostResponse and TestPostgresDraftReconcilesLostResponseAndRejectsStalePolicy reconcile uncertain provider writes.|
+|3 · Missed heartbeat|TestLocalTicketCapacityDoesNotReleaseLostContact and TestWorkerLeaseLossQuiescesValidatorAndRetainsWork preserve reservations and file evidence.|
+|4 · Pending controls|TestControlsRemainPendingUntilQuiescence exercises a running subprocess, repeated receipt and observed exit.|
+|5 · Final capacity slot|TestCompetingLocalClaimsAndPlanGates and TestGeneralAndWorkerTurnsShareOneBudget race real database transactions.|
+|6 · Dependencies|TestPlanOrderAndCycle rejects invalid graphs. TestCompetingLocalClaimsAndPlanGates gates an approved plan on actual owner-recorded prerequisite evidence.|
+|7 · Checkout isolation|TestDirtyAndSwappedWorktreesPreserved and TestCommitBeforeJournalAcknowledgment use real temporary Git repositories.|
+|8 · Changed evidence|TestPostgresInvalidateEvidenceOnSubjectChange and TestPlannedIssueDriftCannotReviveStaleScope invalidate stale observations and approvals.|
+|9 · Combined candidates|TestIndependentlyPassingChangesFailInCombination runs a real validator against the merged worktree. The integration writer has no direct merge fallback.|
+|10 · Conflicting decisions|TestOwnerDecisionAndCrossInterfaceState checks stale subject versions and idempotent/conflicting answers.|
+|11 · Authorization|TestOriginAndCredentials, TestDeviceReplayRevocationAndBinding, TestWorkerLeaseChecksOriginalSubjectAndCurrentAuthority and signed webhook fixtures cover origin, assignment, subject and installation checks.|
+|12 · Provider and connectivity reasons|TestRemoteFailureClasses, TestWorkerReasonCodesAreBounded and TestUsagePreservesUnknownAndDropsAccountIdentity exercise distinct outcomes.|
+|13 · Secret markers|TestOnlyApprovedErrorFieldsSurvive, TestOwnerDecisionAndCrossInterfaceState and TestDiffSharingRequiresCurrentRevisionAndExplicitDigest cover verified ingress, browser state, projected issue text and reviewable artifact sharing.|
+|14 · Outage/retries|TestPostgresReplayAndLostIssueResponse covers durable canonical promotion. TestBoundedNewAttemptAfterExplicitRetry and issue reservations bound later attempts.|
+|15 · Missing evidence|Incident fixtures preserve unknown builds and bounded stack metadata. Repair requires a canonical issue; reproduction evidence still requires an actual test case.|
+|16 · Environment verification|TestPostgresReceiptsAndRecurrence and TestVerificationGates require a matching deployment and positive validation, including telemetry/exposure gates when configured.|
+|17 · Phone, stale and offline|web/tests/dashboard.test.mjs exercises both requested viewports, keyboard focus, reconnect, fresh subject reads, and a lost approval acknowledgment.|
+|18 · Clean setup and persistence|scripts/dev, scripts/smoke.py and web/tests/service-smoke.mjs exercise real processes, database, owner authentication, pairing, restart, restoration and browser navigation.|
+
+## Resume from this checkpoint
+
+1. Select a disposable repository with Issues enabled. Install the GitHub App there, configure its client ID, private key file and webhook secret, and bind the verified installation/repository IDs to the project. Never use the implementation PR as a disposable merge test. [Provider guide](PROVIDERS.md)
+2. Select one canonical test issue, approve the local project files and validation command, run the local issue workflow, publish its dedicated branch explicitly and request a draft. Inspect checks and combined evidence. [Runner guide](RUNNER.md) · [Integration gates](INTEGRATION_QUEUE.md)
+3. Connect the deliberately instrumented checkout fixture to a Sentry test installation. Record a deployment and an actual positive build check before asserting verified behavior. [Fixture instructions](../examples/checkout/README.md)
+4. Register the hosted OAuth connection and seek an applicable vendor decision on remote inference. Keep hosted-triggered model work unavailable in the meantime. [Integration inventory](INTEGRATIONS.md)
+5. Before release, run the latest tests on the target Intel system, verify launchd across login/sleep, verify a TLS deployment and restore against a staging database, and refresh the signed provider/merge-group acceptance evidence.
+
+The one-owner build retains local execution evidence by default. The hosted owner explicitly chooses any diff to share. Project targets and forecasts remain distinct. Production deployment execution, team invitations, billing and marketplace distribution are outside the verified inventory.

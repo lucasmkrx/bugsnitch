@@ -31,15 +31,17 @@ type StageEvidence struct {
 	MinorFindings     int    `json:"minorFindings"`
 }
 type Attempt struct {
-	Evidence     []StageEvidence `json:"evidence,omitempty"`
-	ID           string          `json:"id"`
-	ProjectID    string          `json:"projectId"`
-	IssueNumber  int             `json:"issueNumber"`
-	BaseSHA      string          `json:"baseSha"`
-	CandidateSHA string          `json:"candidateSha"`
-	Phase        string          `json:"phase"`
-	State        string          `json:"state"`
-	Version      int             `json:"version"`
+	ReasonCode     string          `json:"reasonCode,omitempty"`
+	IssueUpdatedAt string          `json:"issueUpdatedAt,omitempty"`
+	Evidence       []StageEvidence `json:"evidence,omitempty"`
+	ID             string          `json:"id"`
+	ProjectID      string          `json:"projectId"`
+	IssueNumber    int             `json:"issueNumber"`
+	BaseSHA        string          `json:"baseSha"`
+	CandidateSHA   string          `json:"candidateSha"`
+	Phase          string          `json:"phase"`
+	State          string          `json:"state"`
+	Version        int             `json:"version"`
 }
 type Sync struct {
 	Acks     []Ack     `json:"acks,omitempty"`
@@ -72,4 +74,14 @@ type Control struct {
 type Ack struct {
 	ID     string `json:"id"`
 	Status string `json:"status"`
+}
+
+type Diff struct {
+	Protocol     int    `json:"protocol"`
+	AttemptID    string `json:"attemptId"`
+	Version      int    `json:"version"`
+	BaseSHA      string `json:"baseSha"`
+	CandidateSHA string `json:"candidateSha"`
+	Text         string `json:"text"`
+	Digest       string `json:"digest"`
 }

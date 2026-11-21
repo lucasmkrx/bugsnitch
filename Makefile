@@ -15,3 +15,7 @@ macos:
 	mkdir -p bin
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -trimpath -o bin/bugsnitch-darwin-arm64 ./cmd/bugsnitch
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -trimpath -o bin/bugsnitch-darwin-amd64 ./cmd/bugsnitch
+
+.PHONY: plugin
+plugin:
+	python3 scripts/package-plugin.py

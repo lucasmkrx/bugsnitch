@@ -105,6 +105,7 @@ func normalizeError(b []byte) (observation, error) {
 				IssueID              json.Number `json:"issue_id"`
 				Datetime             time.Time
 				Environment, Release string
+				Tags                 [][]json.RawMessage
 				Exception            struct {
 					Values []struct {
 						Type       string
@@ -129,6 +130,22 @@ func normalizeError(b []byte) (observation, error) {
 	group, e2 := e.IssueID.Int64()
 	if e1 != nil || e2 != nil || group <= 0 || project <= 0 || !eventID.MatchString(e.EventID) || e.Datetime.IsZero() || e.Datetime.After(time.Now().Add(5*time.Minute)) {
 		return o, ErrInvalid
+	}
+	// Some provider events expose release and environment only as tag pairs.
+	for _, pair := range e.Tags {
+		if len(pair) != 2 {
+			continue
+		}
+		var key, value string
+		if json.Unmarshal(pair[0], &key) != nil || (key != "environment" && key != "release") || json.Unmarshal(pair[1], &value) != nil {
+			continue
+		}
+		if key == "environment" && e.Environment == "" {
+			e.Environment = value
+		}
+		if key == "release" && e.Release == "" {
+			e.Release = value
+		}
 	}
 	o = observation{Installation: strings.ToLower(p.Installation.UUID), ProviderProject: project, Event: strings.ToLower(e.EventID), Group: strconv.FormatInt(group, 10), Seen: e.Datetime,
 		Observed: "Application error reported by Sentry", Environment: label(e.Environment), Release: label(e.Release), Frames: []Frame{}}

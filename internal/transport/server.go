@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"io"
 	"log/slog"
 	"mime"
@@ -112,15 +113,15 @@ func (s *Server) owner(fn ownerEndpoint) http.HandlerFunc {
 		if err != nil {
 			return problem{401, "Sign in to Bugsnitch"}
 		}
-		var ws string
-		err = s.DB.QueryRowContext(r.Context(), "SELECT workspace_id FROM sessions WHERE token_hash=$1 AND expires_at>now()", hash(c.Value)).Scan(&ws)
+		var ws, account string
+		err = s.DB.QueryRowContext(r.Context(), "SELECT w.id,w.account_id FROM sessions s JOIN workspaces w ON w.id=s.workspace_id WHERE s.token_hash=$1 AND s.expires_at>now()", hash(c.Value)).Scan(&ws, &account)
 		if err == sql.ErrNoRows {
 			return problem{401, "Session expired"}
 		}
 		if err != nil {
 			return err
 		}
-		return fn(w, r, ws)
+		return fn(w, r.WithContext(audit.WithActor(r.Context(), audit.Owner, account)), ws)
 	})
 }
 func transaction(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error {
@@ -135,8 +136,7 @@ func transaction(ctx context.Context, db *sql.DB, fn func(*sql.Tx) error) error 
 	return tx.Commit()
 }
 func event(ctx context.Context, tx *sql.Tx, ws, p, kind, id string) error {
-	_, err := tx.ExecContext(ctx, "INSERT INTO events(workspace_id,project_id,kind,subject_id) VALUES($1,NULLIF($2,''),$3,$4)", ws, p, kind, id)
-	return err
+	return audit.Record(ctx, tx, ws, p, kind, id)
 }
 func (s *Server) allow(r *http.Request) bool {
 	ip, _, _ := net.SplitHostPort(r.RemoteAddr)
@@ -169,6 +169,9 @@ func (s *Server) allow(r *http.Request) bool {
 }
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/device/next", wrap(s.nextIssue))
+	mux.HandleFunc("POST /api/v1/device/worker-lease", wrap(s.workerLease))
+	mux.HandleFunc("POST /api/v1/device/model-permit", wrap(s.generalTurn))
 	s.mountMCP(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) { _ = send(w, 200, object{"status": "alive"}) })
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
@@ -183,6 +186,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/login", wrap(s.login))
 	mux.HandleFunc("POST /api/v1/logout", s.owner(s.logout))
 	mux.HandleFunc("GET /api/v1/state", s.owner(s.state))
+	mux.HandleFunc("POST /api/v1/projects/{project}/attempts/{id}/draft-pr", s.owner(s.requestDraft))
 	mux.HandleFunc("POST /api/v1/projects/{project}/pulls/{number}/refresh", s.owner(s.refreshPull))
 	mux.HandleFunc("POST /api/v1/projects/{project}/pulls/{number}/evidence", s.owner(s.recordPull))
 	mux.HandleFunc("POST /api/v1/publications", s.owner(s.publication))
@@ -192,6 +196,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/plans/{id}/evidence", s.owner(s.attestPrerequisite))
 	mux.HandleFunc("POST /api/v1/projects", s.owner(s.createProject))
 	mux.HandleFunc("POST /api/v1/projects/{id}/policy", s.owner(s.policy))
+	mux.HandleFunc("POST /api/v1/projects/{id}/retention", s.owner(s.retention))
+	mux.HandleFunc("POST /api/v1/device/rotate", wrap(s.rotate))
+	mux.HandleFunc("POST /api/v1/workspace/dispatch", s.owner(s.workspaceControl))
+	mux.HandleFunc("GET /api/v1/attempts/{id}/diff", s.owner(s.readDiff))
+	mux.HandleFunc("POST /api/v1/device/share-diff", wrap(s.shareDiff))
 	mux.HandleFunc("POST /api/v1/limits", s.owner(s.limits))
 	mux.HandleFunc("POST /api/v1/projects/{id}/dispatch", s.owner(s.dispatch))
 	mux.HandleFunc("POST /api/v1/decisions/{id}/answer", s.owner(s.answer))

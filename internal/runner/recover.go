@@ -152,3 +152,21 @@ func Cleanup(id string) error {
 	_, err = git(a.Project.Path, "worktree", "remove", "--", a.Worktree)
 	return err
 }
+
+// ReplayEnded permits the sync process to replay an acknowledgment only while
+// the original CLI is absent and the same quiesced revision remains current.
+func ReplayEnded(id string, version int, replay func(string) error) error {
+	unlock, err := attemptLock(id)
+	if err != nil {
+		return nil
+	}
+	defer unlock()
+	a, err := Get(id)
+	if err != nil {
+		return err
+	}
+	if a.Version != version || a.State == "running" {
+		return nil
+	}
+	return replay(id)
+}

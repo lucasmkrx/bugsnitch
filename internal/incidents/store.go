@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -78,8 +80,7 @@ func newID() string {
 	return hex.EncodeToString(b[:])
 }
 func event(ctx context.Context, tx *sql.Tx, workspace, project, kind, id string) error {
-	_, err := tx.ExecContext(ctx, `INSERT INTO events(workspace_id,project_id,kind,subject_id) VALUES($1,$2,$3,$4)`, workspace, project, kind, id)
-	return err
+	return audit.Record(ctx, tx, workspace, project, kind, id)
 }
 func (s Store) Report(ctx context.Context, workspace, project, observed, expected, steps, key string) (string, error) {
 	if !requestKey.MatchString(key) || !validText(observed) || !validText(expected) || !validText(steps) {
@@ -146,7 +147,11 @@ func apply(ctx context.Context, tx *sql.Tx, inbox int64) (string, error) {
 	SELECT $2,workspace_id,project_id,source,group_key,observed,expected,steps,seen_at,seen_at,1 FROM incident_inbox WHERE id=$1 AND NOT processed
 	ON CONFLICT(workspace_id,project_id,source,group_key) DO UPDATE SET
 	first_seen=least(incidents.first_seen,excluded.first_seen),last_seen=greatest(incidents.last_seen,excluded.last_seen),
-	occurrences=incidents.occurrences+1,version=incidents.version+1
+	observed=CASE WHEN incidents.redacted_at IS NOT NULL AND excluded.last_seen>=incidents.last_seen THEN excluded.observed ELSE incidents.observed END,
+ expected=CASE WHEN incidents.redacted_at IS NOT NULL AND excluded.last_seen>=incidents.last_seen THEN excluded.expected ELSE incidents.expected END,
+ steps=CASE WHEN incidents.redacted_at IS NOT NULL AND excluded.last_seen>=incidents.last_seen THEN excluded.steps ELSE incidents.steps END,
+ redacted_at=CASE WHEN excluded.last_seen>=incidents.last_seen THEN NULL ELSE incidents.redacted_at END,
+ occurrences=incidents.occurrences+1,version=incidents.version+1
 	RETURNING id,workspace_id,project_id`, inbox, newID()).Scan(&id, &workspace, &project)
 	if err != nil {
 		return "", err
@@ -154,10 +159,12 @@ func apply(ctx context.Context, tx *sql.Tx, inbox int64) (string, error) {
 	if _, err = tx.ExecContext(ctx, `UPDATE incident_inbox SET processed=true WHERE id=$1`, inbox); err != nil {
 		return "", err
 	}
+	ctx = audit.WithDetails(ctx, audit.Details{Reason: "Accepted observation assigned to its incident", EvidenceRef: strconv.FormatInt(inbox, 10)})
 	return id, event(ctx, tx, workspace, project, "incident.observed", id)
 }
 
 func (s Store) processOne(ctx context.Context) error {
+	ctx = audit.WithActor(ctx, audit.Service, "incident-worker")
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -196,7 +203,7 @@ func (s Store) SentryWebhook(secret string) http.Handler {
 		}
 		defer tx.Rollback()
 		var workspace, project string
-		err = tx.QueryRowContext(ctx, `SELECT workspace_id,project_id FROM sentry_mappings WHERE installation_uuid=$1 AND provider_project=$2 AND active FOR UPDATE`, o.Installation, o.ProviderProject).Scan(&workspace, &project)
+		err = tx.QueryRowContext(ctx, `SELECT m.workspace_id,m.project_id FROM sentry_mappings m JOIN projects p ON (p.workspace_id,p.id)=(m.workspace_id,m.project_id) WHERE m.installation_uuid=$1 AND m.provider_project=$2 AND m.active FOR UPDATE OF p FOR SHARE OF m`, o.Installation, o.ProviderProject).Scan(&workspace, &project)
 		if errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "unmapped installation or project", 403)
 			return
@@ -205,7 +212,7 @@ func (s Store) SentryWebhook(secret string) http.Handler {
 			http.Error(w, "intake unavailable", 503)
 			return
 		}
-		// Serialize rate checks per mapping. Retries of accepted events never consume allowance.
+		// Serialize rate checks per project. Retries of accepted events never consume allowance.
 		var limited bool
 		err = tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT FROM incident_inbox WHERE workspace_id=$1 AND project_id=$2 AND source='sentry' AND event_key=$3) AND
 		(SELECT count(*) FROM (SELECT 1 FROM incident_inbox WHERE workspace_id=$1 AND project_id=$2 AND source='sentry' AND accepted_at>now()-interval '1 minute' LIMIT 600) recent)>=600`, workspace, project, o.Event).Scan(&limited)
@@ -218,7 +225,13 @@ func (s Store) SentryWebhook(secret string) http.Handler {
 			http.Error(w, "project intake limit", 429)
 			return
 		}
-		if _, _, err = insertObservation(ctx, tx, workspace, project, "sentry", o); err != nil || tx.Commit() != nil {
+		inbox, fresh, err := insertObservation(ctx, tx, workspace, project, "sentry", o)
+		if err == nil && fresh {
+			ctx = audit.WithActor(ctx, audit.Provider, "sentry/"+o.Installation)
+			ctx = audit.WithDetails(ctx, audit.Details{Reason: "Signed Sentry event matched the authorized project", EvidenceRef: o.Event})
+			err = event(ctx, tx, workspace, project, "sentry.event_accepted", strconv.FormatInt(inbox, 10))
+		}
+		if err != nil || tx.Commit() != nil {
 			http.Error(w, "intake unavailable", 503)
 			return
 		}
@@ -247,18 +260,16 @@ func (s Store) Promote(ctx context.Context, workspace, project, id string, versi
 	if cur != version || err == nil {
 		return ErrConflict
 	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO incident_issues(workspace_id,project_id,incident_id,installation_id,repository_id,marker,approved_version,status,policy_version)
-	SELECT m.workspace_id,m.project_id,$3,installation_id,repository_id,$4,$5,'queued',p.policy_version FROM github_mappings m JOIN projects p ON p.id=m.project_id WHERE m.workspace_id=$1 AND m.project_id=$2 AND active AND p.allow_promotion AND NOT p.paused`, workspace, project, id, newID(), version)
-	if err != nil {
-		return err
-	}
-	count, err := result.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if count != 1 {
+	var policyVersion int64
+	err = tx.QueryRowContext(ctx, `INSERT INTO incident_issues(workspace_id,project_id,incident_id,installation_id,repository_id,marker,approved_version,status,policy_version)
+	SELECT m.workspace_id,m.project_id,$3,installation_id,repository_id,$4,$5,'queued',p.policy_version FROM github_mappings m JOIN projects p ON p.id=m.project_id WHERE m.workspace_id=$1 AND m.project_id=$2 AND active AND p.allow_promotion AND NOT p.paused RETURNING policy_version`, workspace, project, id, newID(), version).Scan(&policyVersion)
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrUnmapped
 	}
+	if err != nil {
+		return err
+	}
+	ctx = audit.WithDetails(ctx, audit.Details{Reason: "Mapped incident approved for issue creation", SubjectVersion: version, PolicyVersion: policyVersion})
 	if _, err = tx.ExecContext(ctx, `UPDATE incidents SET version=version+1 WHERE id=$1`, id); err != nil {
 		return err
 	}

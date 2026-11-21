@@ -4,19 +4,21 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-	"net"
 	"net/http"
-	"net/url"
 	"os"
-	"strings"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-type bearer struct{ token string }
+type bearer struct{ origin, token string }
 
 func (b bearer) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Scheme+"://"+r.URL.Host != b.origin || r.URL.User != nil {
+		return nil, errors.New("refusing to send a credential outside the configured service origin")
+	}
 	r = r.Clone(r.Context())
 	r.Header.Set("Authorization", "Bearer "+b.token)
 	return http.DefaultTransport.RoundTrip(r)
@@ -28,22 +30,32 @@ func main() {
 	}
 }
 func run() error {
-	endpoint := os.Getenv("BUGSNITCH_ORIGIN")
-	if endpoint == "" {
-		endpoint = "http://localhost:8787"
+	if len(os.Args) > 1 {
+		if len(os.Args) != 4 || os.Args[1] != "configure" || os.Args[2] != "--origin" {
+			return errors.New("usage: bugsnitch-mcp [configure --origin SERVICE_ORIGIN < token-file]")
+		}
+		input, err := os.Stdin.Stat()
+		if err != nil || input.Mode()&os.ModeCharDevice != 0 {
+			return errors.New("redirect the scoped plugin token to stdin from a file or pipe")
+		}
+		dir, err := profileDir()
+		if err != nil {
+			return err
+		}
+		if err = saveProfile(dir, os.Args[3], os.Stdin); err != nil {
+			return err
+		}
+		fmt.Fprintln(os.Stderr, "Saved the private Bugsnitch MCP connection.")
+		return nil
 	}
-	u, err := url.Parse(endpoint)
-	if err != nil || u.Host == "" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" || !(u.Scheme == "https" || u.Scheme == "http" && (u.Hostname() == "localhost" || net.ParseIP(u.Hostname()).IsLoopback())) {
-		return fmt.Errorf("invalid service origin")
-	}
-	tok := strings.TrimSpace(os.Getenv("BUGSNITCH_MCP_TOKEN"))
-	if tok == "" {
-		return fmt.Errorf("set a scoped BUGSNITCH_MCP_TOKEN")
+	connection, err := loadConnection(os.Getenv("BUGSNITCH_ORIGIN"), os.Getenv("BUGSNITCH_MCP_TOKEN"))
+	if err != nil {
+		return err
 	}
 	cfg := &mcp.Implementation{Name: "bugsnitch-desktop", Version: "0.1.0"}
-	web := &http.Client{Transport: bearer{tok}, Timeout: 25 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	web := &http.Client{Transport: bearer{origin: connection.Origin, token: connection.Token}, Timeout: 25 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	ctx := context.Background()
-	conn, err := mcp.NewClient(cfg, nil).Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint + "/mcp", HTTPClient: web}, nil)
+	conn, err := mcp.NewClient(cfg, nil).Connect(ctx, &mcp.StreamableClientTransport{Endpoint: connection.Origin + "/mcp", HTTPClient: web}, nil)
 	if err != nil {
 		return fmt.Errorf("could not connect to the authorized Bugsnitch service")
 	}

@@ -3,7 +3,9 @@ package incidents
 import (
 	"database/sql"
 	"encoding/json"
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"net/http"
+	"strconv"
 )
 
 func (s Store) GitHubWebhook(secret string) http.Handler {
@@ -17,6 +19,7 @@ func (s Store) GitHubWebhook(secret string) http.Handler {
 			Action                   string
 			Installation, Repository struct{ ID int64 }
 			Issue                    struct{ ID, Number int64 }
+			Changes                  map[string]json.RawMessage
 			Removed                  []struct{ ID int64 } `json:"repositories_removed"`
 		}
 		if !uuid.MatchString(delivery) || json.Unmarshal(body, &p) != nil || p.Installation.ID <= 0 {
@@ -31,7 +34,8 @@ func (s Store) GitHubWebhook(secret string) http.Handler {
 			http.Error(w, "unsupported event", 422)
 			return
 		}
-		ctx := r.Context()
+		ctx := audit.WithActor(r.Context(), audit.Provider, "github/"+strconv.FormatInt(p.Installation.ID, 10))
+		ctx = audit.WithDetails(ctx, audit.Details{Reason: "Signed GitHub delivery matched the installation mapping", EvidenceRef: delivery})
 		tx, err := s.DB.BeginTx(ctx, nil)
 		if err != nil {
 			http.Error(w, "intake unavailable", 503)
@@ -86,10 +90,28 @@ func (s Store) GitHubWebhook(secret string) http.Handler {
 				continue
 			}
 			if issueEvent {
+				if err = event(ctx, tx, m.w, m.p, "github.issue_change_received", strconv.FormatInt(p.Issue.ID, 10)); err != nil {
+					break
+				}
 				// Headers and issue snapshots are hints. The worker reads the current issue with the installed app.
 				_, err = tx.ExecContext(ctx, `UPDATE incident_issues x SET next_run=now() FROM github_mappings m WHERE (x.workspace_id,x.project_id)=(m.workspace_id,m.project_id) AND x.workspace_id=$1 AND x.project_id=$2 AND x.issue_id=$3 AND x.status='linked' AND m.active`, m.w, m.p, p.Issue.ID)
+				if err == nil {
+					// Lifecycle edges matter even when a close and reopen arrive before the next read.
+					// Signed bodies supply a second deduplication key independent of mutable delivery headers.
+					substantive := p.Action == "closed" || p.Action == "reopened" || p.Action == "deleted" || p.Action == "transferred" || p.Action == "edited" && (p.Changes["title"] != nil || p.Changes["body"] != nil)
+					_, err = tx.ExecContext(ctx, `WITH fresh AS (
+					 INSERT INTO planned_issue_signals(workspace_id,project_id,github_id,signal_hash)
+					 SELECT workspace_id,project_id,github_id,$4 FROM planned_issue_state WHERE workspace_id=$1 AND project_id=$2 AND github_id=$3
+					 ON CONFLICT DO NOTHING RETURNING github_id)
+					 UPDATE planned_issue_state SET availability='pending',reason='Awaiting authoritative GitHub read',next_check=now(),
+					 generation=generation+CASE WHEN $5 THEN 1 ELSE 0 END WHERE workspace_id=$1 AND project_id=$2 AND github_id IN(SELECT github_id FROM fresh)`, m.w, m.p, p.Issue.ID, digest(string(body)), substantive)
+				}
 			} else {
 				_, err = tx.ExecContext(ctx, `UPDATE github_mappings SET active=false WHERE workspace_id=$1 AND project_id=$2`, m.w, m.p)
+				if err == nil {
+					_, err = tx.ExecContext(ctx, `UPDATE planned_issue_state SET availability='unknown',reason='Repository mapping disabled',generation=generation+1,next_check=now()
+				 WHERE workspace_id=$1 AND project_id=$2 AND reason<>'Repository mapping disabled'`, m.w, m.p)
+				}
 				if err == nil {
 					err = event(ctx, tx, m.w, m.p, "github.mapping_disabled", m.p)
 				}

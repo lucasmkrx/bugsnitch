@@ -31,6 +31,7 @@ type statusError int
 func (s statusError) Error() string { return fmt.Sprintf("device service returned HTTP %d", s) }
 
 type profile struct {
+	NextCredential           string `json:",omitempty"`
 	Server, Credential, Code string
 	Enrollment               protocol.Enrollment
 }
@@ -54,6 +55,11 @@ func sqlValue(v string) string { return "CAST(X'" + hex.EncodeToString([]byte(v)
 const authoritySchema = "CREATE TABLE IF NOT EXISTS authority(attempt TEXT PRIMARY KEY,device TEXT NOT NULL,acked INTEGER NOT NULL DEFAULT 0,pending TEXT NOT NULL DEFAULT '');"
 
 func journal(query string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	return journalContext(ctx, query)
+}
+func journalContext(ctx context.Context, query string) (string, error) {
 	dir, err := folder()
 	if err != nil {
 		return "", err
@@ -64,7 +70,7 @@ func journal(query string) (string, error) {
 		return "", err
 	}
 	f.Close()
-	cmd := exec.Command("sqlite3", "-batch", "-bail", "-init", "/dev/null", file)
+	cmd := exec.CommandContext(ctx, "sqlite3", "-batch", "-bail", "-init", "/dev/null", file)
 	cmd.Stdin = strings.NewReader(".timeout 5000\nCREATE TABLE IF NOT EXISTS profile(id INTEGER PRIMARY KEY CHECK(id=1),data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS mappings(id TEXT PRIMARY KEY,path TEXT NOT NULL);\n" + authoritySchema + query)
 	b, err := cmd.Output()
 	if err != nil {
@@ -218,6 +224,7 @@ func syncOnce(ctx context.Context) error {
 	if err = send(ctx, p, "sync", protocol.Sync{Protocol: 1}, &assigned); err != nil {
 		return err
 	}
+	completionErr := flushEndings(p.Enrollment.DeviceID)
 	var reports []protocol.Attempt
 	available, err := runner.Summaries()
 	if err != nil {
@@ -244,7 +251,7 @@ func syncOnce(ctx context.Context) error {
 				for _, e := range a.Evidence {
 					evidence = append(evidence, protocol.StageEvidence{Phase: e.Phase, CandidateSHA: e.CandidateSHA, ChangedFiles: e.ChangedFiles, ExitCode: e.ExitCode, ImportantFindings: e.ImportantFindings, MinorFindings: e.MinorFindings})
 				}
-				reports = append(reports, protocol.Attempt{Evidence: evidence, ID: a.ID, ProjectID: pr.ID, IssueNumber: a.IssueNumber, BaseSHA: a.BaseSHA, CandidateSHA: a.CandidateSHA, Phase: a.Phase, State: a.State, Version: a.Version})
+				reports = append(reports, protocol.Attempt{ReasonCode: a.ReasonCode, IssueUpdatedAt: a.IssueUpdatedAt, Evidence: evidence, ID: a.ID, ProjectID: pr.ID, IssueNumber: a.IssueNumber, BaseSHA: a.BaseSHA, CandidateSHA: a.CandidateSHA, Phase: a.Phase, State: a.State, Version: a.Version})
 			}
 		}
 	}
@@ -274,10 +281,14 @@ func syncOnce(ctx context.Context) error {
 		}
 		reports = reports[n:]
 	}
-	return nil
+	return completionErr
 }
 func RunCLI(args []string) error {
 	switch args[0] {
+	case "next":
+		return next(args[1:], os.Stdout)
+	case "rotate":
+		return rotate()
 	case "pair":
 		return pair(args[1:])
 	case "register":

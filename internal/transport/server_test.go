@@ -133,6 +133,7 @@ func TestOwnerDecisionAndCrossInterfaceState(t *testing.T) {
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("MCP-Protocol-Version", "2025-11-25")
 		r.Header.Set("Authorization", "Bearer "+s.Plugin.LocalToken)
+		r.Header.Set("X-Bugsnitch-Actor", "forged-owner")
 		w := httptest.NewRecorder()
 		c.handler.ServeHTTP(w, r)
 		b, _ := io.ReadAll(w.Body)
@@ -147,6 +148,15 @@ func TestOwnerDecisionAndCrossInterfaceState(t *testing.T) {
 	request("report_incident", object{"projectId": p, "observed": "Blank preview\nAuthorization: Bearer SYNTHETICMARKER", "expected": "A preview", "steps": "Open the preview", "requestId": "reported_001"})
 	_, state := c.req(t, "GET", "/api/v1/state", nil, "")
 	raw, _ := json.Marshal(state)
+	var ownerActions, pluginReports int
+	if err := s.DB.QueryRow(`SELECT count(*) FILTER(WHERE kind='decision.answered' AND actor_source='owner' AND actor_id='owner' AND subject_version=2 AND reason='Resume dispatch' AND evidence_ref=subject_id),
+	count(*) FILTER(WHERE kind='incident.observed' AND actor_source='plugin' AND actor_id='local-grant' AND evidence_ref IS NOT NULL)
+	FROM events WHERE project_id=$1 AND workspace_id='personal'`, p).Scan(&ownerActions, &pluginReports); err != nil || ownerActions != 1 || pluginReports != 1 {
+		t.Fatalf("attribution owner=%d plugin=%d err=%v", ownerActions, pluginReports, err)
+	}
+	if !bytes.Contains(raw, []byte(`"actorSource":"plugin"`)) || bytes.Contains(raw, []byte("forged-owner")) || bytes.Contains(raw, []byte(s.Plugin.LocalToken)) {
+		t.Fatal("unexpected audit projection")
+	}
 	if !bytes.Contains(raw, []byte("Blank preview")) || bytes.Contains(raw, []byte("SYNTHETICMARKER")) || bytes.Contains(raw, []byte("Invisible")) {
 		t.Fatal("state did not preserve authorization and redaction")
 	}
@@ -194,6 +204,10 @@ func TestDeviceReplayRevocationAndBinding(t *testing.T) {
 	var n int
 	if err := s.DB.QueryRow("SELECT count(*) FROM events WHERE kind='attempt.reported'").Scan(&n); err != nil || n != 1 {
 		t.Fatalf("events %d %v", n, err)
+	}
+	var attributed bool
+	if err := s.DB.QueryRow("SELECT actor_source='device' AND actor_id=$1 AND subject_version=3 AND evidence_ref=$2 AND reason IS NOT NULL FROM events WHERE kind='attempt.reported' AND subject_id=$3", device, a.BaseSHA, a.ID).Scan(&attributed); err != nil || !attributed {
+		t.Fatal("report lacks the verified actor or original evidence revision", err)
 	}
 	if _, err := s.DB.Exec("UPDATE devices SET last_contact=now()-interval '1 hour' WHERE id=$1", device); err != nil {
 		t.Fatal(err)
@@ -307,5 +321,93 @@ func TestPolicyChangeFencesScope(t *testing.T) {
 	got, _ := c.req(t, "POST", "/api/v1/device/admission", protocol.Admission{Protocol: 1, ProjectID: p, AttemptID: "attempt_gated", IssueNumber: 1, BaseSHA: strings.Repeat("a", 40), Operation: "admit", Sequence: 1}, token)
 	if got != 409 {
 		t.Fatal("assisted project admitted unplanned work", got)
+	}
+}
+
+func TestEmergencyRotationAndContentExpiry(t *testing.T) {
+	s := fixture(t)
+	c := login(t, s)
+	p := c.post(t, "projects", object{"name": "App", "repository": "example/app"}, 201)["id"].(string)
+	code := c.post(t, "pairings", object{"name": "Mac", "projectIds": []string{p}}, 201)["code"].(string)
+	old, next := random(32), random(32)
+	id := c.post(t, "device/pair", protocol.Pair{Protocol: 1, Code: code, Credential: old, Platform: "darwin/arm64"}, 200)["deviceId"].(string)
+	for range 2 {
+		status, body := c.req(t, "POST", "/api/v1/device/rotate", object{"protocol": 1, "credential": next}, old)
+		if status != 200 || body["deviceId"] != id {
+			t.Fatal("rotation recovery", status)
+		}
+	}
+	if status, _ := c.req(t, "POST", "/api/v1/device/sync", protocol.Sync{Protocol: 1}, old); status != 403 {
+		t.Fatal("old credential retained authority")
+	}
+	a := protocol.Attempt{ID: "attempt_example", ProjectID: p, IssueNumber: 1, BaseSHA: strings.Repeat("a", 40), Version: 1, Phase: "implement", State: "running"}
+	status, _ := c.req(t, "POST", "/api/v1/device/admission", protocol.Admission{Protocol: 1, ProjectID: p, AttemptID: a.ID, BaseSHA: a.BaseSHA, IssueNumber: 1, Sequence: 1, Operation: "admit"}, next)
+	if status != 200 {
+		t.Fatal(status)
+	}
+	status, _ = c.req(t, "POST", "/api/v1/device/sync", protocol.Sync{Protocol: 1, Attempts: []protocol.Attempt{a}}, next)
+	if status != 200 {
+		t.Fatal(status)
+	}
+	ctl := object{"version": 1, "requestId": "stop_all_requests", "stopped": true}
+	c.post(t, "workspace/dispatch", ctl, 200)
+	c.post(t, "workspace/dispatch", ctl, 200)
+	status, body := c.req(t, "POST", "/api/v1/device/sync", protocol.Sync{Protocol: 1}, next)
+	if status != 200 || len(body["commands"].([]any)) != 1 {
+		t.Fatal("missing stop request", status, body)
+	}
+	c.post(t, "workspace/dispatch", object{"version": 2, "requestId": "unlock_dispatch", "stopped": false}, 200)
+	c.post(t, "messages", object{"projectId": p, "body": "expired observation", "requestId": "chat_report_001"}, 202)
+	_, err := s.DB.Exec("UPDATE manager_messages SET created_at=now()-interval '40 days'")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = storage.Retain(context.Background(), s.DB); err != nil {
+		t.Fatal(err)
+	}
+	var retained, paused bool
+	if err = s.DB.QueryRow("SELECT redacted_at IS NOT NULL FROM manager_messages").Scan(&retained); err != nil || !retained {
+		t.Fatal(err)
+	}
+	if err = s.DB.QueryRow("SELECT paused FROM projects WHERE id=$1", p).Scan(&paused); err != nil || !paused {
+		t.Fatal("unlock revived project", err)
+	}
+}
+
+func TestDiffSharingRequiresCurrentRevisionAndExplicitDigest(t *testing.T) {
+	s := fixture(t)
+	c := login(t, s)
+	p := c.post(t, "projects", object{"name": "Example", "repository": "example/diff"}, 201)["id"].(string)
+	code := c.post(t, "pairings", object{"name": "Mac", "projectIds": []string{p}}, 201)["code"].(string)
+	token := random(32)
+	c.post(t, "device/pair", protocol.Pair{Protocol: 1, Code: code, Credential: token, Platform: "darwin/arm64"}, 200)
+	a := protocol.Attempt{ID: "candidate_01", ProjectID: p, IssueNumber: 1, BaseSHA: strings.Repeat("a", 40), CandidateSHA: strings.Repeat("b", 40), Version: 1, Phase: "wrap_up", State: "completed"}
+	post := func(path string, b any, want int) {
+		t.Helper()
+		status, o := c.req(t, "POST", "/api/v1/device/"+path, b, token)
+		if status != want {
+			t.Fatal(path, status, o)
+		}
+	}
+	post("admission", protocol.Admission{Protocol: 1, ProjectID: p, AttemptID: a.ID, BaseSHA: a.BaseSHA, IssueNumber: 1, Sequence: 1, Operation: "admit"}, 200)
+	post("sync", protocol.Sync{Protocol: 1, Attempts: []protocol.Attempt{a}}, 200)
+	b := protocol.Diff{Protocol: 1, AttemptID: a.ID, Version: 1, BaseSHA: a.BaseSHA, CandidateSHA: a.CandidateSHA, Text: "+Authorization: Bearer SYNTHETIC_MARKER"}
+	b.Digest = hash(b.Text)
+	post("share-diff", b, 400)
+	b.Text = "+owner-approved line"
+	b.Digest = hash(b.Text)
+	b.Version = 2
+	post("share-diff", b, 403)
+	b.Version = 1
+	post("share-diff", b, 200)
+	post("share-diff", b, 200)
+	_, state := c.req(t, "GET", "/api/v1/state", nil, "")
+	raw, _ := json.Marshal(state)
+	if bytes.Contains(raw, []byte(b.Text)) {
+		t.Fatal("diff content leaked into project inventory")
+	}
+	status, diff := c.req(t, "GET", "/api/v1/attempts/"+a.ID+"/diff", nil, "")
+	if status != 200 || diff["text"] != b.Text {
+		t.Fatal(status)
 	}
 }

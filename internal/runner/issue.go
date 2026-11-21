@@ -3,15 +3,17 @@ package runner
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"io"
 	"net/http"
 	"os"
 	"strings"
 	"time"
+
+	"github.com/lucasmkrx/bugsnitch/internal/github"
 )
 
 func (i Issue) verify() error {
@@ -20,6 +22,12 @@ func (i Issue) verify() error {
 	}
 	if _, err := time.Parse(time.RFC3339, i.UpdatedAt); err != nil {
 		return errors.New("invalid issue revision timestamp")
+	}
+	if i.GitHubID != 0 || i.RequirementsDigest != "" {
+		digest, err := hex.DecodeString(i.RequirementsDigest)
+		if err != nil || len(digest) != 32 || i.GitHubID <= 0 {
+			return errors.New("invalid canonical issue identity or requirements digest")
+		}
 	}
 	if i.URL != fmt.Sprintf("https://github.com/%s/issues/%d", i.Repository, i.Number) {
 		return errors.New("issue link does not match selected repository and number")
@@ -54,16 +62,13 @@ func readGitHubIssue(ctx context.Context, i Issue) error {
 		return fmt.Errorf("GitHub issue verification returned HTTP %d", resp.StatusCode)
 	}
 	var record struct {
-		Number       int
-		Title, State string
-		UpdatedAt    string          `json:"updated_at"`
-		URL          string          `json:"html_url"`
-		PR           json.RawMessage `json:"pull_request"`
+		github.Issue
+		URL string `json:"html_url"`
 	}
 	if err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&record); err != nil {
 		return errors.New("invalid issue response")
 	}
-	if len(record.PR) > 0 || record.State != "open" || record.Number != i.Number || record.Title != i.Title || record.UpdatedAt != i.UpdatedAt || !strings.EqualFold(record.URL, i.URL) {
+	if len(record.PullRequest) > 0 || record.State != "open" || record.Number != int64(i.Number) || record.Title != i.Title || record.UpdatedAt != i.UpdatedAt || !strings.EqualFold(record.URL, i.URL) || (i.GitHubID > 0 && (record.ID != i.GitHubID || record.RequirementsDigest() != i.RequirementsDigest)) {
 		return errors.New("GitHub issue changed or is ineligible; review its current revision")
 	}
 	return nil

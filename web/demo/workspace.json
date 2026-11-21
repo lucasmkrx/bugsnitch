@@ -1,0 +1,132 @@
+{
+  "workspace": { "id": "demo", "name": "Demo workspace" },
+  "projects": [
+    {
+      "id": "storefront",
+      "name": "Storefront",
+      "repository": "example/storefront",
+      "paused": true,
+      "version": 4,
+      "preset": "Supervised",
+      "policyVersion": 1,
+      "requirePlan": false,
+      "allowPublication": true,
+      "allowPromotion": true,
+      "allowDraftPR": true,
+      "autoTriage": false
+    }
+  ],
+  "limits": { "tickets": 2, "turns": 2, "version": 1 },
+  "devices": [
+    {
+      "id": "mac",
+      "name": "Development Mac",
+      "platform": "darwin/arm64",
+      "projects": ["storefront"],
+      "lastContact": "2026-11-21T13:15:00Z",
+      "revoked": false
+    }
+  ],
+  "attempts": [
+    {
+      "id": "cart-repair",
+      "projectId": "storefront",
+      "machine": "Development Mac",
+      "repository": "example/storefront",
+      "issueNumber": 24,
+      "phase": "validation",
+      "state": "waiting",
+      "baseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "candidateSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "version": 3,
+      "updatedAt": "2026-11-21T13:15:00Z",
+      "connection": "disconnected",
+      "evidence": [
+        {
+          "phase": "validation",
+          "candidateSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "changedFiles": 2,
+          "exitCode": 0,
+          "importantFindings": 0,
+          "minorFindings": 0
+        }
+      ]
+    }
+  ],
+  "tickets": [
+    {
+      "id": "cart-total",
+      "projectId": "storefront",
+      "number": 24,
+      "repository": "example/storefront",
+      "title": "Round cart totals after applying discounts",
+      "state": "open"
+    }
+  ],
+  "incidents": [
+    {
+      "id": "rounding",
+      "projectId": "storefront",
+      "title": "Receipt total differs from checkout",
+      "observed": "A cart with a fractional discount displays two different totals.",
+      "expected": "Checkout and receipt totals agree to the cent.",
+      "steps": "Apply the sample discount to two items and compare the receipt.",
+      "source": "manual",
+      "status": "Needs reproduction",
+      "version": 1,
+      "firstSeen": "2026-11-21T12:30:00Z",
+      "lastSeen": "2026-11-21T13:01:00Z",
+      "issueNumber": 24,
+      "occurrences": 2,
+      "release": "sample-build",
+      "environment": "staging"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "resume",
+      "projectId": "storefront",
+      "question": "Allow this project to accept new work again?",
+      "options": ["Resume dispatch", "Keep paused"],
+      "version": 1,
+      "subjectVersion": 4,
+      "status": "pending",
+      "answer": null,
+      "requestId": null,
+      "expiresAt": "2026-11-22T12:30:00Z"
+    }
+  ],
+  "plans": [],
+  "publications": [],
+  "pullRequests": [],
+  "messages": [],
+  "events": [
+    {
+      "seq": 3,
+      "projectId": "storefront",
+      "kind": "decision.requested",
+      "subjectId": "resume",
+      "createdAt": "2026-11-21T13:17:00Z"
+    },
+    {
+      "seq": 2,
+      "projectId": "storefront",
+      "kind": "attempt.reported",
+      "subjectId": "cart-repair",
+      "createdAt": "2026-11-21T13:15:00Z"
+    },
+    {
+      "seq": 1,
+      "projectId": "storefront",
+      "kind": "incident.reported",
+      "subjectId": "rounding",
+      "createdAt": "2026-11-21T13:01:00Z"
+    }
+  ],
+  "capabilities": {
+    "demo": true,
+    "hostedInference": false,
+    "reason": "This read-only demo displays synthetic records."
+  },
+  "updatedAt": "2026-11-21T13:17:00Z"
+}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"io"
 	"net/http"
 	"regexp"
@@ -98,6 +99,7 @@ func (s Store) receipt(ctx context.Context, w, p, id string, r Receipt) error {
 	if _, err = tx.ExecContext(ctx, `UPDATE incidents SET version=version+1,state=CASE WHEN $2='fix' THEN 'Fix validated' ELSE state END WHERE id=$1`, id, r.Kind); err != nil {
 		return err
 	}
+	ctx = audit.WithDetails(ctx, audit.Details{Reason: "Version-bound incident evidence accepted", SubjectVersion: r.Version, EvidenceRef: r.Candidate})
 	if err = event(ctx, tx, w, p, "incident."+r.Kind+"_recorded", id); err != nil {
 		return err
 	}

@@ -4,6 +4,7 @@ package runner
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,21 +15,25 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 )
 
 type Summary struct {
-	LocalPath    string          `json:"-"`
-	CriteriaHash string          `json:"-"`
-	Evidence     []StageEvidence `json:"evidence,omitempty"`
-	ID           string          `json:"id"`
-	Workspace    string          `json:"workspace"`
-	Repository   string          `json:"repository"`
-	IssueNumber  int             `json:"issueNumber"`
-	BaseSHA      string          `json:"baseSha"`
-	CandidateSHA string          `json:"candidateSha"`
-	Phase        string          `json:"phase"`
-	State        string          `json:"state"`
-	Version      int             `json:"version"`
+	ReasonCode     string          `json:"reasonCode,omitempty"`
+	IssueUpdatedAt string          `json:"issueUpdatedAt,omitempty"`
+	LocalPath      string          `json:"-"`
+	CriteriaHash   string          `json:"-"`
+	Evidence       []StageEvidence `json:"evidence,omitempty"`
+	ID             string          `json:"id"`
+	Workspace      string          `json:"workspace"`
+	Repository     string          `json:"repository"`
+	IssueNumber    int             `json:"issueNumber"`
+	BaseSHA        string          `json:"baseSha"`
+	CandidateSHA   string          `json:"candidateSha"`
+	Phase          string          `json:"phase"`
+	State          string          `json:"state"`
+	Version        int             `json:"version"`
 }
 type StageEvidence struct {
 	Phase             string `json:"phase"`
@@ -55,22 +60,15 @@ type Project struct {
 	Workspace, Repository, Path string
 	Config                      Config
 }
-type Issue struct {
-	Schema     int      `json:"schema"`
-	Repository string   `json:"repository"`
-	Number     int      `json:"number"`
-	URL        string   `json:"url"`
-	Title      string   `json:"title"`
-	State      string   `json:"state"`
-	UpdatedAt  string   `json:"updatedAt"`
-	Criteria   []string `json:"criteria"`
-}
+type Issue protocol.IssueSelection
+
 type Finding struct {
 	Severity  string `json:"severity"`
 	Location  string `json:"location"`
 	Rationale string `json:"rationale"`
 }
 type Artifact struct {
+	ID                                                                                   string `json:"id,omitempty"`
 	Phase, At, BaseSHA, CandidateSHA, IssueVersion, Policy, Thread, Turn, Model, Summary string
 	ChangedFiles, Command                                                                []string  `json:",omitempty"`
 	ExitCode                                                                             *int      `json:",omitempty"`
@@ -207,7 +205,7 @@ func Get(id string) (Attempt, error) {
 	return a, err
 }
 func Summaries() ([]Summary, error) {
-	b, err := query("SELECT json_group_array(json_object('id',id,'workspace',workspace,'repository',repo,'issueNumber',issue,'phase',json_extract(data,'$.phase'),'state',json_extract(data,'$.state'),'baseSha',json_extract(data,'$.baseSha'),'candidateSha',json_extract(data,'$.candidateSha'),'version',version,'evidence',json_extract(data,'$.evidence'))) FROM (SELECT * FROM journal_attempts ORDER BY rowid);")
+	b, err := query("SELECT json_group_array(json_object('id',id,'workspace',workspace,'repository',repo,'issueNumber',issue,'issueUpdatedAt',json_extract(data,'$.Issue.updatedAt'),'reasonCode',json_extract(data,'$.reasonCode'),'phase',json_extract(data,'$.phase'),'state',json_extract(data,'$.state'),'baseSha',json_extract(data,'$.baseSha'),'candidateSha',json_extract(data,'$.candidateSha'),'version',version,'evidence',json_extract(data,'$.evidence'))) FROM (SELECT * FROM journal_attempts ORDER BY rowid);")
 	if err != nil {
 		return nil, err
 	}
@@ -215,15 +213,23 @@ func Summaries() ([]Summary, error) {
 	err = json.Unmarshal(b, &records)
 	return records, err
 }
-func (a *Attempt) save() error {
+func (a *Attempt) save() error { return a.persist("") }
+func (a *Attempt) claimRunning() error {
+	// A lost process still recorded as running holds capacity until reconciled.
+	return a.persist(" AND json_extract(data,'$.state')='waiting' AND (SELECT count(*) FROM journal_attempts WHERE workspace=" + literal(a.Workspace) + " AND json_extract(data,'$.state')='running')<2")
+}
+func (a *Attempt) persist(precondition string) error {
 	old := a.Version
 	a.Version++
 	a.UpdatedAt = now()
-	b, err := query(fmt.Sprintf("UPDATE journal_attempts SET version=%d,data=%s WHERE id=%s AND version=%d; SELECT changes();", a.Version, packed(a), literal(a.ID), old))
+	b, err := query(fmt.Sprintf("UPDATE journal_attempts SET version=%d,data=%s WHERE id=%s AND version=%d%s; SELECT changes();", a.Version, packed(a), literal(a.ID), old, precondition))
 	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(string(b)) != "1" {
+		if precondition != "" {
+			return errors.New("local workspace ticket capacity reserved or attempt revision changed")
+		}
 		return errors.New("attempt changed in another process")
 	}
 	return nil
@@ -234,6 +240,8 @@ func (a *Attempt) add(artifact Artifact) {
 	artifact.CandidateSHA = a.CandidateSHA
 	artifact.IssueVersion = a.Issue.UpdatedAt
 	artifact.Policy = "local-reviewed-files/v1"
+	identity, _ := json.Marshal(artifact)
+	artifact.ID = fmt.Sprintf("%x", sha256.Sum256(identity))
 	a.Artifacts = append(a.Artifacts, artifact)
 	evidence := StageEvidence{Phase: artifact.Phase, CandidateSHA: artifact.CandidateSHA, ChangedFiles: len(artifact.ChangedFiles), ExitCode: artifact.ExitCode}
 	for _, f := range artifact.Findings {

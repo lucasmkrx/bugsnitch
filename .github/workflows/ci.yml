@@ -16,11 +16,20 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with: {persist-credentials: false}
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with: {go-version: '1.27.4'}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with: {node-version-file: .nvmrc, cache: npm, cache-dependency-path: web/package-lock.json}
       - run: sudo apt-get update && sudo apt-get install -y sqlite3
       - run: go test -race ./...
-      - run: make build macos
+      - run: make build macos plugin
       - run: npm --prefix web run test:browser
+      - run: node --test examples/checkout/telemetry.test.mjs
+      - name: Start the packaged hosted stack
+        env:
+          POSTGRES_PASSWORD: ephemeral-ci-db
+          BUGSNITCH_OWNER_TOKEN: ephemeral-ci-only-owner-token-000000000000
+        run: |
+          docker compose -f deploy/compose.yml up --build --detach
+          curl --fail --silent --show-error --retry 15 --retry-all-errors http://localhost:8787/readyz
+          docker compose -f deploy/compose.yml down --volumes

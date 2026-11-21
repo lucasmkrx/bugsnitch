@@ -17,8 +17,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
@@ -223,7 +221,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /hooks/sentry", s.Incidents.SentryWebhook(s.SentrySecret))
 	mux.Handle("POST /hooks/github", s.Incidents.GitHubWebhook(s.GitHubSecret))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) { respondError(w, problem{404, "Unknown API operation"}) })
-	mux.HandleFunc("/", s.frontend)
+	mux.Handle("/", loadDashboard(s.WebDir))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		id := random(12)
 		w.Header().Set("X-Request-ID", id)
@@ -243,30 +241,6 @@ func (s *Server) Handler() http.Handler {
 		mux.ServeHTTP(w, r)
 		slog.Debug("request", "id", id, "method", r.Method, "route", r.Pattern, "duration_ms", time.Since(start).Milliseconds())
 	})
-}
-func (s *Server) frontend(w http.ResponseWriter, r *http.Request) {
-	if r.Method != "GET" && r.Method != "HEAD" {
-		w.Header().Set("Allow", "GET, HEAD")
-		w.WriteHeader(405)
-		return
-	}
-	name := strings.TrimPrefix(r.URL.Path, "/")
-	if !filepath.IsLocal(name) && name != "" {
-		http.NotFound(w, r)
-		return
-	}
-	if name == "" {
-		name = "index.html"
-	}
-	path := filepath.Join(s.WebDir, name)
-	if info, err := os.Stat(path); err != nil || info.IsDir() {
-		if filepath.Ext(name) != "" {
-			http.NotFound(w, r)
-			return
-		}
-		path = filepath.Join(s.WebDir, "index.html")
-	}
-	http.ServeFile(w, r, path)
 }
 func (s *Server) cookie(w http.ResponseWriter, value string, age int) {
 	http.SetCookie(w, &http.Cookie{Name: "bugsnitch_session", Value: value, Path: "/", HttpOnly: true, Secure: strings.HasPrefix(s.Origin, "https://"), SameSite: http.SameSiteStrictMode, MaxAge: age})

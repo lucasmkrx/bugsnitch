@@ -49,3 +49,16 @@ func TestRejectRuntimeServerRequests(t *testing.T) {
 		t.Fatal("unrelated credentials passed to app-server")
 	}
 }
+
+func TestUsagePreservesUnknownAndDropsAccountIdentity(t *testing.T) {
+	frame := `{"id":1,"result":{"accountId":"PRIVATE-ACCOUNT","ordinaryUsageAllowed":null,"rateLimits":{"primary":{"usedPercent":31,"resetsAt":null,"windowDurationMins":300},"credits":{"balance":"SENSITIVE"}}}}`
+	c := Client{in: &input{}, out: bufio.NewScanner(strings.NewReader(frame + "\n"))}
+	u, err := c.Usage()
+	if err != nil || u.OrdinaryUsageAllowed != nil || u.RateLimits.Secondary != nil || u.RateLimits.Primary.ResetsAt != nil || *u.RateLimits.Primary.UsedPercent != 31 {
+		t.Fatal("unknown usage detail fabricated", err)
+	}
+	out, _ := json.Marshal(u)
+	if strings.Contains(string(out), "PRIVATE") || strings.Contains(string(out), "SENSITIVE") {
+		t.Fatal("unexpected account metadata exposed")
+	}
+}

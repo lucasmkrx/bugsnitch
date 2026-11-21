@@ -4,11 +4,13 @@ package transport
 import (
 	"database/sql"
 	"encoding/json"
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"net/http"
 	"slices"
 	"strings"
 
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
+	"github.com/lucasmkrx/bugsnitch/internal/turns"
 )
 
 // Admission is requested by a human-initiated local execution. No command starts a model remotely.
@@ -42,21 +44,26 @@ func (s *Server) admission(w http.ResponseWriter, r *http.Request) error {
 			return err
 		}
 		// Serialize capacity, ownership and turn changes across *all* devices in a workspace.
-		var tickets, turns int
-		if err = tx.QueryRowContext(ctx, "SELECT ticket_limit,turn_limit FROM workspaces WHERE id=$1 FOR UPDATE", ws).Scan(&tickets, &turns); err != nil {
+		var tickets, turnLimit int
+		var stopped bool
+		if err = tx.QueryRowContext(ctx, "SELECT ticket_limit,turn_limit,stopped FROM workspaces WHERE id=$1 FOR UPDATE", ws).Scan(&tickets, &turnLimit, &stopped); err != nil {
 			return err
 		}
 		var planID string
 		var resources []string
 		var paused, requirePlan bool
-		if err = tx.QueryRowContext(ctx, "SELECT paused,require_plan FROM projects WHERE workspace_id=$1 AND id=$2 FOR SHARE", ws, a.ProjectID).Scan(&paused, &requirePlan); err != nil {
+		var policy int64
+		if err = tx.QueryRowContext(ctx, "SELECT paused,require_plan,policy_version FROM projects WHERE workspace_id=$1 AND id=$2 FOR SHARE", ws, a.ProjectID).Scan(&paused, &requirePlan, &policy); err != nil {
 			return err
+		}
+		if (stopped || paused) && (a.Operation == "admit" || a.Operation == "turn_start") {
+			return conflict("Dispatch is stopped for this workspace or project")
 		}
 		var seq int64
 		var prev, owner, p, base string
 		var issue int
 		var active, inTurn bool
-		err = tx.QueryRowContext(ctx, "SELECT sequence,operation,device_id,project_id,base_sha,issue_number,active,in_turn FROM admission WHERE workspace_id=$1 AND attempt_id=$2", ws, a.AttemptID).Scan(&seq, &prev, &owner, &p, &base, &issue, &active, &inTurn)
+		err = tx.QueryRowContext(ctx, "SELECT sequence,operation,device_id,project_id,base_sha,issue_number,active,in_turn,coalesce(plan_id,'') FROM admission WHERE workspace_id=$1 AND attempt_id=$2", ws, a.AttemptID).Scan(&seq, &prev, &owner, &p, &base, &issue, &active, &inTurn, &planID)
 		if err != nil && err != sql.ErrNoRows {
 			return err
 		}
@@ -75,9 +82,6 @@ func (s *Server) admission(w http.ResponseWriter, r *http.Request) error {
 		}
 		switch a.Operation {
 		case "admit":
-			if paused {
-				return conflict("Project dispatch is paused")
-			}
 			planID, resources, err = planEligibility(ctx, tx, ws, a)
 			if err != nil {
 				return err
@@ -97,14 +101,17 @@ func (s *Server) admission(w http.ResponseWriter, r *http.Request) error {
 			}
 			active = true
 		case "turn_start":
-			if !active || inTurn || paused {
-				return conflict("Model turn unavailable for this attempt")
-			}
-			var all, local int
-			if err = tx.QueryRowContext(ctx, "SELECT count(*),count(*) FILTER(WHERE device_id=$2) FROM admission WHERE workspace_id=$1 AND in_turn", ws, device).Scan(&all, &local); err != nil {
+			if err = checkPlannedIssue(ctx, tx, ws, a.ProjectID, planID, a.IssueNumber, false); err != nil {
 				return err
 			}
-			if all >= turns || local >= deviceLimit {
+			if !active || inTurn {
+				return conflict("Model turn unavailable for this attempt")
+			}
+			available, e := turns.Available(ctx, tx, ws, device, turnLimit, deviceLimit)
+			if e != nil {
+				return e
+			}
+			if !available {
 				return conflict("Model-turn capacity is reserved")
 			}
 			inTurn = true
@@ -132,7 +139,9 @@ func (s *Server) admission(w http.ResponseWriter, r *http.Request) error {
 				return err
 			}
 		}
-		return event(ctx, tx, ws, a.ProjectID, "admission."+a.Operation, a.AttemptID)
+		principal := audit.WithActor(ctx, audit.Device, device)
+		recorded := audit.WithDetails(principal, audit.Details{Reason: "Original device reconciled its execution admission", SubjectVersion: a.Sequence, PolicyVersion: policy, EvidenceRef: a.BaseSHA})
+		return event(recorded, tx, ws, a.ProjectID, "admission."+a.Operation, a.AttemptID)
 	})
 	if err != nil {
 		return err

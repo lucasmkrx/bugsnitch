@@ -11,25 +11,28 @@ import (
 )
 
 type PullObservation struct {
-	Title      string `json:"title"`
-	State      string `json:"state"`
-	IssueState string `json:"issueState"`
-	Head       string `json:"head"`
-	Base       string `json:"base"`
-	Target     string `json:"target"`
-	Criteria   string `json:"criteria"`
-	Checks     string `json:"checks"`
-	CheckCount int    `json:"checkCount"`
-	Review     string `json:"review"`
-	Draft      bool   `json:"draft"`
+	Queue      *QueueObservation `json:"queue,omitempty"`
+	MergedSHA  string            `json:"mergedSha,omitempty"`
+	Title      string            `json:"title"`
+	State      string            `json:"state"`
+	IssueState string            `json:"issueState"`
+	Head       string            `json:"head"`
+	Base       string            `json:"base"`
+	Target     string            `json:"target"`
+	Criteria   string            `json:"criteria"`
+	Checks     string            `json:"checks"`
+	CheckCount int               `json:"checkCount"`
+	Review     string            `json:"review"`
+	Draft      bool              `json:"draft"`
 }
 
 const inspectQuery = `query BugsnitchInspection($owner:String!,$name:String!,$pr:Int!,$issue:Int!) {
  repository(owner:$owner,name:$name) {
-   nameWithOwner
+   nameWithOwner owner { __typename }
    issue(number:$issue) { id number title body state }
    pullRequest(number:$pr) {
      number title state isDraft headRefOid baseRefName baseRef {target{oid}} reviewDecision
+     mergeQueue {id} mergeQueueEntry {state position headCommit {oid} baseCommit {oid}} mergeCommit {oid}
      commits(last:1){nodes{commit{oid statusCheckRollup{state contexts(first:1){totalCount}}}}}
    }
  }
@@ -53,11 +56,22 @@ func (a *App) InspectPull(ctx context.Context, install, repo int64, name string,
 		Data   struct {
 			Repository struct {
 				NameWithOwner string
-				Issue         struct {
+				Owner         struct {
+					Type string `json:"__typename"`
+				}
+				Issue struct {
 					ID, Title, Body, State string
 					Number                 int64
 				}
 				PullRequest struct {
+					MergeQueue      *struct{ ID string }
+					MergeCommit     *struct{ OID string }
+					MergeQueueEntry *struct {
+						State                  string
+						Position               int
+						HeadCommit, BaseCommit *struct{ OID string }
+					}
+
 					Number                                                int64
 					Title, State, HeadRefOid, BaseRefName, ReviewDecision string
 					IsDraft                                               bool
@@ -89,6 +103,22 @@ func (a *App) InspectPull(ctx context.Context, install, repo int64, name string,
 	criteria, _ := json.Marshal([]string{i.ID, i.Title, i.Body})
 	hash := sha256.Sum256(criteria)
 	result = PullObservation{Title: p.Title, State: p.State, IssueState: i.State, Head: p.HeadRefOid, Base: p.BaseRef.Target.Oid, Target: p.BaseRefName, Criteria: hex.EncodeToString(hash[:]), Checks: "UNKNOWN", Review: "UNKNOWN", Draft: p.IsDraft}
+	queue := QueueObservation{OwnerType: r.Owner.Type, Present: p.MergeQueue != nil && p.MergeQueue.ID != ""}
+	if entry := p.MergeQueueEntry; entry != nil {
+		queue.EntryState = entry.State
+		queue.Position = &entry.Position
+		if entry.HeadCommit != nil && oid.MatchString(entry.HeadCommit.OID) {
+			queue.EntryHead = entry.HeadCommit.OID
+		}
+		if entry.BaseCommit != nil && oid.MatchString(entry.BaseCommit.OID) {
+			queue.EntryBase = entry.BaseCommit.OID
+		}
+	}
+	queue.Rules = reader.branchRules(ctx, p.BaseRefName)
+	result.Queue = &queue
+	if p.State == "MERGED" && p.MergeCommit != nil && oid.MatchString(p.MergeCommit.OID) {
+		result.MergedSHA = p.MergeCommit.OID
+	}
 	if !oid.MatchString(result.Base) {
 		result.Base = ""
 	}

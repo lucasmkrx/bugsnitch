@@ -32,6 +32,16 @@ The current file-edit profile accepts existing tracked, non-hidden, regular UTF-
 
 ## Select and run a ticket
 
+On an enrolled computer with a registered worker configuration, request the next verified issue from the latest approved plan. The command prints a selection only after the runner has checked the current GitHub issue. Use a private output path.
+
+```sh
+bin/bugsnitch next --project PROJECT_ID > /private/path/issue.json
+```
+
+The service considers priority 0 first and breaks ties by canonical issue number. It checks prerequisite integration evidence, resource locks, workspace and device capacity, repository authorization, the current plan binding and previous attempts. The runner then checks its own slots, approved checkout, issue ID, title, open state, timestamp and a digest of the canonical title and body. A successful recommendation reserves no capacity. Inspect the JSON before starting. The separately invoked `local-start` repeats GitHub verification and acquires admission at execution time.
+
+Automatic recommendation currently covers tracked canonical issues from approved plans with a verified GitHub revision. A newly migrated record awaits its next provider read. A stale binding, unavailable private repository read, redacted canonical title or full allocation leaves stdout empty and returns a reason on stderr. Use the existing explicit retry workflow for an issue with a prior attempt.
+
 Prepare a versioned issue selection from the GitHub issue and the owner's approved acceptance criteria. Copy the exact issue title, number, URL and API `updated_at` timestamp. The example values below are illustrative.
 
 ```json
@@ -57,7 +67,7 @@ bin/bugsnitch local-list
 bin/bugsnitch sync
 ```
 
-Inspect the plan before running `local-continue`. The implementation role proposes complete replacements of approved files. The runner verifies the worktree, writes only allowed paths, commits the candidate, and executes the registered validation argument vector. It records the actual exit code and checks the candidate for unintended changes. The independent reviewer receives the actual diff, the issue and the recorded validation result in a fresh read-only thread. Important findings lead to a waiting state. Up to two owner-initiated corrections may follow. A successful wrap-up produces an inspectable candidate branch, exact commit and PR description in `PRBody` from `local-show`. Publishing or merging requires a separate authorized GitHub operation.
+Inspect the plan before running `local-continue`. The implementation role proposes complete replacements of approved files. The runner verifies the worktree, writes only allowed paths, commits the candidate, and executes the registered validation argument vector. It records the actual exit code and checks the candidate for unintended changes. Runner-created candidate and integration commits suppress local Git hooks so hooks cannot introduce additional actions outside the registered validator. A project that relies on hook checks should include their reviewed validation commands in its configured validator. Required GitHub checks and protections still apply to publication and integration. The independent reviewer receives the actual diff, the issue and the recorded validation result in a fresh read-only thread. Important findings lead to a waiting state. Up to two owner-initiated corrections may follow. A successful wrap-up produces an inspectable candidate branch, exact commit and PR description in `PRBody` from `local-show`. Publishing or merging requires a separate authorized GitHub operation.
 
 ## Recovery and retention
 
@@ -69,4 +79,48 @@ Use `local-show` and `git worktree list --porcelain` on the original computer af
 
 ## Verification
 
-`go test -v ./internal/runner ./internal/agent` runs a real temporary Git repository and SQLite journal with labeled test doubles for GitHub issue reads and model outputs. The regression check fails on the broken baseline, passes on the committed candidate, and independently supplied review output is recorded against that candidate. Tests exercise admission subject binding, owner feedback, duplicate starts, recreation after a worktree side effect, dirty-worktree preservation, pending stop acknowledgment, command replay, credential exclusion provider failure classes, commit-before-ack recovery retention of ignored files during cleanup, bounded explicit retries and migration from the single-attempt journal. This fixture is evidence of the runner workflow. [Live integration status](CODEX.md)
+`go test -v ./internal/runner ./internal/agent` runs a real temporary Git repository and SQLite journal with labeled test doubles for GitHub issue reads and model outputs. The regression check fails on the broken baseline, passes on the committed candidate, and independently supplied review output is recorded against that candidate. Tests exercise admission subject binding, owner feedback, duplicate starts, recreation after a worktree side effect, dirty-worktree preservation, pending stop acknowledgment, command replay, credential exclusion, provider failure classes, commit-before-ack recovery, retention of ignored files during cleanup, bounded explicit retries and migration from the single-attempt journal. This fixture is evidence of the runner workflow. [Live integration status](CODEX.md)
+
+## Draft a plan from a local brief
+
+From the local terminal, run `bin/bugsnitch plan-draft --brief /private/path/brief.txt > proposal.json`. The planner receives that brief in a fresh read-only account-backed session. Its proposal includes a milestone, assumptions and uncertainty, distinct target/forecast dates, verifiable acceptance criteria, priorities, estimates, dependencies and resource locks. The CLI validates the result with the same domain rules as the hosted service. Ticket numbers in this output are provisional references within the proposal. Owner approval and publication must map them to actual GitHub issues. This command creates no GitHub tickets. To choose an available model and reasoning setting, add `--model` and `--reasoning` from the local model catalog.
+
+Each local workspace admits two running tickets concurrently. Planning, manager conversations, authorization proofs and worker turns share two durable local model permits. Paired computers also reserve a slot from the same server-side workspace and device limits as implementation and independent review. The planner can draft before a project exists. A manager turn requires assignment to its selected project. The service checks enrollment and capacity and receives only the role, opaque turn identity, workspace/device identity, optional project identity and start/end state. It cannot initiate model execution through this endpoint. Paired general turns recheck the original grant every ten seconds, interrupting the local runtime on workspace stop, project pause, revocation or lost contact. An unreachable server can delay the final release acknowledgment.
+
+Use `bugsnitch turns` to inspect unfinished local planning, manager and proof permits. After reconnection use `bugsnitch turn-reconcile --id PERMIT_ID` to replay an end acknowledgment or fence an acquisition that never started a model. If the local journal records a turn as running and the original CLI process has exited, confirm the runtime on that computer has terminated before using `--confirm-runtime-ended`. An OS lock prevents reconciliation while the owning CLI is still active. Lost contact alone keeps capacity reserved. A lost release response can be replayed with the original permit ID without another inference. Reconciliation of a revoked or replaced enrollment requires operator attention on the service.
+
+## Active worker authority and lost acknowledgments
+
+An enrolled worker verifies its original device, local repository mapping, issue, base SHA and admission sequence before a turn or validator. The service grants up to 15 seconds and the awake runner renews halfway through the remaining interval. A revoked credential, expired grant, matching stop or pause, suspended project, changed approved plan, or failed renewal cancels the active stage. The runner checks authority again before accepting successful output and before editing or committing. An interrupted validator records its actual exit when available. The worktree, candidate and partial edits remain available for inspection.
+
+On macOS and Linux, cancellation signals the registered validator’s process group and waits for the direct child to exit. Configure trusted foreground validators. A detached process, a validator with access to the owner’s credentials, or an external service it has already contacted can outlive the group. The runner cannot reverse those effects. The owner-initiated combined-candidate check on a completed attempt uses its own local timeout and sits outside worker admission.
+
+The local SQLite journal retains confirmed end observations if an acknowledgment is lost. On reconnect, sync replays only the recorded ending operations under their original sequence and owning device. A held OS lock or changed local attempt version prevents background replay. The server keeps the original reservation while an end remains uncertain. Revoking the device can make that final acknowledgment impossible. A crash with an unconfirmed start or no observed process exit requires inspection on the original computer. Work never relaunches solely because a heartbeat, grant or acknowledgment expired.
+
+A synchronized attempt includes a bounded reason code for missing sign-in, unavailable model, exhausted allowance, provider rate limit or service failure, admission or device denial, lost authority, local capacity, a pending control or ordinary task failure. Provider messages and credentials stay outside these records. A disconnected dashboard shows the last reported state and contact time. A newer local recovery reason becomes visible after a successful sync.
+
+## Talk to the project manager locally
+
+Write your question to a private text file, then run `bugsnitch manager --repository owner/repo --question /private/path/question.txt`. For idempotent retries, supply the same `--request-id` with 32 lowercase hexadecimal characters. The local SQLite conversation contains the actual owner message, final model reply, runtime thread and turn IDs, timestamps and completion state. Read it with `bugsnitch manager-history --repository owner/repo`. Only the current project's recent local conversation and bounded local attempt metadata enter model context. The role has read-only output and cannot change priority, create issues, approve decisions or merge.
+
+The owner's local command starts each turn. Dashboard chat messages retain their hosted authorization status. No polling loop forwards a hosted prompt for local execution, and these local conversations remain on their original computer. An interrupted conversation may retain its last recorded start with no reply. Reusing that request ID returns its recorded disposition. A new question requires a new local action.
+
+## Check a combined candidate
+
+After a completed review, run `bin/bugsnitch local-integrate-check --id ATTEMPT_ID --target refs/heads/main`. A full `refs/remotes/origin/...` reference also works. Update remote-tracking references through your ordinary trusted Git workflow before selecting one. The runner creates a separate detached worktree at the exact selected target SHA, locally merges the reviewed candidate there, executes the registered validator and records the target, candidate and combined SHAs, exit code and issue revision. A stale ref or modified checkout invalidates the result. Read all receipts with `bin/bugsnitch local-integrations --id ATTEMPT_ID`.
+
+The check preserves both original branches and the combined worktree, including conflicts or failed builds. The receipt applies to those exact revisions. It grants no merge authority. A service performing an actual merge still needs current policy, required checks, approvals and an enforceable base-freshness mechanism.
+
+`TestIndependentlyPassingChangesFailInCombination` uses real temporary Git branches whose individual validators pass. Combining them violates a shared invariant. The runner records a failed combined validation while all original branches retain their tested revisions.
+
+## Worker lease verification
+
+The race-enabled runner tests interrupt a test model on revocation, observe a real validator process exit on renewal failure, retain its dirty worktree, and reject a renewal returned after expiry. Device tests simulate a lost end response and verify replay sends the original ending sequence without another start. The disposable PostgreSQL tests exercised competing general/worker capacity, the paired worker workflow and device-scoped renewal with stale sequences, matching stop controls, workspace pause and revocation.
+
+## Plan delivery forecasts
+
+The Plans view retains the owner's target and initial planning estimate. A separate forecast recalculates from evidence for the current approved version each time the service reads the plan. A ticket contributes its original estimated hours once the owner records an integrated revision and an acceptance summary through the plan evidence API. An open PR, a completed worker turn or a merged revision without that acceptance record contributes zero. Tracked GitHub issues must also retain their current authorized plan binding.
+
+The projection uses calendar days in UTC, including the approval day and the current day. Divide completed estimate-hours by elapsed calendar days to obtain the observed pace, then divide remaining estimate-hours by that pace and round up to whole days. For example, integrating six of twelve estimate-hours over six calendar days gives six more calendar days at the same pace. Additional days without accepted work lower the measured pace. These are original scope weights, and forecast days include ordinary waits and past parallel work.
+
+A projection requires accepted completions on at least two different UTC dates. An unapproved or superseded plan, stale GitHub evidence, or a paused project with unfinished work shows an explanation. Full acceptance shows the last recorded completion date. The target difference compares UTC dates. Positive values indicate a finish after the target. Later staffing, changed scope, new dependencies and future interruptions can change the outcome.

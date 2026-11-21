@@ -5,12 +5,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"net/http"
 	"slices"
 	"strings"
 
 	"github.com/lucasmkrx/bugsnitch/internal/domain"
 	"github.com/lucasmkrx/bugsnitch/internal/incidents"
+	"github.com/lucasmkrx/bugsnitch/internal/planning"
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 )
 
@@ -46,6 +49,9 @@ func (s *Server) proposePlan(w http.ResponseWriter, r *http.Request, ws string) 
 		if _, err := tx.ExecContext(ctx, "INSERT INTO plan_versions(id,workspace_id,project_id,version,document,execution_order) VALUES($1,$2,$3,$4,$5,$6)", id, ws, b.ProjectID, previous+1, doc, sorted); err != nil {
 			return err
 		}
+		if err := planning.BindIssues(ctx, tx, ws, b.ProjectID, id, b.Plan); err != nil {
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, "UPDATE projects SET version=version+1 WHERE id=$1", b.ProjectID); err != nil {
 			return err
 		}
@@ -65,14 +71,24 @@ func (s *Server) approvePlan(w http.ResponseWriter, r *http.Request, ws string) 
 	id := r.PathValue("id")
 	err := transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		var p string
-		var v int64
+		var v, planVersion int64
 		var approved, current bool
-		err := tx.QueryRowContext(ctx, `SELECT p.id,p.version,v.approved_at IS NOT NULL,v.version=(SELECT max(version) FROM plan_versions WHERE project_id=p.id) FROM plan_versions v JOIN projects p ON p.id=v.project_id WHERE v.workspace_id=$1 AND v.id=$2 FOR UPDATE OF p,v`, ws, id).Scan(&p, &v, &approved, &current)
+		var raw []byte
+		err := tx.QueryRowContext(ctx, `SELECT p.id,p.version,v.approved_at IS NOT NULL,v.version=(SELECT max(version) FROM plan_versions WHERE project_id=p.id),v.document,v.version FROM plan_versions v JOIN projects p ON p.id=v.project_id WHERE v.workspace_id=$1 AND v.id=$2 FOR UPDATE OF p,v`, ws, id).Scan(&p, &v, &approved, &current, &raw, &planVersion)
 		if err != nil {
 			return err
 		}
 		if !current || v != b.Version {
 			return conflict("Scope changed. Review the latest proposal.")
+		}
+		var doc domain.Plan
+		if err = json.Unmarshal(raw, &doc); err != nil {
+			return err
+		}
+		for _, ticket := range doc.Tickets {
+			if err = checkPlannedIssue(ctx, tx, ws, p, id, ticket.Number, true); err != nil {
+				return err
+			}
 		}
 		if approved {
 			return nil
@@ -90,6 +106,7 @@ func (s *Server) approvePlan(w http.ResponseWriter, r *http.Request, ws string) 
 		if _, err = tx.ExecContext(ctx, "UPDATE projects SET version=version+1 WHERE id=$1", p); err != nil {
 			return err
 		}
+		ctx = audit.WithDetails(ctx, audit.Details{Reason: "Current plan and dependency bindings approved", SubjectVersion: planVersion})
 		return event(ctx, tx, ws, p, "plan.approved", id)
 	})
 	if err != nil {
@@ -121,6 +138,9 @@ func (s *Server) attestPrerequisite(w http.ResponseWriter, r *http.Request, ws s
 		if err = json.Unmarshal(raw, &plan); err != nil {
 			return err
 		}
+		if err = checkPlannedIssue(ctx, tx, ws, project, id, b.Number, true); err != nil {
+			return err
+		}
 		if !slices.ContainsFunc(plan.Tickets, func(t domain.Ticket) bool { return t.Number == b.Number }) {
 			return bad("Issue is outside this plan")
 		}
@@ -132,6 +152,7 @@ func (s *Server) attestPrerequisite(w http.ResponseWriter, r *http.Request, ws s
 		if n == 0 {
 			return conflict("Evidence already recorded")
 		}
+		ctx = audit.WithDetails(ctx, audit.Details{Reason: "Prerequisite evidence recorded for the selected plan", EvidenceRef: b.Revision})
 		return event(ctx, tx, ws, project, "prerequisite.attested", id)
 	})
 	if err != nil {
@@ -146,7 +167,7 @@ func planEligibility(ctx context.Context, tx *sql.Tx, ws string, a protocol.Admi
 	var raw []byte
 	err := tx.QueryRowContext(ctx, "SELECT id,document FROM plan_versions WHERE workspace_id=$1 AND project_id=$2 AND approved_at IS NOT NULL ORDER BY version DESC LIMIT 1", ws, a.ProjectID).Scan(&id, &raw)
 	if err == sql.ErrNoRows {
-		return "", []string{}, nil
+		return "", []string{}, checkPlannedIssue(ctx, tx, ws, a.ProjectID, "", a.IssueNumber, false)
 	}
 	if err != nil {
 		return "", nil, err
@@ -159,11 +180,17 @@ func planEligibility(ctx context.Context, tx *sql.Tx, ws string, a protocol.Admi
 		if t.Number != a.IssueNumber {
 			continue
 		}
+		if err = checkPlannedIssue(ctx, tx, ws, a.ProjectID, id, t.Number, false); err != nil {
+			return "", nil, err
+		}
 		if a.CriteriaHash != domain.CriteriaHash(t.Criteria) {
 			return "", nil, conflict("Local criteria differ from the approved plan")
 		}
 		var complete bool
 		for _, n := range t.Dependencies {
+			if err = checkPlannedIssue(ctx, tx, ws, a.ProjectID, id, n, true); err != nil {
+				return "", nil, err
+			}
 			if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT FROM prerequisite_evidence WHERE workspace_id=$1 AND plan_id=$2 AND issue_number=$3)", ws, id, n).Scan(&complete); err != nil {
 				return "", nil, err
 			}
@@ -183,4 +210,12 @@ func planEligibility(ctx context.Context, tx *sql.Tx, ws string, a protocol.Admi
 		return id, t.Resources, nil
 	}
 	return "", nil, conflict("Issue is outside approved scope")
+}
+
+func checkPlannedIssue(ctx context.Context, tx *sql.Tx, ws, p, plan string, number int, allowClosed bool) error {
+	err := planning.CheckIssue(ctx, tx, ws, p, plan, number, allowClosed)
+	if errors.Is(err, planning.ErrIssueDrift) {
+		return conflict(err.Error())
+	}
+	return err
 }

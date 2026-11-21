@@ -106,7 +106,7 @@ func TestIssueWorkflowReplayAndIndependentReview(t *testing.T) {
 	if a.State != "completed" || a.CandidateSHA == a.BaseSHA || len(a.Artifacts) != 4 || !strings.Contains(a.PRBody, issue.URL) {
 		t.Fatal("missing validated PR candidate")
 	}
-	if a.Artifacts[2].ExitCode == nil || *a.Artifacts[2].ExitCode != 0 || a.Artifacts[1].Thread == a.Artifacts[3].Thread || a.Artifacts[3].CandidateSHA != a.CandidateSHA {
+	if len(a.Artifacts[2].ID) != 64 || a.Artifacts[2].ID == a.Artifacts[3].ID || a.Artifacts[2].ExitCode == nil || *a.Artifacts[2].ExitCode != 0 || a.Artifacts[1].Thread == a.Artifacts[3].Thread || a.Artifacts[3].CandidateSHA != a.CandidateSHA {
 		t.Fatal("independent review not bound to candidate")
 	}
 	main, _ := os.ReadFile(filepath.Join(dir, "example.txt"))

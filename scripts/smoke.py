@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Destructive tests are confined to two newly created databases and temporary runner homes."""
+import argparse
 import contextlib
 import http.cookiejar
 import json
 import os
 import secrets
-import shutil
 import socket
 import subprocess
 import tempfile
@@ -54,7 +54,7 @@ def server(env):
         proc.stderr.close()
 
 
-def check(tmp):
+def check(tmp, mcp_bridge):
     base = os.environ.copy()
     base.update(BUGSNITCH_OWNER_TOKEN=secrets.token_hex(32), BUGSNITCH_MCP_TOKEN=secrets.token_hex(32),
                 DATABASE_URL=f"postgresql:///{DB}?sslmode=disable")
@@ -83,6 +83,7 @@ def check(tmp):
             grant = api("pairings", {"name": name, "projectIds": [project]})
             local = {**base, "BUGSNITCH_HOME": str(tmp / name)}
             run(BIN / "bugsnitch", "pair", "--server", origin, "--code", grant["code"], env=local)
+            run(BIN / "bugsnitch", "rotate", env=local)
             run(BIN / "bugsnitch", "register", "--project", project, "--path", checkout, env=local)
             run(BIN / "bugsnitch", "sync", env=local)
             homes.append(local)
@@ -100,7 +101,7 @@ def check(tmp):
                 "expected": "A preview", "steps": "Open preview"}})
         ]
         # Wait for each response before issuing a dependent message or closing stdin.
-        with subprocess.Popen([BIN / "bugsnitch-mcp"], env=base, stdin=subprocess.PIPE,
+        with subprocess.Popen([mcp_bridge], env=base, stdin=subprocess.PIPE,
                               stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True) as mcp:
             for message in messages:
                 mcp.stdin.write(json.dumps(message) + "\n")
@@ -114,6 +115,9 @@ def check(tmp):
             mcp.wait(timeout=10)
         assert len(api("state")["incidents"]) == 1
         print("Local MCP STDIO and hosted streamable HTTP observed dashboard data and recorded one incident.")
+        if os.getenv("BUGSNITCH_BROWSER_SMOKE") == "1":
+            run("node", ROOT / "web/tests/service-smoke.mjs", env=base)
+            print("Headless Chrome signed in to the real service and inspected the persisted incident and devices.")
     with server(base):
         assert len(api("state")["devices"]) == 2
         for local in homes:
@@ -135,6 +139,9 @@ def check(tmp):
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--mcp-bridge", type=Path, default=BIN / "bugsnitch-mcp", help="Bugsnitch STDIO bridge executable, including an extracted plugin binary")
+    args = parser.parse_args()
     if not os.getenv("PGHOST"):
         raise SystemExit("Set PGHOST, PGPORT and PGUSER for a disposable PostgreSQL instance with CREATEDB.")
     with contextlib.ExitStack() as cleanup:
@@ -142,4 +149,4 @@ if __name__ == "__main__":
             run("createdb", database)
             cleanup.callback(run, "dropdb", database)
         with tempfile.TemporaryDirectory() as tmp:
-            check(Path(tmp))
+            check(Path(tmp), args.mcp_bridge.resolve())

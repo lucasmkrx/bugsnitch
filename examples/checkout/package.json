@@ -1,0 +1,17 @@
+{
+  "name": "bugsnitch-checkout-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:sdk": "node build-sdk.mjs",
+    "test": "node --test telemetry.test.mjs",
+    "verify": "node verify.mjs"
+  },
+  "dependencies": {
+    "@sentry/browser": "11.13.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

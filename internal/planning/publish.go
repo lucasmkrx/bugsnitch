@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"github.com/lucasmkrx/bugsnitch/internal/domain"
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"github.com/lucasmkrx/bugsnitch/internal/incidents"
@@ -23,10 +24,6 @@ var ErrConflict = errors.New("publication scope or version changed")
 var ErrUnavailable = errors.New("active GitHub App mapping required")
 
 func id() string { b := make([]byte, 16); rand.Read(b); return hex.EncodeToString(b) }
-func audit(ctx context.Context, tx *sql.Tx, ws, p, kind, id string) error {
-	_, e := tx.ExecContext(ctx, "INSERT INTO events(workspace_id,project_id,kind,subject_id) VALUES($1,$2,$3,$4)", ws, p, kind, id)
-	return e
-}
 func (s Store) Propose(ctx context.Context, ws, p, key string, version int64, doc domain.Plan) (string, error) {
 	if _, err := doc.Order(); err != nil {
 		return "", err
@@ -63,7 +60,7 @@ func (s Store) Propose(ctx context.Context, ws, p, key string, version int64, do
 	if _, err = tx.ExecContext(ctx, "INSERT INTO publications(id,workspace_id,project_id,request_id,document,subject_version,status) VALUES($1,$2,$3,$4,$5,$6,'proposed')", saved, ws, p, key, raw, v); err != nil {
 		return "", err
 	}
-	if err = audit(ctx, tx, ws, p, "publication.proposed", saved); err != nil {
+	if err = audit.Record(ctx, tx, ws, p, "publication.proposed", saved); err != nil {
 		return "", err
 	}
 	return saved, tx.Commit()
@@ -116,7 +113,8 @@ func (s Store) Approve(ctx context.Context, ws, pub string, version int64) error
 	if _, err = tx.ExecContext(ctx, "UPDATE publications SET status='publishing',installation_id=$1,repository_id=$2,policy_version=$4,version=version+1 WHERE id=$3", install, repo, pub, policyV); err != nil {
 		return err
 	}
-	if err = audit(ctx, tx, ws, p, "publication.approved", pub); err != nil {
+	ctx = audit.WithDetails(ctx, audit.Details{Reason: "Approved publication for the selected repository", PolicyVersion: policyV, SubjectVersion: version})
+	if err = audit.Record(ctx, tx, ws, p, "publication.approved", pub); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -136,6 +134,7 @@ type job struct {
 }
 
 func (s Store) Run(ctx context.Context, app *github.App) {
+	ctx = audit.WithActor(ctx, audit.Service, "plan-publisher")
 	if app == nil {
 		return
 	}
@@ -151,6 +150,12 @@ func (s Store) Run(ctx context.Context, app *github.App) {
 			cancel()
 			if e != nil && !errors.Is(e, sql.ErrNoRows) && ctx.Err() == nil {
 				slog.Warn("plan publication deferred")
+			}
+			check, done := context.WithTimeout(ctx, 20*time.Second)
+			e = s.reconcileIssue(check, app.ReadIssue)
+			done()
+			if e != nil && !errors.Is(e, sql.ErrNoRows) && ctx.Err() == nil {
+				slog.Warn("planned issue reconciliation deferred")
 			}
 		}
 	}
@@ -182,7 +187,21 @@ func (s Store) step(ctx context.Context, open openRepo) error {
 		}
 		return s.link(ctx, tx, j, *found)
 	}
-	if _, err = tx.ExecContext(ctx, "UPDATE planned_issues SET status='reconciling',reason='Confirming issue creation',next_run=now()+interval '1 minute' WHERE publication_id=$1 AND local_number=$2", j.pub, j.local); err != nil {
+	var intended string
+	for _, ticket := range j.doc.Tickets {
+		if ticket.Number == j.local {
+			title, body, err := j.text(ctx, tx, ticket)
+			if err != nil {
+				return err
+			}
+			intended = requirements(github.Issue{Title: title, Body: body})
+			break
+		}
+	}
+	if intended == "" {
+		return ErrConflict
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE planned_issues SET creation_digest=$3,status='reconciling',reason='Confirming issue creation',next_run=now()+interval '1 minute' WHERE publication_id=$1 AND local_number=$2", j.pub, j.local, intended); err != nil {
 		return err
 	}
 	if err = tx.Commit(); err != nil {
@@ -206,21 +225,11 @@ func (s Store) create(ctx context.Context, j job, repo issueWriter) error {
 		if ticket.Number != j.local {
 			continue
 		}
-		var body strings.Builder
-		fmt.Fprintln(&body, "## Acceptance criteria")
-		for _, c := range ticket.Criteria {
-			fmt.Fprintln(&body, "- "+incidents.Redact(c))
+		title, content, err := j.text(ctx, tx, ticket)
+		if err != nil {
+			return err
 		}
-		fmt.Fprintf(&body, "\n## Verification\n\n%s\n", incidents.Redact(ticket.Verification))
-		for _, dep := range ticket.Dependencies {
-			var n int
-			if err = tx.QueryRowContext(ctx, "SELECT canonical_number FROM planned_issues WHERE publication_id=$1 AND local_number=$2 AND status='linked'", j.pub, dep).Scan(&n); err != nil {
-				return err
-			}
-			fmt.Fprintf(&body, "\nDepends on #%d.\n", n)
-		}
-		content := strings.ReplaceAll(body.String(), "@", "＠") + "\n" + j.tag()
-		issue, e := repo.Create(ctx, strings.ReplaceAll(incidents.Redact(ticket.Title), "@", "＠"), content)
+		issue, e := repo.Create(ctx, title, content)
 		if e != nil {
 			j.status = "reconciling"
 			return deferJob(ctx, tx, j, "Checking for an accepted GitHub write", e)
@@ -229,6 +238,24 @@ func (s Store) create(ctx context.Context, j job, repo issueWriter) error {
 	}
 	return ErrConflict
 }
+func (j job) text(ctx context.Context, tx *sql.Tx, ticket domain.Ticket) (string, string, error) {
+	var body strings.Builder
+	fmt.Fprintln(&body, "## Acceptance criteria")
+	for _, c := range ticket.Criteria {
+		fmt.Fprintln(&body, "- "+incidents.Redact(c))
+	}
+	fmt.Fprintf(&body, "\n## Verification\n\n%s\n", incidents.Redact(ticket.Verification))
+	for _, dep := range ticket.Dependencies {
+		var n int
+		if err := tx.QueryRowContext(ctx, "SELECT canonical_number FROM planned_issues WHERE publication_id=$1 AND local_number=$2 AND status='linked'", j.pub, dep).Scan(&n); err != nil {
+			return "", "", err
+		}
+		fmt.Fprintf(&body, "\nDepends on #%d.\n", n)
+	}
+	content := strings.ReplaceAll(body.String(), "@", "＠") + "\n" + j.tag()
+	return strings.ReplaceAll(incidents.Redact(ticket.Title), "@", "＠"), content, nil
+}
+
 func deferJob(ctx context.Context, tx *sql.Tx, j job, reason string, e error) error {
 	next := time.Minute << min(j.tries, 6)
 	var api *github.APIError
@@ -245,14 +272,18 @@ func deferJob(ctx context.Context, tx *sql.Tx, j job, reason string, e error) er
 	return tx.Commit()
 }
 func (s Store) link(ctx context.Context, tx *sql.Tx, j job, i github.Issue) error {
-	if i.Number < 1 || i.ID < 1 || len(i.PullRequest) > 0 || i.State != "open" {
+	if i.Number < 1 || i.ID < 1 || len(i.PullRequest) > 0 || (i.State != "open" && i.State != "closed") {
 		j.status = "blocked"
-		return deferJob(ctx, tx, j, "Canonical issue is unavailable or closed", nil)
+		return deferJob(ctx, tx, j, "Canonical issue identity or state unavailable", nil)
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE planned_issues SET status='linked',canonical_number=$3,github_id=$4,source_state=$5,reason='' WHERE publication_id=$1 AND local_number=$2", j.pub, j.local, i.Number, i.ID, i.State); err != nil {
 		return err
 	}
-	if err := audit(ctx, tx, j.ws, j.p, "plan.issue_linked", j.pub); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO planned_issue_state(workspace_id,project_id,number,github_id,installation_id,repository_id,title,digest,source_state,availability,checked_at,next_check,selection_revision)
+	 VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'current',now(),now()+interval '5 minutes',$10)`, j.ws, j.p, i.Number, i.ID, j.install, j.repository, issueTitle(i.Title), requirements(i), i.State, selectionRevision(i)); err != nil {
+		return err
+	}
+	if err := audit.Record(ctx, tx, j.ws, j.p, "plan.issue_linked", j.pub); err != nil {
 		return err
 	}
 	rows, err := tx.QueryContext(ctx, "SELECT local_number,canonical_number FROM planned_issues WHERE publication_id=$1 AND status='linked'", j.pub)
@@ -295,13 +326,21 @@ func (s Store) link(ctx context.Context, tx *sql.Tx, j job, i github.Issue) erro
 		if _, err = tx.ExecContext(ctx, "INSERT INTO plan_versions(id,workspace_id,project_id,version,document,execution_order) SELECT $1,$2,$3,coalesce(max(version),0)+1,$4,$5 FROM plan_versions WHERE project_id=$3", planID, j.ws, j.p, doc, sorted); err != nil {
 			return err
 		}
+		if err = BindIssues(ctx, tx, j.ws, j.p, planID, j.doc); err != nil {
+			return err
+		}
+		// A human can edit an accepted issue before its create response is reconciled.
+		// Only the exact content submitted under the approved publication binds this generated proposal.
+		if _, err = tx.ExecContext(ctx, `DELETE FROM plan_issue_bindings b USING planned_issues i,planned_issue_state z WHERE b.plan_id=$1 AND i.publication_id=$2 AND i.canonical_number=b.number AND (z.workspace_id,z.project_id,z.number)=(b.workspace_id,b.project_id,b.number) AND i.creation_digest IS DISTINCT FROM z.digest`, planID, j.pub); err != nil {
+			return err
+		}
 		if _, err = tx.ExecContext(ctx, "UPDATE publications SET plan_id=$1,status='published',version=version+1 WHERE id=$2", planID, j.pub); err != nil {
 			return err
 		}
 		if _, err = tx.ExecContext(ctx, "UPDATE projects SET version=version+1 WHERE id=$1", j.p); err != nil {
 			return err
 		}
-		if err = audit(ctx, tx, j.ws, j.p, "plan.proposed", planID); err != nil {
+		if err = audit.Record(ctx, tx, j.ws, j.p, "plan.proposed", planID); err != nil {
 			return err
 		}
 	}

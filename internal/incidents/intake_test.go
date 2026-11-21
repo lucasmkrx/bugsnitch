@@ -105,3 +105,18 @@ func TestVerificationGates(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestSentryLabelProjectionFromTags(t *testing.T) {
+	before := errorPayload(eventOne, "", "", time.Now())
+	var p map[string]any
+	if err := json.Unmarshal(before, &p); err != nil {
+		t.Fatal(err)
+	}
+	e := p["data"].(map[string]any)["error"].(map[string]any)
+	e["tags"] = []any{[]any{"environment", "staging"}, []any{"release", "v1"}, []any{"customer", markerSecret}}
+	payload, _ := json.Marshal(p)
+	got, err := normalizeError(payload)
+	if err != nil || got.Environment != "staging" || got.Release != "v1" {
+		t.Fatal(got, err)
+	}
+}

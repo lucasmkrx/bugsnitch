@@ -66,6 +66,12 @@ func codexProtocolFixture(args []string) int {
 		case "model/list":
 			out = object{"data": []any{object{"id": "fixture", "model": "fixture", "isDefault": true}}}
 		case "thread/start":
+			if strings.Contains(req.Params.DeveloperInstructions, "overall project planner") {
+				answer = `{"title":"Fixture draft","milestone":"Ready","assumptions":"Test-only protocol data","target":"","forecast":"","tickets":[{"number":1,"title":"Check label","criteria":["Label visible"],"verification":"Run fixture","estimateHours":1,"priority":1,"dependencies":[],"resources":[]}]}`
+			}
+			if strings.Contains(req.Params.DeveloperInstructions, "project manager responding") {
+				answer = "Fixture manager reply."
+			}
 			if strings.Contains(req.Params.DeveloperInstructions, "complete UTF-8 replacement") {
 				answer = `{"summary":"Updated example","edits":[{"path":"label.txt","content":"fixed\n"}]}`
 			}
@@ -158,6 +164,9 @@ func TestPairedWorkerAndDashboardEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", fixturePath+string(os.PathListSeparator)+os.Getenv("PATH"))
+	previousCheck := runner.CheckWorker
+	runner.CheckWorker = device.CheckWorker
+	defer func() { runner.CheckWorker = previousCheck }()
 	b, f, bt, et := runner.BeforeStart, runner.AfterFinish, runner.BeforeTurn, runner.AfterTurn
 	defer func() { runner.BeforeStart, runner.AfterFinish, runner.BeforeTurn, runner.AfterTurn = b, f, bt, et }()
 	runner.BeforeStart, runner.AfterFinish, runner.BeforeTurn, runner.AfterTurn = device.Admit, device.Finish, device.TurnStart, device.TurnEnd
@@ -175,12 +184,31 @@ func TestPairedWorkerAndDashboardEvidence(t *testing.T) {
 	}
 	cli("sync")
 	cli("sync")
+	oldBinding, oldSubmit := runner.BindGeneral, runner.SubmitGeneral
+	defer func() { runner.BindGeneral, runner.SubmitGeneral = oldBinding, oldSubmit }()
+	runner.BindGeneral, runner.SubmitGeneral = device.BindGeneral, device.SubmitGeneral
+	proposalResult, err := runner.DraftPlan(ctx, "personal", "Bounded test-only brief", "", "")
+	if err != nil || len(proposalResult.Tickets) != 1 {
+		t.Fatal("paired planner", err)
+	}
+	reply, err := runner.Manager(ctx, "personal", repo, random(16), "Private fixture manager question", "", "")
+	if err != nil || reply.Status != "completed" {
+		t.Fatal("paired manager", err)
+	}
+	var ended int
+	if err = s.DB.QueryRow("SELECT count(*) FROM general_model_turns WHERE version=2").Scan(&ended); err != nil || ended != 2 {
+		t.Fatal("general permits were not released", ended, err)
+	}
 	var held, processing bool
 	var seq int
 	if err = s.DB.QueryRow("SELECT active,in_turn,sequence FROM admission WHERE attempt_id=$1", a.ID).Scan(&held, &processing, &seq); err != nil || held || processing || seq != 10 {
 		t.Fatal("admission lifecycle", held, processing, seq, err)
 	}
 	_, state := owner.req(t, "GET", "/api/v1/state", nil, "")
+	body, _ := json.Marshal(state)
+	if bytes.Contains(body, []byte("Private fixture manager question")) || bytes.Contains(body, []byte("Fixture manager reply")) {
+		t.Fatal("local conversation reached hosted state")
+	}
 	output, _ := json.Marshal(state["attempts"])
 	for _, v := range []string{a.ID, a.CandidateSHA, `"exitCode":0`, `"state":"completed"`} {
 		if !bytes.Contains(output, []byte(v)) {

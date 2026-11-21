@@ -181,6 +181,7 @@ func (a *App) repository(ctx context.Context, installation, repository int64, na
 }
 
 type Issue struct {
+	UpdatedAt   string `json:"updated_at"`
 	ID          int64
 	Number      int64
 	Title       string
@@ -203,7 +204,7 @@ func (r *Repository) Get(ctx context.Context, n int64) (Issue, error) {
 	var i Issue
 	err := r.app.request(ctx, r.token, "GET", fmt.Sprintf("%s/issues/%d", r.path, n), nil, &i, 200)
 	if err == nil && (i.ID < 1 || i.Number != n || len(i.PullRequest) > 0) {
-		return Issue{}, errors.New("GitHub issue identity changed")
+		return Issue{}, ErrSubjectChanged
 	}
 	return i, err
 }
@@ -240,4 +241,13 @@ func (r *Repository) Find(ctx context.Context, marker string, since time.Time) (
 		}
 	}
 	return nil, errors.New("GitHub reconciliation exceeded page limit")
+}
+
+// ReadIssue is used for drift reconciliation with a single-repository read-only token.
+func (a *App) ReadIssue(ctx context.Context, installation, repository int64, name string, n int64) (Issue, error) {
+	r, err := a.repository(ctx, installation, repository, name, map[string]string{"issues": "read"})
+	if err != nil {
+		return Issue{}, err
+	}
+	return r.Get(ctx, n)
 }

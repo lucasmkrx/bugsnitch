@@ -6,7 +6,7 @@ This rebuild is in development. The [verification ledger](docs/PROGRESS.md) reco
 
 ## Start the dashboard
 
-Install Git, Go 1.26 or newer, Node 24 with npm, PostgreSQL 17 command-line tools and OpenSSL. From a clean checkout run:
+Install Git, Go 1.26 or newer, Node 26.13.1 with npm, PostgreSQL 17 command-line tools and OpenSSL. From a clean checkout, start the service with
 
 ```sh
 make dev
@@ -14,7 +14,7 @@ make dev
 
 Open **http://localhost:8787**. Sign in using the high-entropy credential saved in **.local/dev/owner-token**. The script creates a private Unix-socket PostgreSQL cluster, applies migrations, installs the locked web dependencies, builds the dashboard and starts the service. Stop the foreground service with Ctrl-C. Use `scripts/dev stop` to stop its database. The next start reuses the data. To choose a PostgreSQL installation, set PGBIN to its bin directory.
 
-In Settings, register a project by its GitHub owner/repository name. In Devices, issue a ten-minute pairing code for the specific computer and projects. Build and connect a runner on that computer:
+In Settings, register a project by its GitHub owner/repository name. In Devices, issue a ten-minute pairing code for the specific computer and projects. Build and connect a runner on that computer.
 
 ```sh
 make runner
@@ -30,7 +30,7 @@ Use the public HTTPS service origin on another computer. Each project checkout n
 
 - Inspect projects, connection status and recent execution reports. Queue a manual report with observed behavior, expected behavior and reproduction steps. Approved incident promotion uses a scoped GitHub App integration.
 - Propose and approve a versioned plan. Approved criteria, dependencies and shared resource declarations constrain local admission. Pausing closes the gate to new work. Resuming requires a decision bound to the current project version.
-- Run selected eligible work locally, validate its candidate and collect separate review evidence. Enrolled computers share ticket and model-turn limits. Initial limits are two active tickets per workspace and two model turns per workspace and per device.
+- Use `bugsnitch next --project PROJECT_ID` to inspect the next eligible issue from the approved plan. Run selected work locally, validate its candidate and collect separate review evidence. Enrolled computers share ticket and model-turn limits. Initial limits are two active tickets per workspace and two model turns per workspace and per device.
 - Record deployment and validation evidence for the specific incident, environment and build. PR readiness, merging and deployment have separate evidence requirements.
 - Use the local MCP bridge or an OAuth-configured hosted MCP connection to read project and decision state, record reports and answer current decisions. Dashboard messages persist with their inference availability status.
 

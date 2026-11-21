@@ -4,6 +4,7 @@ package transport
 import (
 	"database/sql"
 	"encoding/json"
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"net/http"
 )
 
@@ -59,6 +60,7 @@ func (s *Server) policy(w http.ResponseWriter, r *http.Request, ws string) error
 		if _, err := tx.ExecContext(ctx, "INSERT INTO policy_versions(workspace_id,project_id,version,actor,policy) VALUES($1,$2,$3,'owner',$4)", ws, p, policyV+1, raw); err != nil {
 			return err
 		}
+		ctx = audit.WithDetails(ctx, audit.Details{Reason: "Approved project policy revision", PolicyVersion: policyV + 1, SubjectVersion: version + 1})
 		return event(ctx, tx, ws, p, "policy.changed", p)
 	})
 	if err != nil {
@@ -87,6 +89,7 @@ func (s *Server) limits(w http.ResponseWriter, r *http.Request, ws string) error
 		if n != 1 {
 			return conflict("Limits changed; refresh current settings")
 		}
+		ctx = audit.WithDetails(ctx, audit.Details{Reason: "Workspace capacity limits updated", SubjectVersion: int64(b.Version + 1)})
 		return event(ctx, tx, ws, "", "limits.changed", ws)
 	})
 	if err != nil {

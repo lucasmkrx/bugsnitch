@@ -4,24 +4,33 @@ package transport
 import (
 	"context"
 	"database/sql"
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 	"net/http"
 	"slices"
 )
 
+type controlInput struct {
+	Operation string `json:"operation"`
+	RequestID string `json:"requestId"`
+	Version   int64  `json:"version"`
+}
+
 func (s *Server) control(w http.ResponseWriter, r *http.Request, ws string) error {
-	var b struct {
-		Operation, RequestID string
-		Version              int64
-	}
+	var b controlInput
 	if err := decode(w, r, &b); err != nil {
 		return err
 	}
-	if !keyPattern.MatchString(b.RequestID) || (b.Operation != "pause" && b.Operation != "stop") || b.Version < 1 {
-		return bad("Choose a control and the current attempt version")
+	out, err := s.requestControl(r.Context(), ws, r.PathValue("id"), b)
+	if err != nil {
+		return err
 	}
-	ctx := r.Context()
-	attempt := r.PathValue("id")
+	return send(w, 202, out)
+}
+func (s *Server) requestControl(ctx context.Context, ws, attempt string, b controlInput) (object, error) {
+	if !keyPattern.MatchString(b.RequestID) || (b.Operation != "pause" && b.Operation != "stop") || b.Version < 1 {
+		return nil, bad("Choose a control and the current attempt version")
+	}
 	var id, status string
 	err := transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		var p, device, state string
@@ -74,12 +83,13 @@ func (s *Server) control(w http.ResponseWriter, r *http.Request, ws string) erro
 		if _, err = tx.ExecContext(ctx, "INSERT INTO controls(id,workspace_id,project_id,attempt_id,device_id,operation,subject_version,status,request_id) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)", id, ws, p, attempt, device, b.Operation, version, status, b.RequestID); err != nil {
 			return err
 		}
+		ctx = audit.WithDetails(ctx, audit.Details{Reason: "Control requested against the current attempt", SubjectVersion: version, EvidenceRef: id})
 		return event(ctx, tx, ws, p, "control."+b.Operation+"_requested", attempt)
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return send(w, 202, object{"id": id, "status": status})
+	return object{"id": id, "status": status}, nil
 }
 func (s *Server) controls(ctx context.Context, tx *sql.Tx, ws, device string, acks []protocol.Ack) ([]protocol.Control, error) {
 	for _, ack := range acks {

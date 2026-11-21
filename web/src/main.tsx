@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: MPL-2.0
+import {useEffect,useRef,useState} from 'react';
+import {createRoot} from 'react-dom/client';
+import {post,messageOf,HttpError} from './api';
+import {Brand,Icon,Modal,Field,readRoute,link,pages,when,type Page} from './ui';
+import {Editor,type ModalKind,type Run} from './actions';
+import {Views} from './views';
+import {useWorkspace,startPolling,refresh,forget} from './store';
+import './style.css';
+
+const groups:[string,Page[]][]=[['Workspace',['overview','plans','work','prs']],['Triage',['incidents','decisions']],['Manage',['devices','chat','settings']]];
+const summaries:Record<Page,string>={overview:'Delivery, incidents, and decisions across your projects.',plans:'Deliverables, acceptance criteria, and execution order.',work:'Canonical issues and evidence from registered computers.',prs:'Review status and integration readiness.',incidents:'Application failures, reproduction evidence, and repair status.',decisions:'Review the evidence and choose the next action.',devices:'Computers authorized to work on your projects.',chat:'Project conversations and their runtime status.',settings:'Repository mappings and execution permissions.'};
+function App(){
+ const snapshot=useWorkspace(),state=snapshot.state;
+ const [route,setRoute]=useState(readRoute),[modal,setModal]=useState<ModalKind|null>(null),[menu,setMenu]=useState(false),[busy,setBusy]=useState(false),[feedback,setFeedback]=useState(''),[failed,setFailed]=useState(false),[theme,setTheme]=useState(()=>localStorage.getItem('bugsnitch-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light'));
+ const pending=useRef(false),[token,setToken]=useState('');
+ const title=route.page==='work'&&route.subject?'Attempt detail':route.page==='incidents'&&route.subject?'Incident detail':pages[route.page];
+ useEffect(startPolling,[]);
+ useEffect(()=>{const change=()=>{setRoute(readRoute());setMenu(false);setModal(null);setFeedback('');window.scrollTo(0,0)};window.addEventListener('hashchange',change);return()=>window.removeEventListener('hashchange',change)},[]);
+ useEffect(()=>{document.title=title+' · Bugsnitch'},[title]);
+ useEffect(()=>{document.documentElement.dataset.theme=theme;localStorage.setItem('bugsnitch-theme',theme)},[theme]);
+ const run:Run=async(work,done)=>{
+  if(pending.current||!navigator.onLine)return false;
+  pending.current=true;setBusy(true);setFailed(false);setFeedback('');
+  try{await work();await refresh();if(done)setFeedback(done);return true}
+  catch(e){setFailed(true);setFeedback(messageOf(e));if(e instanceof HttpError&&e.status===401)forget();else void refresh().catch(()=>{});return false}
+  finally{pending.current=false;setBusy(false)}
+ };
+ const switchTheme=<button type="button" className="icon" title="Switch color theme" aria-label={'Use '+(theme==='dark'?'light':'dark')+' theme'} onClick={()=>setTheme(theme==='dark'?'light':'dark')}><Icon name="theme"/></button>;
+ if(!state)return <main className="login"><div className="login-box"><div className="login-brand"><Brand/>{switchTheme}</div>{snapshot.signedOut?<><h1>Sign in to your workspace</h1><p>Use the owner token configured on your Bugsnitch server.</p><form onSubmit={async e=>{e.preventDefault();const t=token;setToken('');await run(()=>post('login',{token:t}))}}><Field title="Owner token"><input type="password" value={token} onChange={e=>setToken(e.target.value)} autoComplete="current-password" required autoFocus/></Field><button className="primary" disabled={busy||!snapshot.online}>{busy?'Signing in…':'Sign in'}<Icon name="arrow" size={16}/></button></form></>:<><h1>{snapshot.loading?'Opening workspace…':'Workspace unavailable'}</h1>{!snapshot.loading&&<button onClick={()=>void refresh().catch(()=>{})}>Retry connection</button>}</>}{(snapshot.error||feedback)&&<p className="alert" role="alert">{feedback||snapshot.error}</p>}</div></main>;
+ const project=state.projects.find(p=>p.id===route.project),missing=!!route.project&&!project;
+ const locked=busy||!snapshot.online||!!snapshot.error;
+ const open=(m:ModalKind)=>{setFeedback('');setModal(m)};
+ const buttons:Partial<Record<Page,[ModalKind,string]>>={overview:['project','Register project'],plans:['plan','Draft plan'],incidents:['report','Report incident'],devices:['pair','Pair device'],settings:['project','Register project']};
+ const action=buttons[route.page];
+ const nav=<nav aria-label="Main navigation">{groups.map(([label,items])=><div className="nav-group" key={label}><h2>{label}</h2>{items.map(item=><a key={item} onClick={()=>setMenu(false)} href={link(item,route.project)} aria-current={route.page===item?'page':undefined}><Icon name={item}/>{pages[item]}{item==='decisions'&&state.decisions.some(d=>d.status==='pending'&&(!project||d.projectId===project.id))&&<span className="nav-count">{state.decisions.filter(d=>d.status==='pending'&&(!project||d.projectId===project.id)).length}</span>}</a>)}</div>)}</nav>;
+ const content=<><div className="sidebar-brand"><a href={link('overview')} aria-label="Bugsnitch overview"><Brand/></a></div>{nav}<div className="sidebar-end"><div className="avatar">O</div><div><strong>Owner</strong><small>{state.workspace.name}</small></div><button className="icon" aria-label="Sign out" disabled={busy||!snapshot.online} onClick={async()=>{if(pending.current)return;pending.current=true;try{await post('logout',{});forget();setMenu(false);setModal(null);setFeedback('')}catch(e){setFeedback(messageOf(e));setFailed(true)}finally{pending.current=false}}}><Icon name="signout"/></button></div></>;
+ return <><a className="skip" href="#main-content" onClick={e=>{e.preventDefault();document.getElementById('main-content')?.focus()}}>Skip to content</a><div className="shell"><aside className="sidebar">{content}</aside><div className="canvas"><header className="bar"><button className="icon menu-btn" aria-label="Open navigation" onClick={()=>setMenu(true)}><Icon name="menu"/></button><div className="crumb"><Icon name="overview" size={16}/><span>{state.workspace.name}</span><b>/</b><strong>{pages[route.page]}</strong></div><div className="top-actions"><span className={'sync-dot '+(snapshot.error?'warn':'')}></span><span className="sync-text">{snapshot.online&&!snapshot.error?'Connected':'Stale snapshot'}</span>{switchTheme}</div></header><main id="main-content" tabIndex={-1}><div className="context"><label><Icon name="repo" size={15}/><select aria-label="Project scope" value={route.project} onChange={e=>window.location.hash=link(route.page,e.target.value)}><option value="">All projects</option>{missing&&<option value={route.project}>Project unavailable</option>}{state.projects.map(p=><option key={p.id} value={p.id}>{p.name}</option>)}</select></label><span>Updated {when(state.updatedAt)}</span></div><div className="page-head"><div><h1>{title}</h1><p>{summaries[route.page]}</p></div>{!route.subject&&action&&<button className="primary" disabled={locked||(action[0]!=='project'&&state.projects.length===0)} title={action[0]!=='project'&&!state.projects.length?'Register a project first':undefined} onClick={()=>open(action[0])}><Icon name="plus" size={16}/>{action[1]}</button>}</div>{(!snapshot.online||snapshot.error)&&<div className="alert" role="status">{snapshot.error||'Offline. Displaying the last received state.'} <button onClick={()=>void refresh().catch(()=>{})}>Refresh</button></div>}{feedback&&<div className={failed?'alert':'feedback'} role={failed?'alert':'status'}>{feedback}<button className="icon" aria-label="Dismiss message" onClick={()=>setFeedback('')}><Icon name="close" size={14}/></button></div>}{missing?<p>Project unavailable. Choose a project from the workspace selector.</p>:<Views key={[route.page,route.project,route.subject].join('/')} page={route.page} state={state} project={project} subject={route.subject} run={run} locked={locked} open={open}/>}</main></div></div>{menu&&<Modal title="Navigation" close={()=>setMenu(false)}>{content}</Modal>}{modal&&<Editor kind={modal} state={state} project={project} close={()=>setModal(null)} run={run} busy={locked}/>}</>
+}
+createRoot(document.getElementById('root')!).render(<App/>);

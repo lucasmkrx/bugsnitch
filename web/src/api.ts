@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: MPL-2.0
+export interface Project { id:string; name:string; repository:string; paused:boolean; version:number }
+export interface Device { id:string; name:string; platform:string; projects:string[]; lastContact:string|null; revoked:boolean }
+export interface Incident { id:string; projectId:string; observed:string; title?:string; expected:string; steps:string; source:string; status:string; version:number; firstSeen:string; lastSeen:string; issueNumber?:number; occurrences:number; promotion?:string; promotionReason?:string; environment?:string; release?:string; issueState?:string; frames?:unknown[] }
+export interface Decision { id:string; projectId:string; subjectVersion:number; version:number; status:string; question:string; options:string[]; answer:string|null; requestId:string|null; expiresAt:string }
+export interface StageEvidence {phase:string;candidateSha?:string;changedFiles:number;exitCode?:number;importantFindings:number;minorFindings:number}
+export interface Attempt {evidence?:StageEvidence[]; id:string; projectId:string; machine:string; repository:string; issueNumber:number; phase:string; state:string; baseSha:string; candidateSha:string|null; version:number; updatedAt:string; connection:string; control?:{id:string;operation:string;status:string}|null }
+export interface Ticket { id:string; projectId:string; number:number; repository:string; title:string; state:string }
+export interface Message { id:string; projectId:string; body:string; reason:string; status:string; createdAt:string }
+export interface Activity { seq:number; projectId:string|null; kind:string; subjectId:string; createdAt:string }
+export interface PlanTicket { number:number; title:string; criteria:string[]; verification:string; priority:number; estimateHours:number; dependencies:number[]; resources:string[] }
+export interface PlanDoc { title:string; milestone:string; target?:string; forecast?:string; assumptions:string; tickets:PlanTicket[] }
+export interface Plan { id:string; projectId:string; title:string; version:number; status:string; document:PlanDoc; executionOrder:number[] }
+export interface Pull {projectId:string;number:number;issueNumber:number;title:string;head:string;base:string;target:string;criteria:string;review:string;checks:string;checkCount:number;state:string;version:number;observedAt:string;blockers:string[];autoMerge:boolean;validation?:string;independentReview?:string}
+export interface State {workspace:{id:string;name:string}; projects:Project[]; devices:Device[]; incidents:Incident[]; decisions:Decision[]; attempts:Attempt[]; tickets:Ticket[]; plans:Plan[]; pullRequests:Pull[]; messages:Message[]; events:Activity[]; capabilities:{hostedInference:boolean;reason:string}; updatedAt:string}
+
+export class HttpError extends Error { constructor(public status:number,message:string){super(message)} }
+export async function request<T>(path:string, init:RequestInit={}):Promise<T>{
+  let response:Response;
+  try {
+    response=await fetch('/api/v1/'+path,{credentials:'same-origin',cache:'no-store',...init});
+  } catch { throw new Error('The service could not be reached. Refresh to check the latest state.'); }
+  if (!response.ok){
+    const error=await response.json().catch(()=>null);
+    throw new HttpError(response.status,error?.error || 'The service returned HTTP '+response.status);
+  }
+  if (response.status===204) return undefined as T;
+  return response.json() as Promise<T>;
+}
+export const readState = () => request<State>('state');
+export const post = <T=Record<string,unknown>>(path:string, body:unknown) => request<T>(path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+export const enc = encodeURIComponent;
+export const messageOf = (error:unknown) => error instanceof Error ? error.message : 'The request failed.';

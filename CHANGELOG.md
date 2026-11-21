@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased rebuild
+
+The Go service, local runner and React dashboard replace the extension. See docs/PROGRESS.md for verified behavior and outstanding milestones. The entries below describe the earlier extension.
+
 ## 0.3.0 — Preview
 
 - Compare any merge parent, preview one file, open read-only historical VS Code diffs, and follow file history across renames.

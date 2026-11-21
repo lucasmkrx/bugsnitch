@@ -1,0 +1,32 @@
+#!/bin/sh
+# Manage the normal user's metadata sync LaunchAgent on macOS.
+set -eu
+[ "$(uname -s)" = Darwin ] || { echo "Requires macOS." >&2; exit 1; }
+label=com.bugsnitch.sync
+domain="gui/$(id -u)"
+plist="$HOME/Library/LaunchAgents/$label.plist"
+dir="$HOME/Library/Application Support/bugsnitch/service"
+case "${1:-status}" in
+install)
+  umask 077
+  binary=${2:-bin/bugsnitch}
+  test -x "$binary" || { echo "Build the runner or supply its executable path." >&2; exit 1; }
+  mkdir -p "$dir" "$(dirname "$plist")"
+  install -m 0755 "$binary" "$dir/bugsnitch.new"
+  mv "$dir/bugsnitch.new" "$dir/bugsnitch"
+  /usr/bin/plutil -create xml1 "$plist.new"
+  /usr/bin/plutil -insert Label -string "$label" "$plist.new"
+  /usr/bin/plutil -insert ProgramArguments -json '[]' "$plist.new"
+  /usr/bin/plutil -insert ProgramArguments.0 -string "$dir/bugsnitch" "$plist.new"
+  /usr/bin/plutil -insert ProgramArguments.1 -string sync "$plist.new"
+  /usr/bin/plutil -insert ProgramArguments.2 -string --watch "$plist.new"
+  /usr/bin/plutil -insert RunAtLoad -bool YES "$plist.new"
+  /usr/bin/plutil -insert KeepAlive -bool YES "$plist.new"
+  mv "$plist.new" "$plist"
+  echo "Installed. Pair the device and run scripts/runner-service start."
+  ;;
+start) launchctl bootstrap "$domain" "$plist" ;;
+stop) launchctl bootout "$domain/$label" ;;
+status) launchctl print "$domain/$label" ;;
+*) echo "Usage: scripts/runner-service {install [binary]|start|stop|status}" >&2; exit 2 ;;
+esac

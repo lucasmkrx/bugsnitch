@@ -28,6 +28,7 @@ const usage = `Usage: bugsnitch COMMAND [OPTIONS]
   usage                  Read available ChatGPT allowance windows
   proof                  Run a read-only ChatGPT authorization check
   pair, rotate, unpair, status    Manage local device enrollment
+  local-run              Execute a bounded batch of approved issues locally
   next --project ID      Print the next verified issue selection
   register               Map an assigned project to a local checkout
   sync [--watch]         Publish bounded local attempt metadata
@@ -79,6 +80,8 @@ func run(ctx context.Context, args []string) error {
 	}
 	fs := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	switch args[0] {
+	case "local-run":
+		return device.LocalRun(ctx, args[1:], os.Stdout)
 	case "share-diff":
 		return device.Share(args[1:])
 	case "next", "pair", "rotate", "unpair", "register", "sync", "status":

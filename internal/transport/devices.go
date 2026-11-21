@@ -5,13 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"net/http"
 	"regexp"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
+	"github.com/lucasmkrx/bugsnitch/internal/domain"
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 )
 
@@ -202,13 +203,25 @@ func (s *Server) syncDevice(w http.ResponseWriter, r *http.Request) error {
 	var out protocol.Enrollment
 	err := transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		var ws string
-		err := tx.QueryRowContext(ctx, "UPDATE devices SET last_contact=now() WHERE token_hash=$1 AND NOT revoked RETURNING id,workspace_id", hash(token)).Scan(&out.DeviceID, &ws)
+		var resumed bool
+		err := tx.QueryRowContext(ctx, `WITH prev AS MATERIALIZED (SELECT id,last_contact,diagnostics_since FROM devices WHERE token_hash=$1 AND NOT revoked FOR UPDATE),
+			observed AS MATERIALIZED (SELECT *,clock_timestamp() AS contacted FROM prev)
+			UPDATE devices d SET last_contact=o.contacted,diagnostics_since=coalesce(o.diagnostics_since,o.contacted)
+			FROM observed o WHERE d.id=o.id RETURNING d.id,d.workspace_id,o.diagnostics_since IS NOT NULL AND o.contacted-o.last_contact>interval '2 minutes'`, hash(token)).Scan(&out.DeviceID, &ws, &resumed)
 		if err == sql.ErrNoRows {
 			return denied
 		}
 		if err != nil {
 			return err
 		}
+		if resumed {
+			principal := audit.WithActor(ctx, audit.Device, out.DeviceID)
+			principal = audit.WithDetails(principal, audit.Details{Reason: "Authenticated sync resumed after more than two minutes without contact"})
+			if err = event(principal, tx, ws, "", "device.reconnected", out.DeviceID); err != nil {
+				return err
+			}
+		}
+		out.StageTimings = true
 		out.Workspace = ws
 		out.Projects, err = assigned(ctx, tx, ws, out.DeviceID)
 		if err != nil {
@@ -223,7 +236,7 @@ func (s *Server) syncDevice(w http.ResponseWriter, r *http.Request) error {
 					return bad("Invalid canonical issue revision")
 				}
 			}
-			if !keyPattern.MatchString(a.ID) || a.IssueNumber < 1 || a.Version < 1 || !shaPattern.MatchString(a.BaseSHA) || (a.CandidateSHA != "" && !shaPattern.MatchString(a.CandidateSHA)) || !slices.Contains([]string{"plan", "implement", "validate", "review", "wrap_up"}, a.Phase) || !slices.Contains([]string{"running", "waiting", "completed", "failed", "cancelled"}, a.State) {
+			if !keyPattern.MatchString(a.ID) || a.IssueNumber < 1 || a.Version < 1 || !shaPattern.MatchString(a.BaseSHA) || (a.CandidateSHA != "" && !shaPattern.MatchString(a.CandidateSHA)) || !domain.ValidAttempt(a.Phase, a.State, a.CandidateSHA) {
 				return bad("Invalid attempt metadata")
 			}
 			if err = saveReport(ctx, tx, ws, out.DeviceID, a); err != nil {
@@ -263,7 +276,7 @@ func saveReport(ctx context.Context, tx *sql.Tx, ws, device string, a protocol.A
 		return bad("Too many evidence records")
 	}
 	for _, e := range a.Evidence {
-		if !slices.Contains([]string{"plan", "implement", "validate", "review", "wrap_up"}, e.Phase) || (e.CandidateSHA != "" && !shaPattern.MatchString(e.CandidateSHA)) || e.ChangedFiles < 0 || e.ImportantFindings < 0 || e.MinorFindings < 0 {
+		if !slices.Contains([]string{"plan", "implement", "validate", "review", "wrap_up"}, e.Phase) || (e.CandidateSHA != "" && !shaPattern.MatchString(e.CandidateSHA)) || e.ChangedFiles < 0 || e.ImportantFindings < 0 || e.MinorFindings < 0 || (e.DurationMS != nil && (*e.DurationMS < 0 || *e.DurationMS > 86_400_000)) {
 			return bad("Invalid stage evidence")
 		}
 	}
@@ -272,7 +285,8 @@ func saveReport(ctx context.Context, tx *sql.Tx, ws, device string, a protocol.A
 	}
 	evidence, _ := json.Marshal(a.Evidence)
 	res, err := tx.ExecContext(ctx, `INSERT INTO attempt_reports(id,workspace_id,project_id,device_id,issue_number,base_sha,candidate_sha,phase,state,version,evidence,issue_updated_at,reason_code) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT (workspace_id,id) DO UPDATE SET reason_code=EXCLUDED.reason_code,issue_updated_at=coalesce(nullif(EXCLUDED.issue_updated_at,''),attempt_reports.issue_updated_at),evidence=EXCLUDED.evidence,candidate_sha=EXCLUDED.candidate_sha,phase=EXCLUDED.phase,state=EXCLUDED.state,version=EXCLUDED.version,updated_at=now() WHERE attempt_reports.device_id=EXCLUDED.device_id AND attempt_reports.project_id=EXCLUDED.project_id AND attempt_reports.issue_number=EXCLUDED.issue_number AND attempt_reports.base_sha=EXCLUDED.base_sha AND (attempt_reports.issue_updated_at='' OR EXCLUDED.issue_updated_at='' OR attempt_reports.issue_updated_at=EXCLUDED.issue_updated_at)
-	AND ((attempt_reports.version<EXCLUDED.version AND attempt_reports.state NOT IN('completed','cancelled'))
+	AND ((attempt_reports.version<EXCLUDED.version AND attempt_reports.state NOT IN('completed','failed','cancelled')
+	AND (EXCLUDED.phase<>'plan' OR attempt_reports.phase='plan') AND (EXCLUDED.candidate_sha<>'' OR attempt_reports.candidate_sha=''))
 	OR (attempt_reports.issue_updated_at='' AND EXCLUDED.issue_updated_at<>'' AND (attempt_reports.version,attempt_reports.state,attempt_reports.phase,attempt_reports.candidate_sha,attempt_reports.evidence,attempt_reports.reason_code)=(EXCLUDED.version,EXCLUDED.state,EXCLUDED.phase,EXCLUDED.candidate_sha,EXCLUDED.evidence,EXCLUDED.reason_code)))`, a.ID, ws, a.ProjectID, device, a.IssueNumber, a.BaseSHA, a.CandidateSHA, a.Phase, a.State, a.Version, evidence, a.IssueUpdatedAt, a.ReasonCode)
 	if err != nil {
 		return err

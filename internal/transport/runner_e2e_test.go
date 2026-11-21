@@ -66,6 +66,9 @@ func codexProtocolFixture(args []string) int {
 		case "model/list":
 			out = object{"data": []any{object{"id": "fixture", "model": "fixture", "isDefault": true}}}
 		case "thread/start":
+			if strings.Contains(req.Params.DeveloperInstructions, "Return disposition ready") {
+				answer = `{"summary":"Change the approved label and run the specified validation","disposition":"ready","question":""}`
+			}
 			if strings.Contains(req.Params.DeveloperInstructions, "overall project planner") {
 				answer = `{"title":"Fixture draft","milestone":"Ready","assumptions":"Test-only protocol data","target":"","forecast":"","tickets":[{"number":1,"title":"Check label","criteria":["Label visible"],"verification":"Run fixture","estimateHours":1,"priority":1,"dependencies":[],"resources":[]}]}`
 			}

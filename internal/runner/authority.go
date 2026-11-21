@@ -43,7 +43,12 @@ func failureCode(err error) string {
 		return "task_failed"
 	}
 }
-func subject(a *Attempt) Summary { s := a.Summary; s.LocalPath = a.Project.Path; return s }
+func subject(a *Attempt) Summary {
+	s := a.Summary
+	s.LocalPath = a.Project.Path
+	s.Scope = a.LocalRunScope
+	return s
+}
 func lease(ctx context.Context, s Summary, turn bool) (time.Duration, error) {
 	if CheckWorker == nil {
 		return 0, nil

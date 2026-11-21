@@ -186,6 +186,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/login", wrap(s.login))
 	mux.HandleFunc("POST /api/v1/logout", s.owner(s.logout))
 	mux.HandleFunc("GET /api/v1/state", s.owner(s.state))
+	mux.HandleFunc("GET /api/v1/diagnostics", s.owner(s.diagnostics))
 	mux.HandleFunc("POST /api/v1/projects/{project}/attempts/{id}/draft-pr", s.owner(s.requestDraft))
 	mux.HandleFunc("POST /api/v1/projects/{project}/pulls/{number}/refresh", s.owner(s.refreshPull))
 	mux.HandleFunc("POST /api/v1/projects/{project}/pulls/{number}/evidence", s.owner(s.recordPull))

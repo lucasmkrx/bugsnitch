@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/lucasmkrx/bugsnitch/internal/domain"
 )
 
 var commandPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
@@ -100,6 +102,9 @@ func watchControls(ctx context.Context, id string, cancel context.CancelFunc, do
 // Commit final state and consume pending controls under the same SQLite lock.
 // A crash before this transaction leaves the control in received for reconciliation.
 func settle(a *Attempt) (bool, error) {
+	if !domain.ValidAttempt(a.Phase, a.State, a.CandidateSHA) {
+		return false, errors.New("attempt cannot settle in this phase and state")
+	}
 	old := a.Version
 	a.Version++
 	a.UpdatedAt = now()

@@ -20,22 +20,24 @@ import (
 )
 
 type Summary struct {
-	ReasonCode     string          `json:"reasonCode,omitempty"`
-	IssueUpdatedAt string          `json:"issueUpdatedAt,omitempty"`
-	LocalPath      string          `json:"-"`
-	CriteriaHash   string          `json:"-"`
-	Evidence       []StageEvidence `json:"evidence,omitempty"`
-	ID             string          `json:"id"`
-	Workspace      string          `json:"workspace"`
-	Repository     string          `json:"repository"`
-	IssueNumber    int             `json:"issueNumber"`
-	BaseSHA        string          `json:"baseSha"`
-	CandidateSHA   string          `json:"candidateSha"`
-	Phase          string          `json:"phase"`
-	State          string          `json:"state"`
-	Version        int             `json:"version"`
+	Scope          *protocol.RunScope `json:"-"`
+	ReasonCode     string             `json:"reasonCode,omitempty"`
+	IssueUpdatedAt string             `json:"issueUpdatedAt,omitempty"`
+	LocalPath      string             `json:"-"`
+	CriteriaHash   string             `json:"-"`
+	Evidence       []StageEvidence    `json:"evidence,omitempty"`
+	ID             string             `json:"id"`
+	Workspace      string             `json:"workspace"`
+	Repository     string             `json:"repository"`
+	IssueNumber    int                `json:"issueNumber"`
+	BaseSHA        string             `json:"baseSha"`
+	CandidateSHA   string             `json:"candidateSha"`
+	Phase          string             `json:"phase"`
+	State          string             `json:"state"`
+	Version        int                `json:"version"`
 }
 type StageEvidence struct {
+	DurationMS        *int64 `json:"durationMs,omitempty"`
 	Phase             string `json:"phase"`
 	CandidateSHA      string `json:"candidateSha,omitempty"`
 	ChangedFiles      int    `json:"changedFiles,omitempty"`
@@ -68,6 +70,7 @@ type Finding struct {
 	Rationale string `json:"rationale"`
 }
 type Artifact struct {
+	DurationMS                                                                           *int64 `json:"durationMs,omitempty"`
 	ID                                                                                   string `json:"id,omitempty"`
 	Phase, At, BaseSHA, CandidateSHA, IssueVersion, Policy, Thread, Turn, Model, Summary string
 	ChangedFiles, Command                                                                []string  `json:",omitempty"`
@@ -80,9 +83,12 @@ type CandidateIntent struct {
 	Artifact Artifact
 }
 type Attempt struct {
-	PreviousAttempt string           `json:",omitempty"`
-	RetryReason     string           `json:",omitempty"`
-	Intent          *CandidateIntent `json:",omitempty"`
+	LocalRunScope   *protocol.RunScope `json:"localRunScope,omitempty"`
+	OwnerAnswer     string             `json:"ownerAnswer,omitempty"`
+	OwnerQuestion   string             `json:"ownerQuestion,omitempty"`
+	PreviousAttempt string             `json:",omitempty"`
+	RetryReason     string             `json:",omitempty"`
+	Intent          *CandidateIntent   `json:",omitempty"`
 	Summary
 	Project                                                           Project
 	Issue                                                             Issue
@@ -243,7 +249,7 @@ func (a *Attempt) add(artifact Artifact) {
 	identity, _ := json.Marshal(artifact)
 	artifact.ID = fmt.Sprintf("%x", sha256.Sum256(identity))
 	a.Artifacts = append(a.Artifacts, artifact)
-	evidence := StageEvidence{Phase: artifact.Phase, CandidateSHA: artifact.CandidateSHA, ChangedFiles: len(artifact.ChangedFiles), ExitCode: artifact.ExitCode}
+	evidence := StageEvidence{DurationMS: artifact.DurationMS, Phase: artifact.Phase, CandidateSHA: artifact.CandidateSHA, ChangedFiles: len(artifact.ChangedFiles), ExitCode: artifact.ExitCode}
 	for _, f := range artifact.Findings {
 		if f.Severity == "important" {
 			evidence.ImportantFindings++

@@ -6,16 +6,17 @@ import "slices"
 const WorkerLeaseSeconds = 15
 
 type WorkerLease struct {
-	Protocol       int    `json:"protocol"`
-	Workspace      string `json:"workspaceId"`
-	Device         string `json:"deviceId"`
-	Project        string `json:"projectId"`
-	Attempt        string `json:"attemptId"`
-	Base           string `json:"baseSha"`
-	Issue          int    `json:"issueNumber"`
-	Sequence       int64  `json:"sequence"`
-	SubjectVersion int    `json:"subjectVersion"`
-	Turn           bool   `json:"modelTurn"`
+	Scope          *RunScope `json:"scope,omitempty"`
+	Protocol       int       `json:"protocol"`
+	Workspace      string    `json:"workspaceId"`
+	Device         string    `json:"deviceId"`
+	Project        string    `json:"projectId"`
+	Attempt        string    `json:"attemptId"`
+	Base           string    `json:"baseSha"`
+	Issue          int       `json:"issueNumber"`
+	Sequence       int64     `json:"sequence"`
+	SubjectVersion int       `json:"subjectVersion"`
+	Turn           bool      `json:"modelTurn"`
 }
 type WorkerGrant struct {
 	Sequence     int64    `json:"sequence"`

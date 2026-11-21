@@ -45,10 +45,11 @@ type Client struct {
 	next         int
 }
 type Result struct {
-	Model  string `json:"model"`
-	Thread string `json:"thread"`
-	Turn   string `json:"turn"`
-	Text   string `json:"text"`
+	DurationMS *int64 `json:"-"`
+	Model      string `json:"model"`
+	Thread     string `json:"thread"`
+	Turn       string `json:"turn"`
+	Text       string `json:"text"`
 }
 
 type Failure string

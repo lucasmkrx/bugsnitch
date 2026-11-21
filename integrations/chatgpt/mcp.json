@@ -1,0 +1,1 @@
+{"mcpServers":{"bugsnitch":{"type":"stdio","command":"bugsnitch-mcp","args":[],"env_vars":["BUGSNITCH_ORIGIN","BUGSNITCH_MCP_TOKEN"]}}}

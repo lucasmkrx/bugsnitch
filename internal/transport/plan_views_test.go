@@ -65,3 +65,80 @@ func TestPlanProgressForecastUsesOnlyCurrentAttestedIntegration(t *testing.T) {
 	exec("INSERT INTO plan_issue_bindings(workspace_id,project_id,plan_id,number,generation) VALUES('personal',$1,$2,1,1)", project, id)
 	state("projected")
 }
+
+func TestForecastCalendarAndPausedCompletePlan(t *testing.T) {
+	s := fixture(t)
+	c := login(t, s)
+	run := func(q string, args ...any) {
+		t.Helper()
+		if _, err := s.DB.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run(`INSERT INTO projects(id,workspace_id,name,repository) VALUES('p','personal','Project','test/project');
+      INSERT INTO plan_versions(id,workspace_id,project_id,version,document,execution_order,approved_at)
+      VALUES('plan','personal','p',1,'{"tickets":[{"number":3,"estimateHours":1},{"number":1,"estimateHours":5},{"number":2,"estimateHours":6}]}','[1,2,3]',now())`)
+	today := time.Now().UTC().Truncate(24 * time.Hour)
+	day := func(offset int) time.Time { return today.AddDate(0, 0, offset) }
+	run("UPDATE plan_versions SET approved_at=$1,document=jsonb_set(document,'{target}',to_jsonb($2::text))", day(-5), day(7).Format(time.DateOnly))
+	run(`INSERT INTO prerequisite_evidence(workspace_id,project_id,plan_id,issue_number,revision,summary,created_at) VALUES
+        ('personal','p','plan',1,'revision','verified',$1),('personal','p','plan',3,'revision','verified',$2)`, day(-3), day(-1))
+	forecast := func(id string) object {
+		t.Helper()
+		code, data := c.req(t, "GET", "/api/v1/state", nil, "")
+		if code != 200 {
+			t.Fatal(code, data)
+		}
+		for _, row := range data["plans"].([]any) {
+			plan := row.(object)
+			if plan["id"] == id {
+				return plan["progressForecast"].(object)
+			}
+		}
+		t.Fatal("missing plan", id)
+		return nil
+	}
+	check := func(state string) {
+		t.Helper()
+		f := forecast("plan")
+		if f["status"] != state || state == "unknown" && (f["reason"] == nil || f["date"] != nil || f["targetDeltaDays"] != nil) {
+			t.Fatal(f)
+		}
+	}
+	f := forecast("plan")
+	if f["date"] != day(6).Format(time.DateOnly) || f["targetDeltaDays"] != float64(-1) || f["completedEstimateHours"] != float64(6) || f["totalEstimateHours"] != float64(12) {
+		t.Fatal(f)
+	}
+	run("UPDATE prerequisite_evidence SET created_at=$1 WHERE issue_number=3", day(-3))
+	check("unknown")
+	run("UPDATE prerequisite_evidence SET created_at=$1 WHERE issue_number=3", day(2))
+	check("unknown")
+	run("UPDATE prerequisite_evidence SET created_at=$1 WHERE issue_number=3", day(-6))
+	check("unknown")
+	run("UPDATE prerequisite_evidence SET created_at=$1 WHERE issue_number=3", day(-1))
+	run("UPDATE projects SET paused=true")
+	check("unknown")
+	run(`INSERT INTO prerequisite_evidence(workspace_id,project_id,plan_id,issue_number,revision,summary,created_at)
+        VALUES('personal','p','plan',2,'revision','verified',$1)`, day(0))
+	f = forecast("plan")
+	if f["status"] != "complete" || f["date"] != today.Format(time.DateOnly) || f["targetDeltaDays"] != float64(-7) {
+		t.Fatal(f)
+	}
+	run("DELETE FROM prerequisite_evidence WHERE issue_number=2")
+	run("UPDATE projects SET paused=false")
+	run(`UPDATE plan_versions SET approved_at='1000-01-01',document=jsonb_set(document,'{tickets,2,estimateHours}','64')`)
+	f = forecast("plan")
+	if f["status"] != "unknown" || !strings.Contains(f["reason"].(string), "calendar range") {
+		t.Fatal(f)
+	}
+	run(`INSERT INTO plan_versions(id,workspace_id,project_id,version,document,execution_order,approved_at)
+       VALUES('new','personal','p',2,'{}','[]',now())`)
+	f = forecast("plan")
+	if !strings.Contains(f["reason"].(string), "newer") {
+		t.Fatal(f)
+	}
+	f = forecast("new")
+	if !strings.Contains(f["reason"].(string), "no estimated tickets") {
+		t.Fatal(f)
+	}
+}

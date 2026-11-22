@@ -9,11 +9,11 @@ import (
 	"encoding/json"
 	"errors"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"github.com/lucasmkrx/bugsnitch/internal/storage"
+	"github.com/lucasmkrx/bugsnitch/internal/transport/views"
 )
 
 type Store struct{ DB *sql.DB }
@@ -41,40 +41,14 @@ type Incident struct {
 }
 
 func (s Store) List(ctx context.Context, workspace string) ([]Incident, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT i.id,i.project_id,i.observed,i.expected,i.steps,i.source,i.state,i.occurrences,
-	i.first_seen,i.last_seen,i.version,x.number,x.github_state,x.status,nullif(x.reason,''),
-	CASE WHEN i.source='sentry' THEN i.group_key END,nullif(latest.environment,''),nullif(latest.release,''),latest.frames
-	FROM incidents i LEFT JOIN incident_issues x ON i.id=x.incident_id
-	LEFT JOIN LATERAL(SELECT environment,release,frames FROM incident_inbox b WHERE b.workspace_id=i.workspace_id AND b.project_id=i.project_id AND b.source=i.source AND b.group_key=i.group_key ORDER BY b.seen_at DESC,b.id DESC LIMIT 1) latest ON true
-	WHERE i.workspace_id=$1 ORDER BY i.last_seen DESC,i.id LIMIT 500`, workspace)
+	var raw []byte
+	err := s.DB.QueryRowContext(ctx, "SELECT coalesce(json_agg(i.document),'[]') FROM ("+views.Incidents+") i", workspace).Scan(&raw)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	out := []Incident{}
-	for rows.Next() {
-		var i Incident
-		var frames []byte
-		if err = rows.Scan(&i.ID, &i.ProjectID, &i.Observed, &i.Expected, &i.Steps, &i.Source, &i.Status, &i.Occurrences, &i.FirstSeen, &i.LastSeen, &i.Version, &i.IssueNumber, &i.IssueState, &i.Promotion, &i.PromotionReason, &i.ProviderGroup, &i.Environment, &i.Release, &frames); err != nil {
-			return nil, err
-		}
-		if len(frames) > 0 {
-			if err = json.Unmarshal(frames, &i.Frames); err != nil {
-				return nil, err
-			}
-		}
-		if i.ProviderGroup != nil {
-			group := *i.ProviderGroup
-			*i.ProviderGroup = group[strings.LastIndex(group, "/")+1:]
-		}
-		i.Title = strings.Split(i.Observed, "\n")[0]
-		r := []rune(i.Title)
-		if len(r) > 110 {
-			i.Title = string(r[:109]) + "…"
-		}
-		out = append(out, i)
-	}
-	return out, rows.Err()
+	var out []Incident
+	err = json.Unmarshal(raw, &out)
+	return out, err
 }
 func newID() string {
 	var b [16]byte

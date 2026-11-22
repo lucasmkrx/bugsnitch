@@ -77,3 +77,23 @@ func TestWaitingStopResumesPendingReleaseAfterRestart(t *testing.T) {
 		t.Fatal(stored.Summary, err)
 	}
 }
+
+func TestRejectedCheckpointKeepsObservedVersion(t *testing.T) {
+	t.Setenv("BUGSNITCH_HOME", t.TempDir())
+	a := Attempt{Summary: Summary{ID: strings.Repeat("a", 32), Version: 1, State: "waiting", Workspace: "personal", Repository: "owner/repo", IssueNumber: 1}, UpdatedAt: "observed"}
+	if _, err := query("INSERT INTO journal_attempts VALUES(" + literal(a.ID) + ",'personal','owner/repo',1,1," + packed(a) + ",1)"); err != nil {
+		t.Fatal(err)
+	}
+	stale := a
+	if err := a.save(); err != nil {
+		t.Fatal(err)
+	}
+	stale.Message = "stale write"
+	if err := stale.save(); err == nil || stale.Version != 1 || stale.UpdatedAt != "observed" {
+		t.Fatalf("stale save returned %v with version %d, updated at %q", err, stale.Version, stale.UpdatedAt)
+	}
+	disk, err := Get(a.ID)
+	if err != nil || disk.Message != "" || disk.Version != 2 || disk.UpdatedAt != a.UpdatedAt {
+		t.Fatalf("winner lost, version %d: %v", disk.Version, err)
+	}
+}

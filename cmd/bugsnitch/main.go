@@ -99,7 +99,7 @@ func run(ctx context.Context, args []string) error {
 			output, err = exec.CommandContext(ctx, helper, "--version").Output()
 			if err == nil {
 				version := strings.TrimSpace(string(output))
-				if strings.HasPrefix(version, "bugsnitch-runner-journal ") && strings.Contains(version, " protocol=1 sqlite=") && strings.HasSuffix(version, " execution=1 controls=1") {
+				if strings.HasPrefix(version, "bugsnitch-runner-journal ") && strings.Contains(version, " protocol=1 sqlite=") && strings.HasSuffix(version, " execution=1 controls=1 attempts=1") {
 					fmt.Println(version)
 				} else {
 					err = errors.New("native runner protocol mismatch")

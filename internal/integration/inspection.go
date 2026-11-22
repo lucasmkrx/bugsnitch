@@ -13,6 +13,7 @@ import (
 
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"github.com/lucasmkrx/bugsnitch/internal/incidents"
+	"github.com/lucasmkrx/bugsnitch/internal/transport/views"
 )
 
 var (
@@ -46,66 +47,20 @@ type Pull struct {
 	IndependentReview string    `json:"independentReview,omitempty"`
 }
 
-type flags struct{ active, paused, current bool }
-
-func assess(p *Pull, f flags, now time.Time) {
-	p.Blockers = []string{}
-	block := func(condition bool, reason string) {
-		if condition {
-			p.Blockers = append(p.Blockers, reason)
-		}
-	}
-	block(!f.active, "Repository authorization unavailable")
-	block(f.paused, "Project dispatch paused")
-	block(!f.current, "Project or approved plan changed since inspection")
-	block(now.Sub(p.ObservedAt) > 10*time.Minute, "Inspection older than ten minutes")
-	block(p.State != "OPEN" || p.Draft, "Pull request is closed, merged or a draft")
-	block(p.IssueState != "OPEN", "Canonical issue is closed")
-	block(p.Base == "", "Current target branch revision unavailable")
-	block(p.CheckCount == 0 || p.Checks != "SUCCESS", "Successful head checks are missing")
-	block(p.Review != "APPROVED", "GitHub review approval is missing")
-	block(p.Validation == "", "Combined validation evidence is missing")
-	block(p.IndependentReview == "", "Independent review evidence is missing")
-	if q := p.Queue; q != nil {
-		block(q.OwnerType == "User", "GitHub merge queues require an eligible organization-owned repository")
-		block(!q.Present, "GitHub returned no merge queue for this target")
-		if rules := q.Rules; rules != nil {
-			block(!rules.QueueRequired, "The active target rulesets do not require a merge queue")
-			block(rules.RequiredChecks == 0, "The active target rulesets have no required status checks")
-			block(rules.AppBoundChecks < rules.RequiredChecks, "Some required checks accept an unspecified producer")
-		} else {
-			block(true, "Active target rules could not be verified")
-		}
-	}
-	p.Blockers = append(p.Blockers, "Automatic merge unavailable. A required merge-group check must bind the approved target and project decision.")
-}
-
-const selectPull = `SELECT o.project_id,o.number,o.issue_number,o.version,o.snapshot,o.policy_version,o.plan_version,o.observed_at,
- coalesce(m.active,false),p.paused,o.policy_version=p.policy_version AND o.plan_version=coalesce((SELECT max(version) FROM plan_versions v WHERE v.workspace_id=p.workspace_id AND v.project_id=p.id AND approved_at IS NOT NULL),0),
- coalesce((SELECT reference FROM pull_evidence e WHERE (e.workspace_id,e.project_id,e.number,e.version)=(o.workspace_id,o.project_id,o.number,o.version) AND e.kind='combined_validation'),''),
- coalesce((SELECT reference FROM pull_evidence e WHERE (e.workspace_id,e.project_id,e.number,e.version)=(o.workspace_id,o.project_id,o.number,o.version) AND e.kind='independent_review'),'')
- FROM pull_observations o JOIN projects p ON (o.workspace_id,o.project_id)=(p.workspace_id,p.id)
- LEFT JOIN github_mappings m ON (o.workspace_id,o.project_id)=(m.workspace_id,m.project_id)
- WHERE o.workspace_id=$1`
-
 type scanner interface{ Scan(...any) error }
 
 func scan(src scanner) (Pull, error) {
 	var p Pull
 	var b []byte
-	var f flags
-	err := src.Scan(&p.ProjectID, &p.Number, &p.IssueNumber, &p.Version, &b, &p.PolicyVersion, &p.PlanVersion, &p.ObservedAt, &f.active, &f.paused, &f.current, &p.Validation, &p.IndependentReview)
-	if err != nil {
+	if err := src.Scan(&b); err != nil {
 		return p, err
 	}
-	if err = json.Unmarshal(b, &p.PullObservation); err != nil {
-		return p, err
-	}
-	assess(&p, f, time.Now().UTC())
-	return p, nil
+	err := json.Unmarshal(b, &p)
+	return p, err
 }
+
 func (s Store) List(ctx context.Context, w string) ([]Pull, error) {
-	rows, err := s.DB.QueryContext(ctx, selectPull+" ORDER BY o.observed_at DESC,o.project_id,o.number LIMIT 500", w)
+	rows, err := s.DB.QueryContext(ctx, "SELECT t.document FROM ("+views.Pulls+" ORDER BY o.observed_at DESC,o.project_id,o.number LIMIT 500) t", w)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +147,7 @@ func (s Store) save(ctx context.Context, w, p string, n, issue, version, install
 			return empty, err
 		}
 	}
-	result, err := scan(tx.QueryRowContext(ctx, selectPull+" AND o.project_id=$2 AND o.number=$3", w, p, n))
+	result, err := scan(tx.QueryRowContext(ctx, "SELECT t.document FROM ("+views.Pulls+" AND o.project_id=$2 AND o.number=$3) t", w, p, n))
 	if err != nil {
 		return empty, err
 	}

@@ -158,6 +158,23 @@ def exercise(db, directory):
         assert json.loads(result["content"][0]["text"])[0]["id"] == "p"
         status = mcp("valid", "tools/call", {"name": "get_project_status", "arguments": {"projectId":"p"}})["result"]
         assert status["structuredContent"]["url"] == origin + "/#/overview?project=p"
+        sql("""INSERT INTO accounts(id) VALUES ('second');
+               INSERT INTO workspaces(id,account_id,name) VALUES ('private','second','Private workspace');
+               INSERT INTO projects(id,workspace_id,name,repository) VALUES ('hidden','private','Restricted','example/private');
+               INSERT INTO devices(id,workspace_id,name,platform) VALUES ('d','personal','Fixture','darwin');
+               INSERT INTO device_projects VALUES ('personal','d','p');
+               INSERT INTO attempt_reports(id,workspace_id,project_id,device_id,issue_number,base_sha,candidate_sha,phase,state,version)
+               SELECT 'a' || i,'personal','p','d',i,repeat('1',40),'','plan','running',1 FROM generate_series(1,101) i""")
+        def read_tool(name, **args):
+            return mcp("valid", "tools/call", {"name": name, "arguments": args})["result"]
+        assert [p["id"] for p in json.loads(read_tool("list_projects")["content"][0]["text"])] == ["p"]
+        assert len(json.loads(read_tool("list_attempts")["content"][0]["text"])) == 100
+        assert json.loads(read_tool("list_decisions")["content"][0]["text"]) == []
+        assert read_tool("get_project_status", projectId="p")["structuredContent"]["lastReportedRunning"] == 101
+        assert read_tool("get_project_status", projectId="hidden")["isError"]
+        assert read_tool("inspect_attempt", projectId="hidden", attemptId="a1")["isError"]
+        attempt = read_tool("inspect_attempt", projectId="p", attemptId="a1")["structuredContent"]
+        assert attempt["attempt"]["version"] == 1 and attempt["url"] == origin + "/#/work?project=p&id=a1"
         denied = mcp("valid", "tools/call", {"name": "report_incident", "arguments": {}})
         assert "error" in denied or denied["result"]["isError"]
         assert sql("SELECT count(*) FROM incidents") == "0"

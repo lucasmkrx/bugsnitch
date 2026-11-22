@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -136,38 +135,22 @@ type job struct {
 	doc                              domain.Plan
 }
 
-func (s Store) Run(ctx context.Context, app *github.App) {
+func (s Store) SyncIssue(ctx context.Context, app *github.App, claim storage.JobClaim) error {
 	ctx = audit.WithActor(ctx, audit.Service, "plan-publisher")
-	if app == nil {
-		return
-	}
-	tick := time.NewTicker(2 * time.Second)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-			work, cancel := context.WithTimeout(ctx, 30*time.Second)
-			e := s.step(work, func(c context.Context, i, r int64, n string) (issueWriter, error) { return app.Repository(c, i, r, n) })
-			cancel()
-			if e != nil && !errors.Is(e, sql.ErrNoRows) && ctx.Err() == nil {
-				slog.Warn("plan publication deferred")
-			}
-			check, done := context.WithTimeout(ctx, 20*time.Second)
-			e = s.reconcileIssue(check, app.ReadIssue)
-			done()
-			if e != nil && !errors.Is(e, sql.ErrNoRows) && ctx.Err() == nil {
-				slog.Warn("planned issue reconciliation deferred")
-			}
-		}
-	}
+	return s.publishClaimed(ctx, func(c context.Context, i, r int64, n string) (issueWriter, error) {
+		return app.Repository(c, i, r, n)
+	}, claim)
 }
+
 func (s Store) step(ctx context.Context, open openRepo) error {
 	claim, err := storage.ClaimJob(ctx, s.DB, "planned_issue")
 	if err != nil {
 		return err
 	}
+	return s.publishClaimed(ctx, open, claim)
+}
+
+func (s Store) publishClaimed(ctx context.Context, open openRepo, claim storage.JobClaim) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err

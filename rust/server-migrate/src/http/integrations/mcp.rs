@@ -198,18 +198,24 @@ impl ServerHandler for Tools {
             };
             input[field] = Value::String(crate::redact::redact(value));
         }
-        let result = self
-            .state
-            .domain(
-                &format!("plugin.{}", tool.name),
-                ["plugin".into(), self.grant.id.into()],
-                input,
-            )
-            .await;
-        let result = match result {
-            Ok(value) if value.is_array() => {
-                CallToolResult::success(vec![ContentBlock::text(value.to_string())])
+        let name = tool.name.as_ref();
+        let operation = format!("plugin.{name}");
+        let actor = ["plugin".into(), self.grant.id.into()];
+        if crate::plugin_reads::is_list(&operation) {
+            let list = self.state.pool.raw(&operation, actor, input).await;
+            return Ok(match list {
+                Ok(bytes) => {
+                    // RawValue validated the complete document at the pipe boundary.
+                    let text = std::str::from_utf8(&bytes)
+                        .map_err(|_| ErrorData::internal_error("Invalid list response", None))?;
+                    CallToolResult::success(vec![ContentBlock::text(text.to_owned())])
+                }
+                Err(e) => CallToolResult::error(vec![ContentBlock::text(e.1)]),
             }
+            .into());
+        }
+        let result = self.state.domain(&operation, actor, input).await;
+        let result = match result {
             Ok(value) => CallToolResult::structured(value),
             Err(e) => CallToolResult::error(vec![ContentBlock::text(e.1)]),
         };

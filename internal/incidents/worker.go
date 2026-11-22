@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
@@ -15,39 +14,6 @@ import (
 )
 
 // Run drains sanitized events independently of GitHub availability. Each external call has a deadline.
-func (s Store) Run(ctx context.Context, app *github.App) {
-	ctx = audit.WithActor(ctx, audit.Service, "incident-worker")
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		for i := 0; i < 100; i++ {
-			err := s.processOne(ctx)
-			if err != nil {
-				if !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil {
-					slog.Warn("incident inbox unavailable")
-				}
-				break
-			}
-		}
-		if app != nil {
-			work, cancel := context.WithTimeout(ctx, 45*time.Second)
-			if err := s.autoPromote(work); err != nil && work.Err() == nil {
-				slog.Warn("automatic triage deferred")
-			}
-			err := s.syncOne(work, app)
-			cancel()
-			if err != nil && !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil {
-				slog.Warn("incident issue synchronization deferred")
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-		}
-	}
-}
-
 type intent struct {
 	workspace, project, id, repo, marker, status, observed, expected, steps, source string
 	installation, repository, number, issueID                                       int64
@@ -78,6 +44,11 @@ func (s Store) syncOne(ctx context.Context, app *github.App) error {
 		return err
 	}
 	return s.syncClaimed(ctx, app, claim)
+}
+
+// SyncIssue consumes one committed, scoped native queue reservation.
+func (s Store) SyncIssue(ctx context.Context, app *github.App, claim storage.JobClaim) error {
+	return s.syncClaimed(audit.WithActor(ctx, audit.Service, "incident-worker"), app, claim)
 }
 
 func (s Store) syncClaimed(ctx context.Context, app *github.App, claim storage.JobClaim) error {

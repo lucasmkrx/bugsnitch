@@ -2,6 +2,43 @@
 
 The rebuild started on `rebuild/bugsnitch-v2` from clean main at `833637906ffc7d7de633b0de64e58c0636cd3bfd` in lucasmkrx/bugsnitch. The previous application was a TypeScript VS Code extension. Its history, MPL-2.0 license, trademarks and brand assets are preserved. [Implementation PR](https://github.com/lucasmkrx/bugsnitch/pull/24)
 
+## Rust performance work
+
+Baseline `f7733a3` (PR #33). This release moves frequent runner journal operations, dashboard reads, MCP lists and background job selection to Rust. The application keeps Go for CLI and model orchestration, small single-record MCP reads, application changes and provider-job consumers. The browser remains React and TypeScript. [Decision and boundaries](decisions/0008-performance-driven-rust.md)
+
+| Local workload | Previous release | Candidate |
+| --- | ---: | ---: |
+| Dashboard state, 3 projects | 0.95 ms | 0.98 ms |
+| Dashboard state, 60 projects | 4.99 ms | 6.56 ms |
+| Dashboard state, 120 projects (about 5 MiB) | 38.27 ms | 33.29 ms |
+| Dashboard diagnostics, 120 projects | 0.48 ms | 0.21 ms |
+| Successful idle scheduler transactions per 16 seconds | 72 | 3 |
+| Enqueue a due job through recording a fixture-provider failure | 1,434 ms | 44.5 ms |
+| Sync one device with 32 acknowledged attempts | 4.66–9.77 ms | 0.67–0.69 ms |
+| Read an attempt | 134–149 µs | 77–88 µs |
+| Save an attempt checkpoint | 431.5 µs | 282.2 µs |
+| Read 32 attempt summaries | 645.7 µs | 275.0 µs |
+| MCP list of 100 attempts with five evidence records each | 2.26–2.81 ms | 1.43–2.18 ms |
+
+Dashboard figures are warm medians of 31 authenticated loopback GETs per release and fixture after five warm-ups. The harness compares response values with identical data. The 60-project view took 1.57 ms longer. The 120-project response grew from 5,195,645 to 5,284,220 bytes due to JSON formatting, and its p95 fell from 39.27 ms to 34.20 ms. The state and diagnostics projections now use one scoped data query each, down from 15 and 9 respectively, excluding transaction setup. These figures describe the local datasets.
+
+The scheduler benchmark recorded three 16-second windows after warm-up, then timed eight due drift jobs. PostgreSQL notifications carried empty payloads and the real consumer persisted the result from a local failing provider fixture. The previous scheduler made 72 successful idle calls in each window. The candidate made 3, 3 and 4.
+
+The runner figures are medians of five one-second Go benchmarks on an Apple M5 with matching release helpers, real SQLite files and a local HTTP fixture. Get and sync show the range of medians across two series. The final alternating series also measured checkpoints and summaries. Save allocations measured in Go fell from 42,438 to 9,201 bytes per operation. The raw SQL comparison varied with host load (308 µs to 362 µs in the final series). The MCP ranges are medians of two runs per build over loopback with PostgreSQL 17 and a local scoped metadata grant. Each run used five warm-ups and 31 measured requests. The two releases returned the same number of response bytes on that fixture. Network latency to real providers and inference time are outside these workloads.
+
+To repeat the comparison, keep matching binaries for each release in their own directory. Use a disposable local PostgreSQL instance with `PGHOST`, `PGPORT` and `PGUSER` set.
+
+```sh
+python3 scripts/benchmark-dashboard.py /path/to/previous/bin bin
+python3 scripts/benchmark-mcp-reads.py /path/to/previous/bin bin
+python3 scripts/benchmark-background.py bin
+BUGSNITCH_JOURNAL_HELPER="$PWD/bin/bugsnitch-runner-journal" go test -run '^$' -bench BenchmarkJournal -benchmem -benchtime=1s -count=5 -p=1 ./internal/runner ./internal/device
+```
+
+Use this release’s runner and device benchmark fixtures in both checkouts when comparing older source. The synchronization fixture uses the real authorization filter, journal and request batching.
+
+Local verification covered the full Rust and Go race-enabled suites, migration rollback and checksums, concurrent claims, expired sessions, cross-workspace isolation, offline control recovery, large snapshots, and rejection of unexpected fields in stored provider data. The release-upgrade exercise reused the original browser cookie, two paired runners and MCP bridge from `f7733a3`. Headless Chrome opened the restored incident and device views. The signed webhook and OAuth tests used local protocol fixtures. Both macOS package architectures built locally. Production serving, live provider traffic and inference performance remain unmeasured.
+
 ## Rust public HTTP and providers
 
 This cutover began at `3f837c6`. The installed `bugsnitch-server` is Rust and serves the public REST API, dashboard, signed webhooks, hosted MCP and OAuth discovery. The GitHub App client is Rust. The private Go application worker still owns planning and policy transactions, decisions, dashboard projections and background scheduling. Both interfaces use the same durable records. [Architecture decision](decisions/0007-rust-http-and-providers.md) · [Installation](OPERATIONS.md#hosted-coordination-and-recovery)

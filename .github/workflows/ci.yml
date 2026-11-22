@@ -60,4 +60,5 @@ jobs:
           package_dir=$(mktemp -d)
           tar -xzf "bin/packages/bugsnitch-runner-darwin-$BUGSNITCH_PACKAGE_ARCH.tar.gz" -C "$package_dir"
           BUGSNITCH_HOME="$package_dir/profile" "$package_dir/bugsnitch" local-list
+          BUGSNITCH_JOURNAL_HELPER="$package_dir/bugsnitch-runner-journal" go test -count=1 ./internal/runner
           "$package_dir/runner-service" install "$package_dir/bugsnitch"

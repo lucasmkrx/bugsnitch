@@ -6,9 +6,11 @@ Owner sessions, pairing grants, device credentials, GitHub App installation toke
 
 A disconnected machine retains ownership of work. Last contact describes connectivity. Completion requires durable evidence from the owning runner. Raw logs, issue text, repository content and webhook payloads are untrusted inputs. Local execution assumes an owner-reviewed repository and validation configuration. A worktree shares Git metadata and the OS user.
 
-## Native storage components
+## Native runner and storage components
 
 The runner calls a sibling Rust process over private STDIO for both SQLite files. Each request opens the selected journal, checks its schema and executes one batch. An interrupted transaction rolls back when its connection closes. If the reply is lost after a commit, the caller reconciles against durable attempt or receipt records. Only trusted local code constructs requests. The device protocol exposes typed commands.
+
+The same packaged Rust binary has separate private entry points for Git worktree operations and validation. The Go CLI supplies the recorded local subject, checks hosted authority and owns the stage sequence. Rust checks the checkout against Git's registration and the expected revision, then runs the approved validator in its own process group. A private pipe ties its lifetime to the foreground runner. Closing the pipe requests termination. A terminal receipt identifies the observed outcome. Rust commits the final attempt version and completes pending local controls in a single SQLite transaction. [Execution decision](decisions/0005-native-runner-execution.md)
 
 At hosted startup, the Go HTTP process starts a sibling Rust migrator. Both releases use the same PostgreSQL migration files, advisory lock and SHA-256 ledger. The server opens for traffic after migration and a successful database ping. Normal API queries still use the Go connection pool. [Migration decision](decisions/0004-staged-rust-migration.md)
 

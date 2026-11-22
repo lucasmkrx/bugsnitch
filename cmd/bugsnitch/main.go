@@ -24,7 +24,7 @@ import (
 const usage = `Usage: bugsnitch COMMAND [OPTIONS]
 
   share-diff             Preview or share an approved candidate diff
-  doctor                 Check Git, the native journal helper and Codex
+  doctor                 Check Git, native runner capabilities and Codex
   models                 List models and reasoning settings on this runtime
   usage                  Read available ChatGPT allowance windows
   proof                  Run a read-only ChatGPT authorization check
@@ -89,6 +89,9 @@ func run(ctx context.Context, args []string) error {
 		return device.RunCLI(args)
 	case "doctor":
 		fmt.Printf("Platform %s/%s\n", runtime.GOOS, runtime.GOARCH)
+		if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+			return errors.New("local task execution requires macOS or Linux")
+		}
 		var missing bool
 		helper, err := journalbridge.HelperPath()
 		if err == nil {
@@ -96,15 +99,15 @@ func run(ctx context.Context, args []string) error {
 			output, err = exec.CommandContext(ctx, helper, "--version").Output()
 			if err == nil {
 				version := strings.TrimSpace(string(output))
-				if strings.HasPrefix(version, "bugsnitch-runner-journal ") && strings.Contains(version, " protocol=1 sqlite=") {
+				if strings.HasPrefix(version, "bugsnitch-runner-journal ") && strings.Contains(version, " protocol=1 sqlite=") && strings.HasSuffix(version, " execution=1 controls=1") {
 					fmt.Println(version)
 				} else {
-					err = errors.New("journal helper protocol mismatch")
+					err = errors.New("native runner protocol mismatch")
 				}
 			}
 		}
 		if err != nil {
-			fmt.Println("Native journal helper unavailable or incompatible. Install the matching runner bundle.")
+			fmt.Println("Native runner helper unavailable or incompatible. Install the matching runner bundle.")
 			missing = true
 		}
 		for _, tool := range []string{"git", "codex"} {
@@ -122,7 +125,7 @@ func run(ctx context.Context, args []string) error {
 			}
 		}
 		if missing {
-			return fmt.Errorf("the runner requires its matching journal helper, Git and Codex %s", agent.Version)
+			return fmt.Errorf("the runner requires its matching native helper, Git and Codex %s", agent.Version)
 		}
 		return nil
 	case "models", "usage":
@@ -295,7 +298,17 @@ func run(ctx context.Context, args []string) error {
 			}
 		}
 		return err
-	case "local-continue", "local-show", "local-recover", "local-cleanup":
+	case "local-cleanup":
+		id := fs.String("id", "", "local attempt id")
+		check := fs.String("integration", "", "retained integration check id")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *check != "" {
+			return runner.CleanupIntegration(ctx, *id, *check)
+		}
+		return runner.Cleanup(*id)
+	case "local-continue", "local-show", "local-recover":
 		id := fs.String("id", "", "local attempt id")
 		feedback := fs.String("feedback", "", "feedback for the worker")
 		if err := fs.Parse(args[1:]); err != nil {
@@ -307,9 +320,6 @@ func run(ctx context.Context, args []string) error {
 				return e
 			}
 			return printJSON(a.Summary)
-		}
-		if args[0] == "local-cleanup" {
-			return runner.Cleanup(*id)
 		}
 		if args[0] == "local-show" {
 			a, err := runner.Get(*id)

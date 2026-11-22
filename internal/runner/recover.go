@@ -125,32 +125,11 @@ func Cleanup(id string) error {
 	if a.State != "completed" && a.State != "cancelled" {
 		return errors.New("cleanup requires a completed or cancelled attempt")
 	}
-	if err = a.checkLocation(); err != nil {
-		return err
-	}
-	if _, err = os.Lstat(a.Worktree); errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err = a.checkTree(); err != nil {
-		return err
-	}
 	head := a.CandidateSHA
 	if head == "" {
 		head = a.BaseSHA
 	}
-	if err = a.cleanAt(head); err != nil {
-		return err
-	}
-	// Even ignored build outputs may contain user work. Never force removal.
-	others, err := git(a.Worktree, "ls-files", "--others", "--directory")
-	if err != nil {
-		return err
-	}
-	if others != "" {
-		return errors.New("worktree contains untracked or ignored files; preserved")
-	}
-	_, err = git(a.Project.Path, "worktree", "remove", "--", a.Worktree)
-	return err
+	return a.worktreeOp("cleanup", head)
 }
 
 // ReplayEnded permits the sync process to replay an acknowledgment only while

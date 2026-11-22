@@ -9,7 +9,7 @@ import (
 	"os/exec"
 )
 
-func configureValidationProcess(cmd *exec.Cmd) {}
+func isolateSupervisor(cmd *exec.Cmd) {}
 
 func lockFile(f *os.File) error {
 	return errors.New("execution currently requires macOS or Linux advisory locks")

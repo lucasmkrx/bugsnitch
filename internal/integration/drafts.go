@@ -9,16 +9,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"log/slog"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"github.com/lucasmkrx/bugsnitch/internal/incidents"
 	"github.com/lucasmkrx/bugsnitch/internal/planning"
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
+	"github.com/lucasmkrx/bugsnitch/internal/storage"
 )
 
 type DraftRequest struct {
@@ -233,6 +234,10 @@ func (s Store) RunDrafts(ctx context.Context) {
 	}
 }
 func (s Store) syncDraft(ctx context.Context) error {
+	claim, err := storage.ClaimJob(ctx, s.DB, "draft")
+	if err != nil {
+		return err
+	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -243,8 +248,9 @@ func (s Store) syncDraft(ctx context.Context) error {
 	x.report_version,x.policy_version,x.installation_id,x.repository_id,x.candidate_sha,x.base_sha,x.issue_number,x.issue_updated_at
 	FROM draft_pr_intents x JOIN projects p ON (p.workspace_id,p.id)=(x.workspace_id,x.project_id)
 	JOIN github_mappings m USING(installation_id,repository_id)
-	WHERE m.workspace_id=x.workspace_id AND m.project_id=x.project_id AND m.active AND x.status IN('queued','reconciling') AND x.next_run<=now()
-	ORDER BY x.next_run,x.attempt_id FOR UPDATE OF x SKIP LOCKED LIMIT 1`).Scan(&j.w, &j.p, &j.id, &j.target, &j.marker, &j.state, &j.tries, &j.name, &j.summary, &j.behavior, &j.c.version, &j.c.policy, &j.c.install, &j.c.repoID, &j.c.head, &j.c.base, &j.c.issue, &j.c.issueTime)
+	WHERE m.workspace_id=x.workspace_id AND m.project_id=x.project_id AND m.active AND x.status IN('queued','reconciling') AND (x.workspace_id,x.project_id,x.attempt_id)=($1,$2,$3)
+	AND x.next_run=$4::timestamptz AND x.next_run>clock_timestamp() FOR UPDATE OF x SKIP LOCKED FOR SHARE OF m SKIP LOCKED`,
+		claim.Workspace, claim.Project, claim.Item, claim.Fence).Scan(&j.w, &j.p, &j.id, &j.target, &j.marker, &j.state, &j.tries, &j.name, &j.summary, &j.behavior, &j.c.version, &j.c.policy, &j.c.install, &j.c.repoID, &j.c.head, &j.c.base, &j.c.issue, &j.c.issueTime)
 	if err != nil {
 		return err
 	}

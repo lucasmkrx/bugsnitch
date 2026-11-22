@@ -1,10 +1,26 @@
 // SPDX-License-Identifier: MPL-2.0
+mod claims;
 mod config;
+mod coord;
+mod devices;
+mod events;
+mod jobs;
 mod migrations;
 
 use std::{env, process::ExitCode, time::Duration};
 
 fn main() -> ExitCode {
+    if env::args_os().len() == 2
+        && env::args_os()
+            .nth(1)
+            .is_some_and(|arg| arg == "--coordinate")
+    {
+        return if coord::serve().is_ok() {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::FAILURE
+        };
+    }
     if env::args_os().len() != 1 {
         eprintln!("Usage: bugsnitch-server-migrate (set DATABASE_URL)");
         return ExitCode::FAILURE;

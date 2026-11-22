@@ -175,7 +175,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		if s.DB.PingContext(ctx) != nil {
+		if s.DB.PingContext(ctx) != nil || s.coordinate(ctx, "system.ready", nil, nil) != nil {
 			_ = send(w, 503, object{"status": "unavailable"})
 			return
 		}
@@ -184,6 +184,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/v1/login", wrap(s.login))
 	mux.HandleFunc("POST /api/v1/logout", s.owner(s.logout))
 	mux.HandleFunc("GET /api/v1/state", s.owner(s.state))
+	mux.HandleFunc("GET /api/v1/events", s.owner(s.eventPage))
 	mux.HandleFunc("GET /api/v1/diagnostics", s.owner(s.diagnostics))
 	mux.HandleFunc("POST /api/v1/projects/{project}/attempts/{id}/draft-pr", s.owner(s.requestDraft))
 	mux.HandleFunc("POST /api/v1/projects/{project}/pulls/{number}/refresh", s.owner(s.refreshPull))

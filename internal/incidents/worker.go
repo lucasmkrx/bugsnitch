@@ -5,12 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"github.com/lucasmkrx/bugsnitch/internal/github"
+	"github.com/lucasmkrx/bugsnitch/internal/storage"
 )
 
 // Run drains sanitized events independently of GitHub availability. Each external call has a deadline.
@@ -72,6 +73,14 @@ func issueText(j intent) (string, string) {
 func marker(s string) string { return "<!-- bugsnitch:incident:" + s + " -->" }
 
 func (s Store) syncOne(ctx context.Context, app *github.App) error {
+	claim, err := storage.ClaimJob(ctx, s.DB, "incident_issue")
+	if err != nil {
+		return err
+	}
+	return s.syncClaimed(ctx, app, claim)
+}
+
+func (s Store) syncClaimed(ctx context.Context, app *github.App, claim storage.JobClaim) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -81,7 +90,9 @@ func (s Store) syncOne(ctx context.Context, app *github.App) error {
 	err = tx.QueryRowContext(ctx, `SELECT x.workspace_id,x.project_id,x.incident_id,p.repository,x.marker,x.status,x.installation_id,x.repository_id,coalesce(x.number,0),coalesce(x.issue_id,0),x.attempt_count,x.approved_at,i.observed,i.expected,i.steps,i.source
 	FROM incident_issues x JOIN github_mappings m USING(workspace_id,project_id,installation_id,repository_id)
 	JOIN projects p ON (p.workspace_id,p.id)=(x.workspace_id,x.project_id) JOIN incidents i ON i.id=x.incident_id
-	WHERE m.active AND (x.status<>'queued' OR (NOT p.paused AND p.allow_promotion AND x.policy_version=p.policy_version)) AND x.status<>'blocked' AND x.next_run<=now() ORDER BY x.next_run,x.incident_id FOR UPDATE OF x SKIP LOCKED LIMIT 1`).Scan(
+	WHERE m.active AND (x.status<>'queued' OR (NOT p.paused AND p.allow_promotion AND x.policy_version=p.policy_version)) AND x.status<>'blocked' AND (x.workspace_id,x.project_id,x.incident_id)=($1,$2,$3)
+	AND x.next_run=$4::timestamptz AND x.next_run>clock_timestamp() FOR UPDATE OF x SKIP LOCKED`,
+		claim.Workspace, claim.Project, claim.Item, claim.Fence).Scan(
 		&j.workspace, &j.project, &j.id, &j.repo, &j.marker, &j.status, &j.installation, &j.repository, &j.number, &j.issueID, &j.tries, &j.approved, &j.observed, &j.expected, &j.steps, &j.source)
 	if err != nil {
 		return err
@@ -208,37 +219,5 @@ func reschedule(ctx context.Context, tx *sql.Tx, j intent, status, reason string
 
 // Auto promotion requires project opt-in and three independently identified recent errors on the same build/environment.
 func (s Store) autoPromote(ctx context.Context) error {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	var w, p, id string
-	var v int64
-	err = tx.QueryRowContext(ctx, `SELECT i.workspace_id,i.project_id,i.id,i.version FROM incidents i JOIN projects p ON p.id=i.project_id JOIN github_mappings m ON m.project_id=p.id WHERE i.source='sentry' AND i.state='Needs reproduction' AND i.occurrences>=3 AND p.auto_triage AND p.allow_promotion AND NOT p.paused AND m.active AND NOT EXISTS(SELECT FROM incident_issues WHERE incident_id=i.id)
- AND EXISTS(SELECT FROM incident_inbox b WHERE (b.workspace_id,b.project_id,b.source,b.group_key)=(i.workspace_id,i.project_id,i.source,i.group_key) AND b.processed AND b.environment<>'' AND b.release<>'' AND b.seen_at BETWEEN now()-interval '1 day' AND now() GROUP BY b.environment,b.release HAVING count(*)>=3)
- ORDER BY i.first_seen,i.id FOR UPDATE OF i SKIP LOCKED LIMIT 1`).Scan(&w, &p, &id, &v)
-	if err == sql.ErrNoRows {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	var policyVersion int64
-	err = tx.QueryRowContext(ctx, `INSERT INTO incident_issues(workspace_id,project_id,incident_id,installation_id,repository_id,marker,approved_version,status,policy_version)
- SELECT m.workspace_id,m.project_id,$3,m.installation_id,m.repository_id,$4,$5,'queued',p.policy_version FROM github_mappings m JOIN projects p ON p.id=m.project_id WHERE m.workspace_id=$1 AND m.project_id=$2 AND m.active AND p.auto_triage AND p.allow_promotion AND NOT p.paused ON CONFLICT DO NOTHING RETURNING policy_version`, w, p, id, newID(), v).Scan(&policyVersion)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, "UPDATE incidents SET version=version+1 WHERE id=$1", id); err != nil {
-		return err
-	}
-	ctx = audit.WithDetails(ctx, audit.Details{Reason: "Three recent events on the same build and environment qualified under project policy", SubjectVersion: v, PolicyVersion: policyVersion})
-	if err = event(ctx, tx, w, p, "incident.policy_qualified", id); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return storage.Coordinate(ctx, s.DB, "jobs.qualify_incident", struct{}{}, nil)
 }

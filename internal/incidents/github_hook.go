@@ -42,7 +42,7 @@ func (s Store) GitHubWebhook(secret string) http.Handler {
 			return
 		}
 		defer tx.Rollback()
-		rows, err := tx.QueryContext(ctx, `SELECT workspace_id,project_id,repository_id FROM github_mappings WHERE installation_id=$1 AND ($2::bigint=0 OR repository_id=$2) AND (active OR NOT $3::boolean) ORDER BY repository_id FOR UPDATE`, p.Installation.ID, p.Repository.ID, issueEvent)
+		rows, err := tx.QueryContext(ctx, `SELECT workspace_id,project_id,repository_id FROM github_mappings WHERE installation_id=$1 AND ($2::bigint=0 OR repository_id=$2) AND (active OR NOT $3::boolean) ORDER BY workspace_id,project_id,repository_id FOR UPDATE`, p.Installation.ID, p.Repository.ID, issueEvent)
 		if err != nil {
 			http.Error(w, "intake unavailable", 503)
 			return

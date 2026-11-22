@@ -11,7 +11,14 @@ use std::{
     time::Duration,
 };
 
+mod controls;
+mod integration;
+#[cfg(target_os = "macos")]
+mod macos_group;
+mod operations;
 mod schema;
+mod validation;
+mod worktree;
 
 const PROTOCOL: u8 = 1;
 const MAX_FRAME: usize = 64 * 1024 * 1024;
@@ -23,7 +30,8 @@ const MAX_FRAME: usize = 64 * 1024 * 1024;
 struct Request {
     version: u8,
     path: PathBuf,
-    sql: String,
+    sql: Option<String>,
+    control: Option<controls::Control>,
 }
 
 #[repr(u8)]
@@ -76,7 +84,12 @@ fn execute(request: Request) -> Result<Vec<u8>, Failure> {
     connection.busy_timeout(Duration::from_secs(5))?;
     connection.pragma_update(None, "foreign_keys", runner)?;
     schema::prepare(&mut connection, runner)?;
-    let mut batch = Batch::new(&connection, &request.sql);
+    let sql = match (request.sql, request.control) {
+        (Some(sql), None) => sql,
+        (None, Some(control)) if runner => return controls::execute(&mut connection, control),
+        _ => return Err(Failure::Protocol),
+    };
+    let mut batch = Batch::new(&connection, &sql);
     let mut output = Vec::new();
     while let Some(mut statement) = batch.next()? {
         let columns = statement.column_count();
@@ -136,18 +149,31 @@ fn main() -> ExitCode {
     match args.as_slice() {
         [arg] if arg == "--version" => {
             println!(
-                "bugsnitch-runner-journal {} protocol={PROTOCOL} sqlite={}",
+                "bugsnitch-runner-journal {} protocol={PROTOCOL} sqlite={} execution={} controls=1",
                 env!("CARGO_PKG_VERSION"),
                 rusqlite::version(),
+                u8::from(cfg!(any(target_os = "macos", target_os = "linux"))),
             );
             ExitCode::SUCCESS
+        }
+        [arg] if arg == "--validate" => validation::run(),
+        [arg] if arg == "--worktree" || arg == "--integration" => {
+            let op = if arg == "--worktree" {
+                worktree::run
+            } else {
+                integration::run
+            };
+            match operations::serve(op) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(_) => ExitCode::FAILURE,
+            }
         }
         [arg] if arg == "--stdio" => match serve(io::stdin().lock(), io::stdout().lock()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::FAILURE,
         },
         _ => {
-            eprintln!("use --stdio or --version");
+            eprintln!("use --stdio, --worktree, --integration, --validate or --version");
             ExitCode::FAILURE
         }
     }

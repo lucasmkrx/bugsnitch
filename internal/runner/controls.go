@@ -3,16 +3,36 @@ package runner
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
-	"strings"
+	"path/filepath"
 	"time"
 
 	"github.com/lucasmkrx/bugsnitch/internal/domain"
+	"github.com/lucasmkrx/bugsnitch/internal/journalbridge"
 )
 
-var commandPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+type controlRequest struct {
+	Action  string `json:"action"`
+	ID      string `json:"id"`
+	Command string `json:"command,omitempty"`
+	Op      string `json:"op,omitempty"`
+	Version int    `json:"version,omitempty"`
+	At      string `json:"at,omitempty"`
+	Data    string `json:"data,omitempty"`
+}
+
+func journalControl(ctx context.Context, request controlRequest) (string, error) {
+	dir, err := home()
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	result, err := journalbridge.Control(ctx, filepath.Join(dir, "runner.sqlite"), request)
+	return string(result), err
+}
 
 func RequestControl(id, op string) (string, error) {
 	a, err := Get(id)
@@ -25,26 +45,11 @@ func RequestControl(id, op string) (string, error) {
 // ApplyControl durably binds each command to the exact local subject revision.
 // A running process owns completion. Receipt alone never proves it stopped.
 func ApplyControl(command, id, op string, version int) (string, error) {
-	if !commandPattern.MatchString(command) || !idPattern.MatchString(id) || version < 1 || (op != "stop" && op != "pause") {
-		return "", errors.New("invalid attempt control")
-	}
-	key, attempt, operation := literal(command), literal(id), literal(op)
-	var target = "waiting"
-	if op == "stop" {
-		target = "cancelled"
-	}
-	b, err := query(fmt.Sprintf(`BEGIN IMMEDIATE;
- INSERT OR IGNORE INTO journal_controls(command_id,attempt_id,op,subject_version,status)
- SELECT %[1]s,id,%[3]s,%[4]d,CASE WHEN version<>%[4]d THEN 'unavailable' WHEN json_extract(data,'$.state')='running' THEN 'received' WHEN json_extract(data,'$.state')='waiting' THEN 'apply_waiting' ELSE 'unavailable' END FROM journal_attempts WHERE id=%[2]s;
- UPDATE journal_attempts SET version=version+1,data=json_set(data,'$.version',version+1,'$.state',%[5]s,'$.reasonCode','','$.Message','Owner control applied','$.UpdatedAt',%[6]s)
- WHERE id=%[2]s AND EXISTS(SELECT 1 FROM journal_controls WHERE command_id=%[1]s AND status='apply_waiting');
- UPDATE journal_controls SET status=CASE op WHEN 'stop' THEN 'finish_pending' ELSE 'completed' END WHERE command_id=%[1]s AND status='apply_waiting';
- SELECT status FROM journal_controls WHERE command_id=%[1]s AND attempt_id=%[2]s AND op=%[3]s AND subject_version=%[4]d;
- COMMIT;`, key, attempt, operation, version, literal(target), literal(now())))
+	ctx := context.Background()
+	status, err := journalControl(ctx, controlRequest{Action: "apply", ID: id, Command: command, Op: op, Version: version, At: now()})
 	if err != nil {
 		return "", err
 	}
-	status := strings.TrimSpace(string(b))
 	if status == "finish_pending" {
 		a, e := Get(id)
 		if e != nil {
@@ -55,25 +60,15 @@ func ApplyControl(command, id, op string, version int) (string, error) {
 		if e = hook(AfterFinish, &a); e != nil {
 			return "received", nil
 		}
-		if _, e = query("UPDATE journal_controls SET status='completed' WHERE command_id=" + key + " AND status='finish_pending';"); e != nil {
-			return "", e
-		}
-		return "completed", nil
-	}
-	if status == "" {
-		return "unavailable", nil
+		return journalControl(ctx, controlRequest{Action: "finish", ID: id, Command: command, Version: version})
 	}
 	return status, nil
-}
-func pending(id string) (string, error) {
-	b, err := query("SELECT op FROM journal_controls WHERE attempt_id=" + literal(id) + " AND status='received' ORDER BY CASE op WHEN 'stop' THEN 0 ELSE 1 END LIMIT 1;")
-	return strings.TrimSpace(string(b)), err
 }
 func boundary(ctx context.Context, id string) error {
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
-	op, err := pending(id)
+	op, err := journalControl(ctx, controlRequest{Action: "pending", ID: id})
 	if err != nil {
 		return err
 	}
@@ -105,31 +100,31 @@ func settle(a *Attempt) (bool, error) {
 	if !domain.ValidAttempt(a.Phase, a.State, a.CandidateSHA) {
 		return false, errors.New("attempt cannot settle in this phase and state")
 	}
-	old := a.Version
-	a.Version++
-	a.UpdatedAt = now()
-	key := literal(a.ID)
-	b, err := query(fmt.Sprintf(`BEGIN IMMEDIATE;
- UPDATE journal_attempts SET version=%d,data=CASE WHEN EXISTS(SELECT 1 FROM journal_controls WHERE attempt_id=%s AND status='received')
- THEN json_set(%s,'$.state',CASE WHEN EXISTS(SELECT 1 FROM journal_controls WHERE attempt_id=%s AND status='received' AND op='stop') THEN 'cancelled' ELSE 'waiting' END,'$.reasonCode','','$.Message','Owner control applied')
- ELSE %s END WHERE id=%s AND version=%d;
- SELECT changes(); SELECT CASE WHEN EXISTS(SELECT 1 FROM journal_controls WHERE attempt_id=%s AND status='received') THEN 1 ELSE 0 END;
- UPDATE journal_controls SET status='completed' WHERE attempt_id=%s AND status='received' AND EXISTS(SELECT 1 FROM journal_attempts WHERE id=%s AND version=%d);
- COMMIT;`, a.Version, key, packed(a), key, packed(a), key, old, key, key, key, a.Version))
+	next := *a
+	next.Version++
+	next.UpdatedAt = now()
+	data, err := json.Marshal(&next)
 	if err != nil {
 		return false, err
 	}
-	lines := strings.Fields(string(b))
-	if len(lines) != 2 || lines[0] != "1" {
+	op, err := journalControl(context.Background(), controlRequest{Action: "settle", ID: a.ID, Version: a.Version, Data: string(data)})
+	if err != nil {
+		return false, err
+	}
+	switch op {
+	case "stale":
 		return false, errors.New("attempt changed during finalization")
-	}
-	if lines[1] == "1" {
-		saved, e := Get(a.ID)
-		if e != nil {
-			return false, e
+	case "pause", "stop":
+		next.State = "waiting"
+		if op == "stop" {
+			next.State = "cancelled"
 		}
-		*a = saved
-		return true, nil
+		next.ReasonCode = ""
+		next.Message = "Owner control applied"
+	case "":
+	default:
+		return false, errors.New("unrecognized control settlement")
 	}
-	return false, nil
+	*a = next
+	return op != "", nil
 }

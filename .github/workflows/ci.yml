@@ -37,6 +37,7 @@ jobs:
           docker compose -f deploy/compose.yml down --volumes
   macos-runner:
     strategy:
+      fail-fast: false
       matrix:
         include:
           - {runner: macos-15, arch: arm64}
@@ -49,10 +50,10 @@ jobs:
         with: {go-version: '1.27.4'}
       - name: Build and exercise the native runner package
         env:
-          RUNNER_ARCH: ${{ matrix.arch }}
+          BUGSNITCH_PACKAGE_ARCH: ${{ matrix.arch }}
         run: |
-          make "macos-$RUNNER_ARCH"
+          make "macos-$BUGSNITCH_PACKAGE_ARCH"
           package_dir=$(mktemp -d)
-          tar -xzf "bin/packages/bugsnitch-runner-darwin-$RUNNER_ARCH.tar.gz" -C "$package_dir"
+          tar -xzf "bin/packages/bugsnitch-runner-darwin-$BUGSNITCH_PACKAGE_ARCH.tar.gz" -C "$package_dir"
           BUGSNITCH_HOME="$package_dir/profile" "$package_dir/bugsnitch" local-list
           "$package_dir/runner-service" install "$package_dir/bugsnitch"

@@ -204,6 +204,33 @@ func register(args []string) error {
 	_, err = journal("INSERT INTO mappings VALUES(" + sqlValue(*project) + "," + sqlValue(root) + ") ON CONFLICT(id) DO UPDATE SET path=excluded.path;")
 	return err
 }
+
+type syncAuthority struct {
+	Projects map[string]int `json:"projects"`
+	Attempts map[string]int `json:"attempts"`
+}
+
+func loadSyncAuthority(ctx context.Context, enrollment protocol.Enrollment) (syncAuthority, error) {
+	var authority syncAuthority
+	dir, err := folder()
+	if err != nil {
+		return authority, err
+	}
+	ctx, cancel := context.WithTimeout(ctx, 12*time.Second)
+	defer cancel()
+	b, err := journalbridge.Operation(ctx, filepath.Join(dir, "device.sqlite"), "sync_authority", struct {
+		Device    string `json:"device"`
+		Workspace string `json:"workspace"`
+	}{enrollment.DeviceID, enrollment.Workspace})
+	if err != nil {
+		return authority, fmt.Errorf("device journal: %w", err)
+	}
+	if len(b) == 0 {
+		return authority, errors.New("device pairing changed during sync")
+	}
+	err = json.Unmarshal(b, &authority)
+	return authority, err
+}
 func syncOnce(ctx context.Context) error {
 	p, err := getProfile()
 	if err != nil {
@@ -216,39 +243,41 @@ func syncOnce(ctx context.Context) error {
 	if err = send(ctx, p, "sync", protocol.Sync{Protocol: 1}, &assigned); err != nil {
 		return err
 	}
+	if assigned.Workspace != p.Enrollment.Workspace || assigned.DeviceID != p.Enrollment.DeviceID {
+		return errors.New("sync response differs from paired workspace or device")
+	}
 	completionErr := flushEndings(p.Enrollment.DeviceID)
 	var reports []protocol.Attempt
 	available, err := runner.Summaries()
 	if err != nil {
 		return err
 	}
-	for _, pr := range assigned.Projects {
-		mapped, err := journal("SELECT 1 FROM mappings WHERE id=" + sqlValue(pr.ID) + ";")
-		if err != nil {
-			return err
+	authority, err := loadSyncAuthority(ctx, p.Enrollment)
+	if err != nil {
+		return err
+	}
+	byRepository := make(map[string][]int)
+	for i, a := range available {
+		if authority.Attempts[a.ID] == 1 && a.Workspace == assigned.Workspace {
+			key := strings.ToLower(a.Repository)
+			byRepository[key] = append(byRepository[key], i)
 		}
-		if mapped != "1" {
+	}
+	for _, pr := range assigned.Projects {
+		if authority.Projects[pr.ID] != 1 {
 			continue
 		}
-		for _, a := range available {
-			if a.Workspace == assigned.Workspace && strings.EqualFold(a.Repository, pr.Repository) {
-				owns, err := journal("SELECT 1 FROM authority WHERE attempt=" + sqlValue(a.ID) + " AND device=" + sqlValue(p.Enrollment.DeviceID) + " AND acked>0;")
-				if err != nil {
-					return err
+		for _, i := range byRepository[strings.ToLower(pr.Repository)] {
+			a := &available[i]
+			var evidence []protocol.StageEvidence
+			for _, e := range a.Evidence {
+				var duration *int64
+				if assigned.StageTimings {
+					duration = e.DurationMS
 				}
-				if owns != "1" {
-					continue
-				}
-				var evidence []protocol.StageEvidence
-				for _, e := range a.Evidence {
-					var duration *int64
-					if assigned.StageTimings {
-						duration = e.DurationMS
-					}
-					evidence = append(evidence, protocol.StageEvidence{DurationMS: duration, Phase: e.Phase, CandidateSHA: e.CandidateSHA, ChangedFiles: e.ChangedFiles, ExitCode: e.ExitCode, ImportantFindings: e.ImportantFindings, MinorFindings: e.MinorFindings})
-				}
-				reports = append(reports, protocol.Attempt{ReasonCode: a.ReasonCode, IssueUpdatedAt: a.IssueUpdatedAt, Evidence: evidence, ID: a.ID, ProjectID: pr.ID, IssueNumber: a.IssueNumber, BaseSHA: a.BaseSHA, CandidateSHA: a.CandidateSHA, Phase: a.Phase, State: a.State, Version: a.Version})
+				evidence = append(evidence, protocol.StageEvidence{DurationMS: duration, Phase: e.Phase, CandidateSHA: e.CandidateSHA, ChangedFiles: e.ChangedFiles, ExitCode: e.ExitCode, ImportantFindings: e.ImportantFindings, MinorFindings: e.MinorFindings})
 			}
+			reports = append(reports, protocol.Attempt{ReasonCode: a.ReasonCode, IssueUpdatedAt: a.IssueUpdatedAt, Evidence: evidence, ID: a.ID, ProjectID: pr.ID, IssueNumber: a.IssueNumber, BaseSHA: a.BaseSHA, CandidateSHA: a.CandidateSHA, Phase: a.Phase, State: a.State, Version: a.Version})
 		}
 	}
 	for _, c := range assigned.Commands {

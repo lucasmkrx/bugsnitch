@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 use super::{WebError, WebResult};
+use crate::coord::{MAX_FRAME, response_limit};
 use axum::http::StatusCode;
+use bytes::Bytes;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     env, io,
     path::PathBuf,
@@ -17,7 +19,14 @@ use tokio::{
     time::timeout,
 };
 
-const MAX_FRAME: usize = 4 << 20;
+#[derive(serde::Serialize)]
+struct CommandFrame<'a> {
+    version: u8,
+    #[serde(rename = "op")]
+    operation: &'a str,
+    actor: [String; 2],
+    input: Value,
+}
 #[derive(Deserialize)]
 struct Failure {
     status: u16,
@@ -103,9 +112,38 @@ impl Pool {
         actor: [String; 2],
         input: Value,
     ) -> WebResult<Value> {
-        let bytes =
-            serde_json::to_vec(&json!({"version":1,"op":operation,"actor":actor,"input":input}))
-                .map_err(|_| WebError::internal())?;
+        self.request(operation, actor, input, |bytes| decode::<Value>(&bytes))
+            .await
+    }
+
+    pub async fn raw(
+        self: &Arc<Self>,
+        operation: &str,
+        actor: [String; 2],
+        input: Value,
+    ) -> WebResult<Bytes> {
+        self.request(operation, actor, input, |bytes| {
+            let value: &serde_json::value::RawValue = decode(&bytes)?;
+            Ok(bytes.slice_ref(value.get().as_bytes()))
+        })
+        .await
+    }
+
+    async fn request<T: Send + 'static>(
+        self: &Arc<Self>,
+        operation: &str,
+        actor: [String; 2],
+        input: Value,
+        decode: fn(Bytes) -> WebResult<T>,
+    ) -> WebResult<T> {
+        let limit = response_limit(operation);
+        let bytes = serde_json::to_vec(&CommandFrame {
+            version: 1,
+            operation,
+            actor,
+            input,
+        })
+        .map_err(|_| WebError::internal())?;
         if bytes.len() > MAX_FRAME {
             return Err(WebError(
                 StatusCode::PAYLOAD_TOO_LARGE,
@@ -132,7 +170,7 @@ impl Pool {
             };
             let outcome = tokio::select! {
                 _=reply.closed()=>Err(uncertain()),
-                result=timeout(Duration::from_secs(15),session.exchange(&bytes))=>result.unwrap_or_else(|_|Err(uncertain())),
+                result=timeout(Duration::from_secs(15),session.exchange(&bytes, limit))=>result.unwrap_or_else(|_|Err(uncertain())).and_then(decode),
             };
             if !matches!(&outcome,Err(e) if e.0.is_server_error()) {
                 pool.idle.lock().expect("coordinator pool").push(session);
@@ -147,13 +185,13 @@ impl Pool {
     }
 }
 impl Session {
-    async fn exchange(&mut self, b: &[u8]) -> WebResult<Value> {
+    async fn exchange(&mut self, b: &[u8], limit: usize) -> WebResult<Bytes> {
         let read = async {
             self.writer.write_u32(b.len() as u32).await?;
             self.writer.write_all(b).await?;
             self.writer.flush().await?;
             let n = self.reader.read_u32().await? as usize;
-            if n == 0 || n > MAX_FRAME {
+            if n == 0 || n > limit {
                 return Err(io::Error::other("Invalid frame"));
             }
             let mut bytes = vec![0; n];
@@ -162,22 +200,41 @@ impl Session {
         }
         .await
         .map_err(|_| uncertain())?;
-        let value: Value = serde_json::from_slice(&read).map_err(|_| uncertain())?;
-        if value["version"].as_u64() != Some(1) {
-            return Err(uncertain());
-        }
-        match (value.get("value"), value.get("error")) {
-            (Some(v), None) => Ok(v.clone()),
-            (None, Some(v)) => {
-                let e: Failure = serde_json::from_value(v.clone()).map_err(|_| uncertain())?;
-                let status = StatusCode::from_u16(e.status).map_err(|_| uncertain())?;
-                if !status.is_client_error() && !status.is_server_error() {
-                    return Err(uncertain());
-                }
+        Ok(read.into())
+    }
+}
+
+// A successful operation may return an explicit JSON null. Distinguish it
+// from an absent value and reject ambiguous or malformed helper responses.
+fn present<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(
+    d: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(d).map(Some)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, bound(deserialize = "T: Deserialize<'de>"))]
+struct Reply<T> {
+    version: u8,
+    #[serde(default, deserialize_with = "present")]
+    value: Option<T>,
+    #[serde(default, deserialize_with = "present")]
+    error: Option<Failure>,
+}
+
+fn decode<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> WebResult<T> {
+    let reply: Reply<T> = serde_json::from_slice(bytes).map_err(|_| uncertain())?;
+    match (reply.version, reply.value, reply.error) {
+        (1, Some(v), None) => Ok(v),
+        (1, None, Some(e)) => {
+            let status = StatusCode::from_u16(e.status).map_err(|_| uncertain())?;
+            if status.is_client_error() || status.is_server_error() {
                 Err(WebError(status, e.message))
+            } else {
+                Err(uncertain())
             }
-            _ => Err(uncertain()),
         }
+        _ => Err(uncertain()),
     }
 }
 
@@ -185,6 +242,40 @@ impl Session {
 mod tests {
     use super::*;
     use std::{fs, os::unix::fs::PermissionsExt};
+
+    #[test]
+    fn helper_frames_preserve_raw_values_and_reject_ambiguous_replies() {
+        use serde_json::value::RawValue;
+        let bytes =
+            Bytes::from_static(br#"{ "value": {"escaped":"a\"b", "key":null}, "version":1 }"#);
+        let borrowed = decode::<&RawValue>(&bytes).unwrap().get().as_bytes();
+        assert_eq!(
+            bytes.slice_ref(borrowed),
+            &br#"{"escaped":"a\"b", "key":null}"#[..]
+        );
+        assert_eq!(
+            decode::<Value>(br#"{"version":1,"value":null}"#).unwrap(),
+            Value::Null
+        );
+        for invalid in [
+            r#"{"version":2,"value":true}"#,
+            r#"{"version":1,"value":1,"value":2}"#,
+            r#"{"version":1,"value":3,"error":null}"#,
+            r#"{"version":1,"value":3,"error":{"status":403,"message":"x"}}"#,
+            r#"{"version":1,"error":{"status":200,"message":"x"}}"#,
+            r#"{"version":1,"value":[}"#,
+        ] {
+            assert_eq!(
+                decode::<&RawValue>(invalid.as_bytes()).unwrap_err().0,
+                StatusCode::SERVICE_UNAVAILABLE
+            );
+        }
+        let denied = decode::<Value>(
+            br#"{"version":1,"error":{"status":403,"message":"Permission denied"}}"#,
+        )
+        .unwrap_err();
+        assert_eq!(denied.0, StatusCode::FORBIDDEN);
+    }
 
     #[tokio::test]
     async fn disconnected_callers_release_all_native_slots() {

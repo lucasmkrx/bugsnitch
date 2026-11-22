@@ -27,6 +27,7 @@ COPY scripts/rust_notices.py ./scripts/rust_notices.py
 COPY internal/storage/migrations ./internal/storage/migrations
 COPY internal/audit/record.sql ./internal/audit/record.sql
 COPY internal/incidents/sql ./internal/incidents/sql
+COPY internal/transport/views ./internal/transport/views
 # The server and coordinator use the runtime image's musl and libpq.
 ENV RUSTFLAGS="-C target-feature=-crt-static"
 RUN cargo build --locked --release --bins -p bugsnitch-server-migrate -p bugsnitch-provider \

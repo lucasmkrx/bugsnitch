@@ -15,7 +15,7 @@ struct Request {
 
 // Retain seq as the historical event identity. The commit-ordered position is
 // sent as a string, so JavaScript consumers can round-trip all bigint cursors.
-const FIELDS: &str = r#"seq,position::text AS cursor,project_id AS "projectId",kind,subject_id AS "subjectId",created_at AS "createdAt",actor_source AS "actorSource",actor_id AS "actorId",reason,policy_version AS "policyVersion",subject_version AS "subjectVersion",evidence_ref AS "evidenceRef""#;
+pub(crate) const FIELDS: &str = r#"seq,position::text AS cursor,project_id AS "projectId",kind,subject_id AS "subjectId",created_at AS "createdAt",actor_source AS "actorSource",actor_id AS "actorId",reason,policy_version AS "policyVersion",subject_version AS "subjectVersion",evidence_ref AS "evidenceRef""#;
 
 pub fn handle(db: &Db<'_>, op: &str, input: Value) -> Result<Value> {
     let r: Request = serde_json::from_value(input)?;

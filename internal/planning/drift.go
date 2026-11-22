@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"github.com/lucasmkrx/bugsnitch/internal/domain"
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"github.com/lucasmkrx/bugsnitch/internal/incidents"
@@ -69,11 +70,19 @@ func CheckIssue(ctx context.Context, tx *sql.Tx, ws, p, plan string, number int,
 
 type readCanonical func(context.Context, int64, int64, string, int64) (github.Issue, error)
 
+func (s Store) SyncDrift(ctx context.Context, app *github.App, claim storage.JobClaim) error {
+	return s.reconcileClaimed(audit.WithActor(ctx, audit.Service, "plan-publisher"), app.ReadIssue, claim)
+}
+
 func (s Store) reconcileIssue(ctx context.Context, read readCanonical) error {
 	claim, err := storage.ClaimJob(ctx, s.DB, "drift")
 	if err != nil {
 		return err
 	}
+	return s.reconcileClaimed(ctx, read, claim)
+}
+
+func (s Store) reconcileClaimed(ctx context.Context, read readCanonical, claim storage.JobClaim) error {
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err

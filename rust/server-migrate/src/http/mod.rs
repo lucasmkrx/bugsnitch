@@ -99,6 +99,10 @@ impl AppState {
     pub async fn coord(&self, op: &str, actor: [String; 2], input: Value) -> WebResult<Value> {
         self.pool.call(op, actor, input).await
     }
+    async fn coord_raw(&self, op: &str, actor: [String; 2], input: Value) -> WebResult<Response> {
+        let bytes = self.pool.raw(op, actor, input).await?;
+        Ok(([(header::CONTENT_TYPE, "application/json")], bytes).into_response())
+    }
     pub async fn domain(&self, op: &str, actor: [String; 2], input: Value) -> WebResult<Value> {
         bridge::call(&self.socket, op, actor, input).await
     }
@@ -216,6 +220,7 @@ fn router(s: Shared) -> Router {
         ));
     Router::new()
         .merge(owner)
+        .merge(owner::reads())
         .merge(devices::public())
         .route("/api/v1/login", post(session::login))
         .layer(DefaultBodyLimit::max(64 << 10))

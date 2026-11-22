@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 use crate::coord::{Db, Details, Error, Result};
+use serde::Deserialize;
 use serde_json::{Value, json};
 
 // Reserve one due row without holding a native connection across provider I/O.
@@ -59,7 +60,104 @@ const DRIFT: &str = "
     WHERE (z.workspace_id,z.project_id,z.number)=(ready.workspace_id,ready.project_id,ready.number)
     RETURNING z.workspace_id,z.project_id,''::text,z.number,z.next_check::text";
 
+// The same eligibility query drives both the cheap readiness hint and the locked
+// qualification operation. Another server may consume a hinted row first.
+macro_rules! qualifying {
+    () => {
+        "SELECT i.workspace_id,i.project_id,i.id,i.version FROM incidents i
+         JOIN projects p ON (p.workspace_id,p.id)=(i.workspace_id,i.project_id)
+         JOIN github_mappings m ON (m.workspace_id,m.project_id)=(i.workspace_id,i.project_id)
+         WHERE i.source='sentry' AND i.state='Needs reproduction' AND i.occurrences>=3
+         AND p.auto_triage AND p.allow_promotion AND NOT p.paused AND m.active
+         AND NOT EXISTS(SELECT FROM incident_issues WHERE incident_id=i.id)
+         AND EXISTS(SELECT FROM incident_inbox b WHERE (b.workspace_id,b.project_id,b.source,b.group_key)
+                                      =(i.workspace_id,i.project_id,i.source,i.group_key)
+             AND b.processed AND b.environment<>'' AND b.release<>'' AND b.seen_at BETWEEN now()-interval '1 day' AND now()
+             GROUP BY b.environment,b.release HAVING count(*)>=3)
+         ORDER BY i.first_seen,i.id"
+    };
+}
+
+#[derive(Deserialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum Lane {
+    Inbox,
+    Triage,
+    IncidentIssue,
+    Draft,
+    PlannedIssue,
+    Drift,
+}
+
+impl Lane {
+    // Only these fixed identifiers and fixed SQL fragments enter the query.
+    fn selection(&self) -> (&'static str, &'static str) {
+        match self {
+            Self::Inbox => (
+                "inbox",
+                "SELECT 1 WHERE EXISTS(SELECT FROM incident_inbox WHERE NOT processed)",
+            ),
+            Self::Triage => (
+                "triage",
+                concat!("SELECT 1 WHERE EXISTS(", qualifying!(), ")"),
+            ),
+            Self::IncidentIssue => ("incident_issue", INCIDENT_ISSUE),
+            Self::Draft => ("draft", DRAFT),
+            Self::PlannedIssue => ("planned_issue", PLANNED_ISSUE),
+            Self::Drift => ("drift", DRIFT),
+        }
+    }
+}
+
+fn schedule(db: &Db<'_>, input: Value) -> Result<Value> {
+    let lanes: Vec<Lane> = serde_json::from_value(input)?;
+    if lanes.len() > 6 {
+        return Err(Error::bad("Too many background queues"));
+    }
+    if lanes.is_empty() {
+        return Ok(json!([]));
+    }
+    let mut selections = Vec::new();
+    let mut output = Vec::new();
+    for (i, lane) in lanes.iter().enumerate() {
+        if lanes[..i].contains(lane) {
+            return Err(Error::bad("Duplicate background queue"));
+        }
+        let (name, query) = lane.selection();
+        if matches!(lane, Lane::Inbox | Lane::Triage) {
+            selections.push(format!("{name} AS ({query})"));
+            output.push(format!("SELECT '{name}', '', '', '', 0, '' FROM {name}"));
+        } else {
+            selections.push(format!(
+                "{name}(workspace,project,item,number,fence) AS ({query})"
+            ));
+            output.push(format!(
+                "SELECT '{name}',workspace,project,item,number,fence FROM {name}"
+            ));
+        }
+    }
+    // Each free provider lane reserves at most one row. The worker rechecks its
+    // lease and authority after this commits. Inbox work has its own transaction
+    // so a bad observation cannot roll back reservations for unrelated jobs.
+    let sql = format!(
+        "WITH {} {}",
+        selections.join(","),
+        output.join(" UNION ALL ")
+    );
+    let mut jobs = Vec::new();
+    for row in db.rows(&sql, &[])? {
+        jobs.push(
+            json!({"lane": row.text(0)?, "workspace": row.text(1)?, "project": row.text(2)?,
+            "item": row.text(3)?, "number": row.i64(4)?, "fence": row.text(5)?}),
+        );
+    }
+    Ok(json!(jobs))
+}
+
 pub fn handle(db: &Db<'_>, op: &str, input: Value) -> Result<Value> {
+    if op == "jobs.schedule" {
+        return schedule(db, input);
+    }
     if !input.as_object().is_some_and(|o| o.is_empty()) {
         return Err(Error::bad("Job selection accepts no arguments"));
     }
@@ -110,19 +208,10 @@ fn process_incident(db: &Db<'_>) -> Result<Value> {
 
 fn qualify_incident(db: &Db<'_>) -> Result<Value> {
     let Some(incident) = db.optional(
-        "SELECT i.workspace_id,i.project_id,i.id,i.version FROM incidents i
-         JOIN projects p ON (p.workspace_id,p.id)=(i.workspace_id,i.project_id)
-         JOIN github_mappings m ON (m.workspace_id,m.project_id)=(i.workspace_id,i.project_id)
-         WHERE i.source='sentry' AND i.state='Needs reproduction' AND i.occurrences>=3
-         AND p.auto_triage AND p.allow_promotion AND NOT p.paused AND m.active
-         AND NOT EXISTS(SELECT FROM incident_issues WHERE incident_id=i.id)
-         AND EXISTS(SELECT FROM incident_inbox b WHERE (b.workspace_id,b.project_id,b.source,b.group_key)
-                                      =(i.workspace_id,i.project_id,i.source,i.group_key)
-             AND b.processed AND b.environment<>'' AND b.release<>'' AND b.seen_at BETWEEN now()-interval '1 day' AND now()
-             GROUP BY b.environment,b.release HAVING count(*)>=3)
-         ORDER BY i.first_seen,i.id FOR UPDATE OF i SKIP LOCKED LIMIT 1",
+        concat!(qualifying!(), " FOR UPDATE OF i SKIP LOCKED LIMIT 1"),
         &[],
-    )? else {
+    )?
+    else {
         return Ok(json!(false));
     };
     let (ws, project, id, version) = (

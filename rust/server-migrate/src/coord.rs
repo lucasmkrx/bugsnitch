@@ -4,13 +4,55 @@ use libpq::{Connection, Format, PQResult, Status};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
+    cell::Cell,
     env,
     ffi::CString,
     io::{self, Read, Write},
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
-const MAX_FRAME: usize = 4 << 20;
+pub(super) const MAX_FRAME: usize = 4 << 20;
+
+pub(super) fn response_limit(op: &str) -> usize {
+    // Public workspace reads and MCP projections previously used the domain
+    // socket's 32 MiB reply budget. Mutation inputs stay bounded at 4 MiB.
+    if matches!(op, "workspace.state" | "workspace.diagnostics") || crate::plugin_reads::is_list(op)
+    {
+        32 << 20
+    } else {
+        MAX_FRAME
+    }
+}
+
+enum ReplyValue {
+    Structured(Value),
+    // PostgreSQL produces the projection as a single JSON document. Validate
+    // it once without building another tree of every record and key.
+    Projection(Box<serde_json::value::RawValue>),
+}
+
+// PostgreSQL's JSON aggregates include separator whitespace. Drop only JSON
+// whitespace outside strings, in the original allocation, to keep public
+// payloads compact without deserializing and serializing every object.
+fn compact_projection(document: String) -> Result<Box<serde_json::value::RawValue>> {
+    let mut bytes = document.into_bytes();
+    let mut quoted = false;
+    let mut escaped = false;
+    bytes.retain(|&byte| {
+        if escaped {
+            escaped = false;
+        } else if byte == b'"' {
+            quoted = !quoted;
+        } else if quoted && byte == b'\\' {
+            escaped = true;
+        } else if !quoted && matches!(byte, b' ' | b'\t' | b'\r' | b'\n') {
+            return false;
+        }
+        true
+    });
+    let document = String::from_utf8(bytes).map_err(|_| Error::internal())?;
+    serde_json::value::RawValue::from_string(document).map_err(|_| Error::internal())
+}
 
 #[derive(Debug, Serialize)]
 pub struct Error {
@@ -27,6 +69,9 @@ impl Error {
     }
     pub fn bad(message: &str) -> Self {
         Self::new(400, message)
+    }
+    pub fn unauthenticated() -> Self {
+        Self::new(401, "Session expired")
     }
     pub fn denied() -> Self {
         Self::new(403, "Permission denied")
@@ -64,12 +109,27 @@ pub struct Details<'a> {
     pub evidence: &'a str,
 }
 
+// Keep only the two large, fixed dashboard statements on a worker's own
+// PostgreSQL session. Ordinary coordinator calls never prepare them.
+struct ProjectionPlans {
+    prefix: String,
+    prepared: [Cell<bool>; 2],
+    disabled: Cell<bool>,
+}
+
 pub struct Db<'a> {
     conn: &'a Connection,
     actor: (&'a str, &'a str),
+    plans: &'a ProjectionPlans,
 }
 pub struct Row(Vec<Option<String>>);
 impl Row {
+    pub fn into_text(mut self) -> Result<String> {
+        if self.0.len() != 1 {
+            return Err(Error::internal());
+        }
+        self.0.pop().flatten().ok_or_else(Error::internal)
+    }
     pub fn opt(&self, i: usize) -> Result<Option<&str>> {
         self.0
             .get(i)
@@ -127,6 +187,43 @@ impl Db<'_> {
             &vec![Format::Text; values.len()],
             Format::Text,
         ))
+    }
+    pub fn projection(&self, op: &str, sql: &str, session_hash: &str) -> Result<PQResult> {
+        let slot = match op {
+            "workspace.state" => 0,
+            "workspace.diagnostics" => 1,
+            _ => return Err(Error::internal()),
+        };
+        let uncached = || self.query(sql, &[session_hash]);
+        if self.plans.disabled.get() {
+            return uncached();
+        }
+        let name = format!("{}_{}", self.plans.prefix, slot);
+        let prepared = &self.plans.prepared[slot];
+        if !prepared.get() {
+            checked(self.conn.prepare(Some(&name), sql, &[]))?;
+            prepared.set(true);
+        }
+        let hash = CString::new(session_hash).map_err(|_| Error::bad("Invalid session hash"))?;
+        let raw = self.conn.exec_prepared(
+            Some(&name),
+            &[Some(hash.as_bytes_with_nul())],
+            &[Format::Text],
+            Format::Text,
+        );
+        if raw
+            .error_field(libpq::result::ErrorField::Sqlstate)
+            .ok()
+            .flatten()
+            == Some("26000")
+        {
+            // A transaction-pooling proxy dropped the prepared statement. A
+            // read can safely fall back inside the original snapshot.
+            checked(self.conn.exec("ROLLBACK TO SAVEPOINT projection_plan"))?;
+            self.plans.disabled.set(true);
+            return uncached();
+        }
+        checked(raw)
     }
     pub fn rows(&self, sql: &str, params: &[&str]) -> Result<Vec<Row>> {
         let r = self.query(sql, params)?;
@@ -191,20 +288,41 @@ impl Db<'_> {
     }
 }
 
-fn transaction(conn: &Connection, req: Request, schema: Option<&str>) -> Result<Value> {
+fn transaction(
+    conn: &Connection,
+    req: Request,
+    schema: Option<&str>,
+    plans: &ProjectionPlans,
+) -> Result<ReplyValue> {
     if req.version != 1 {
         return Err(Error::bad("Unsupported coordination protocol"));
     }
     let db = Db {
         conn,
+        plans,
         actor: (&req.actor[0], &req.actor[1]),
     };
-    let begin = if req.op == "claims.next" {
-        "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY"
-    } else {
-        "BEGIN"
+    // Keep settings transaction-local even when an operator uses pooled
+    // PostgreSQL connections. Send static setup statements in one round trip.
+    let begin = match req.op.as_str() {
+        "claims.next" | "workspace.state" | "workspace.diagnostics" => {
+            "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;"
+        }
+        op if crate::plugin_reads::is_list(op) => "BEGIN READ ONLY;",
+        _ => "BEGIN;",
     };
-    checked(conn.exec(begin))?;
+    let cached_read = matches!(req.op.as_str(), "workspace.state" | "workspace.diagnostics")
+        && !plans.disabled.get();
+    let cache = if cached_read {
+        if schema.is_some() {
+            " SET LOCAL plan_cache_mode=force_generic_plan;"
+        } else {
+            " SET LOCAL plan_cache_mode=force_generic_plan; SAVEPOINT projection_plan;"
+        }
+    } else {
+        ""
+    };
+    checked(conn.exec(&format!("{begin} SET LOCAL statement_timeout='12s'; SET LOCAL client_min_messages=ERROR; SET LOCAL TIME ZONE 'UTC';{cache}")))?;
     // One request owns one session until COMMIT or ROLLBACK. A closed parent
     // pipe or killed worker cannot cause the host to repeat the operation.
     let result = (|| {
@@ -213,8 +331,31 @@ fn transaction(conn: &Connection, req: Request, schema: Option<&str>) -> Result<
                 "SELECT pg_catalog.set_config('search_path',$1,true)",
                 &[schema],
             )?;
+            if cached_read {
+                checked(conn.exec("SAVEPOINT projection_plan"))?;
+            }
         }
-        checked(conn.exec("SET LOCAL statement_timeout='12s'; SET LOCAL client_min_messages=ERROR; SET LOCAL TIME ZONE 'UTC'"))?;
+        if matches!(req.op.as_str(), "workspace.state" | "workspace.diagnostics")
+            || crate::plugin_reads::is_list(&req.op)
+        {
+            let document = if crate::plugin_reads::is_list(&req.op) {
+                crate::plugin_reads::list(&db, &req.op, req.input)?
+            } else {
+                crate::snapshot::read(&db, &req.op, req.input)?
+            };
+            // List JSON is embedded as MCP text, so separator whitespace
+            // has a wire cost. Large dashboard values can normally pass through
+            // unchanged. Compact at the ceiling to retain compatibility with
+            // previously accepted documents.
+            let raw = if crate::plugin_reads::is_list(&req.op)
+                || document.len() >= response_limit(&req.op) - 32
+            {
+                compact_projection(document)?
+            } else {
+                serde_json::value::RawValue::from_string(document).map_err(|_| Error::internal())?
+            };
+            return Ok(ReplyValue::Projection(raw));
+        }
         match req.op.split('.').next() {
             Some("session") => crate::http::session::apply(&db, &req.op, req.input),
             Some("claims") => claims::handle(&db, &req.op, req.input),
@@ -228,6 +369,7 @@ fn transaction(conn: &Connection, req: Request, schema: Option<&str>) -> Result<
             }
             _ => Err(Error::bad("Unknown coordination operation")),
         }
+        .map(ReplyValue::Structured)
     })();
     match result {
         Ok(value) => {
@@ -282,10 +424,49 @@ fn watchdog() -> std::sync::mpsc::Sender<bool> {
     tx
 }
 
+// For a large projection PostgreSQL has already produced a bounded JSON
+// document. Write the frame in parts so its envelope needs no second buffer.
+fn write_reply(
+    output: &mut impl Write,
+    result: Result<ReplyValue>,
+    limit: usize,
+) -> io::Result<()> {
+    let encoded;
+    let (prefix, payload, suffix): (&[u8], &[u8], &[u8]) = match &result {
+        Ok(ReplyValue::Projection(raw)) => {
+            (br#"{"version":1,"value":"#, raw.get().as_bytes(), b"}")
+        }
+        Ok(ReplyValue::Structured(value)) => {
+            encoded = serde_json::to_vec(value)?;
+            (br#"{"version":1,"value":"#, &encoded, b"}")
+        }
+        Err(error) => {
+            encoded = serde_json::to_vec(error)?;
+            (br#"{"version":1,"error":"#, &encoded, b"}")
+        }
+    };
+    let len = prefix.len() + payload.len() + suffix.len();
+    if len > limit {
+        return Err(io::Error::other("Coordination response too large"));
+    }
+    output.write_all(&(len as u32).to_be_bytes())?;
+    output.write_all(prefix)?;
+    output.write_all(payload)?;
+    output.write_all(suffix)?;
+    output.flush()
+}
+
 pub fn serve() -> io::Result<()> {
     let invalid = || io::Error::other("coordination service unavailable");
     let settings =
         config::split(&env::var("DATABASE_URL").map_err(|_| invalid())?).map_err(|_| invalid())?;
+    let mut nonce = [0u8; 12];
+    getrandom::fill(&mut nonce).map_err(|_| invalid())?;
+    let plans = ProjectionPlans {
+        prefix: format!("bugsnitch_{}", hex::encode(nonce)),
+        prepared: Default::default(),
+        disabled: Cell::new(false),
+    };
     let guard = watchdog();
     let conn = Connection::new(&settings.native).map_err(|_| invalid())?;
     guard.send(false).map_err(|_| invalid())?;
@@ -304,20 +485,50 @@ pub fn serve() -> io::Result<()> {
         }
         let mut data = vec![0; n];
         input.read_exact(&mut data)?;
-        let result = serde_json::from_slice(&data)
+        let request = serde_json::from_slice::<Request>(&data);
+        let limit = request
+            .as_ref()
+            .map_or(MAX_FRAME, |r| response_limit(&r.op));
+        let result = request
             .map_err(Error::from)
-            .and_then(|req| transaction(&conn, req, settings.search_path.as_deref()));
-        let response = match result {
-            Ok(value) => json!({"version":1,"value":value}),
-            Err(e) => json!({"version":1,"error":e}),
-        };
-        let frame = serde_json::to_vec(&response)?;
-        if frame.len() > MAX_FRAME {
-            return Err(invalid());
-        }
-        output.write_all(&(frame.len() as u32).to_be_bytes())?;
-        output.write_all(&frame)?;
-        output.flush()?;
+            .and_then(|req| transaction(&conn, req, settings.search_path.as_deref(), &plans));
+        write_reply(&mut output, result, limit)?;
         guard.send(false).map_err(|_| invalid())?;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn projection_frame_is_bounded_before_writing_its_header() {
+        let document =
+            || ReplyValue::Projection(compact_projection(r#"[ "record" ]"#.into()).unwrap());
+        let mut bytes = Vec::new();
+        write_reply(&mut bytes, Ok(document()), 100).unwrap();
+        assert_eq!(
+            u32::from_be_bytes(bytes[..4].try_into().unwrap()) as usize,
+            bytes.len() - 4
+        );
+        assert_eq!(&bytes[4..], br#"{"version":1,"value":["record"]}"#);
+        let mut incomplete = Vec::new();
+        assert!(write_reply(&mut incomplete, Ok(document()), bytes.len() - 5).is_err());
+        assert!(incomplete.is_empty());
+    }
+
+    #[test]
+    fn projection_compaction_preserves_escaped_content_and_numbers() {
+        let input = r#"
+          { "data": ["🦀  spaces", " tabs\t ", "\\", "escaped \"  quote", 1.230e+1],
+            "empty": [  ], "value with spaces ": null }
+        "#;
+        let raw = compact_projection(input.into()).unwrap();
+        assert_eq!(
+            serde_json::from_str::<Value>(input).unwrap(),
+            serde_json::from_str::<Value>(raw.get()).unwrap()
+        );
+        assert!(raw.get().contains("1.230e+1"));
+        assert!(raw.get().contains(r#""empty":[]"#));
     }
 }

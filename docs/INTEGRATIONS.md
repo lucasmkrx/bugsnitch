@@ -6,7 +6,7 @@ The local Codex account, hosted owner, paired runner and provider installations 
 
 ## ChatGPT metadata tools
 
-The Rust service uses the official rmcp SDK 3.11.0 to serve stateless Streamable HTTP at /mcp. The desktop bugsnitch-mcp executable uses the Go MCP SDK v1.8.0 to bridge those authorized tools into local STDIO. The public tool names and argument schemas are preserved. Available tools list projects, attempts and decisions, report a manual incident, and apply an owner's version-bound answer. Reads require workspace.read. Writes additionally require incident.write or decision.write. These calls share persisted workspace records. [Rust MCP SDK](https://docs.rs/rmcp/3.11.0/rmcp/) · [Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports)
+The Rust service uses the official rmcp SDK 3.11.0 to serve stateless Streamable HTTP at /mcp. The desktop bugsnitch-mcp executable uses the Go MCP SDK v1.8.0 to bridge those authorized tools into local STDIO. The public tool names and argument schemas are preserved. Rust queries PostgreSQL directly for project, attempt and decision lists. Single-subject reads and mutations use the private application worker. Available tools list projects, attempts and decisions, report a manual incident, and apply an owner's version-bound answer. Reads require workspace.read. Writes additionally require incident.write or decision.write. These calls share persisted workspace records. [Rust MCP SDK](https://docs.rs/rmcp/3.11.0/rmcp/) · [Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28/basic/transports)
 
 ### Desktop ZIP and bridge credentials
 

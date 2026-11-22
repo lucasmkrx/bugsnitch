@@ -364,6 +364,15 @@ func TestEmergencyRotationAndContentExpiry(t *testing.T) {
 	if status != 200 || len(body["commands"].([]any)) != 1 {
 		t.Fatal("missing stop request", status, body)
 	}
+	stopID := body["commands"].([]any)[0].(map[string]any)["id"].(string)
+	if _, err := s.DB.Exec("UPDATE controls SET expires_at=now()-interval '1 hour' WHERE id=$1", stopID); err != nil {
+		t.Fatal(err)
+	}
+	status, body = c.req(t, "POST", "/api/v1/device/sync", protocol.Sync{Protocol: 1}, next)
+	commands, _ := body["commands"].([]any)
+	if status != 200 || len(commands) != 1 || commands[0].(map[string]any)["id"] != stopID {
+		t.Fatal("active emergency did not renew its original stop on reconnect", status, body)
+	}
 	c.post(t, "workspace/dispatch", object{"version": 2, "requestId": "unlock_dispatch", "stopped": false}, 200)
 	c.post(t, "messages", object{"projectId": p, "body": "expired observation", "requestId": "chat_report_001"}, 202)
 	_, err := s.DB.Exec("UPDATE manager_messages SET created_at=now()-interval '40 days'")

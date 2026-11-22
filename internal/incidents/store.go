@@ -4,14 +4,17 @@ import (
 	"context"
 	"crypto/rand"
 	"database/sql"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
+	"github.com/lucasmkrx/bugsnitch/internal/storage"
 )
 
 type Store struct{ DB *sql.DB }
@@ -140,23 +143,14 @@ func insertObservation(ctx context.Context, tx *sql.Tx, workspace, project, sour
 	return id, false, err
 }
 
+//go:embed sql/apply_observation.sql
+var applyObservation string
+
 // Caller owns the locked inbox row until commit, including the count and event update.
 func apply(ctx context.Context, tx *sql.Tx, inbox int64) (string, error) {
 	var id, workspace, project string
-	err := tx.QueryRowContext(ctx, `INSERT INTO incidents(id,workspace_id,project_id,source,group_key,observed,expected,steps,first_seen,last_seen,occurrences)
-	SELECT $2,workspace_id,project_id,source,group_key,observed,expected,steps,seen_at,seen_at,1 FROM incident_inbox WHERE id=$1 AND NOT processed
-	ON CONFLICT(workspace_id,project_id,source,group_key) DO UPDATE SET
-	first_seen=least(incidents.first_seen,excluded.first_seen),last_seen=greatest(incidents.last_seen,excluded.last_seen),
-	observed=CASE WHEN incidents.redacted_at IS NOT NULL AND excluded.last_seen>=incidents.last_seen THEN excluded.observed ELSE incidents.observed END,
- expected=CASE WHEN incidents.redacted_at IS NOT NULL AND excluded.last_seen>=incidents.last_seen THEN excluded.expected ELSE incidents.expected END,
- steps=CASE WHEN incidents.redacted_at IS NOT NULL AND excluded.last_seen>=incidents.last_seen THEN excluded.steps ELSE incidents.steps END,
- redacted_at=CASE WHEN excluded.last_seen>=incidents.last_seen THEN NULL ELSE incidents.redacted_at END,
- occurrences=incidents.occurrences+1,version=incidents.version+1
-	RETURNING id,workspace_id,project_id`, inbox, newID()).Scan(&id, &workspace, &project)
+	err := tx.QueryRowContext(ctx, applyObservation, inbox).Scan(&id, &workspace, &project)
 	if err != nil {
-		return "", err
-	}
-	if _, err = tx.ExecContext(ctx, `UPDATE incident_inbox SET processed=true WHERE id=$1`, inbox); err != nil {
 		return "", err
 	}
 	ctx = audit.WithDetails(ctx, audit.Details{Reason: "Accepted observation assigned to its incident", EvidenceRef: strconv.FormatInt(inbox, 10)})
@@ -164,20 +158,14 @@ func apply(ctx context.Context, tx *sql.Tx, inbox int64) (string, error) {
 }
 
 func (s Store) processOne(ctx context.Context) error {
-	ctx = audit.WithActor(ctx, audit.Service, "incident-worker")
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
+	var processed bool
+	if err := storage.Coordinate(ctx, s.DB, "jobs.process_incident", struct{}{}, &processed); err != nil {
 		return err
 	}
-	defer tx.Rollback()
-	var id int64
-	if err = tx.QueryRowContext(ctx, `SELECT id FROM incident_inbox WHERE NOT processed ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&id); err != nil {
-		return err
+	if !processed {
+		return sql.ErrNoRows
 	}
-	if _, err = apply(ctx, tx, id); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return nil
 }
 
 func (s Store) SentryWebhook(secret string) http.Handler {

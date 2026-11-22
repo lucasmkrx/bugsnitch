@@ -22,6 +22,9 @@ func TestNextSelectionRespectsPlanScopeCapacityAndOwnership(t *testing.T) {
 	req := func(project string, want int) object {
 		t.Helper()
 		status, out := owner.req(t, "POST", "/api/v1/device/next", protocol.NextRequest{Protocol: 1, Project: project}, token)
+		if strings.Contains(fmt.Sprint(out), "SYNTHETIC_SELECTION_SECRET") {
+			t.Fatal("recommendation disclosed a restricted criterion")
+		}
 		if status != want {
 			t.Fatal(status, out)
 		}
@@ -54,12 +57,16 @@ func TestNextSelectionRespectsPlanScopeCapacityAndOwnership(t *testing.T) {
 	exec("INSERT INTO github_mappings(workspace_id,project_id,installation_id,repository_id) VALUES('personal',$1,1,2)", p)
 	reason("Approve a plan")
 	plan := domain.Plan{Title: "Change prices", Milestone: "Test"}
-	for _, n := range []int{11, 8, 3, 5} {
+	for _, n := range []int{11, 8, 3, 5, 4} {
 		title := fmt.Sprintf("Issue %d", n)
 		ticket := domain.Ticket{Number: n, Title: title, Criteria: []string{"Show exact prices"}, Verification: "Run price checks", EstimateHours: 1, Priority: 2}
 		if n == 3 {
 			ticket.Priority = 0
 			ticket.Dependencies = []int{5}
+		}
+		if n == 4 {
+			ticket.Priority = 0
+			ticket.Criteria = []string{"Authorization: Bearer SYNTHETIC_SELECTION_SECRET"}
 		}
 		if n == 5 {
 			ticket.Priority = 1

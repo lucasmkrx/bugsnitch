@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -166,65 +165,6 @@ func (s Store) processOne(ctx context.Context) error {
 		return sql.ErrNoRows
 	}
 	return nil
-}
-
-func (s Store) SentryWebhook(secret string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, ok := signedBody(w, r, secret, "Sentry-Hook-Signature", "")
-		if !ok {
-			return
-		}
-		if r.Header.Get("Sentry-Hook-Resource") != "error" {
-			http.Error(w, "subscribe to error.created", 422)
-			return
-		}
-		o, err := normalizeError(b)
-		if err != nil {
-			http.Error(w, "unsupported error event", 422)
-			return
-		}
-		ctx := r.Context()
-		tx, err := s.DB.BeginTx(ctx, nil)
-		if err != nil {
-			http.Error(w, "intake unavailable", 503)
-			return
-		}
-		defer tx.Rollback()
-		var workspace, project string
-		err = tx.QueryRowContext(ctx, `SELECT m.workspace_id,m.project_id FROM sentry_mappings m JOIN projects p ON (p.workspace_id,p.id)=(m.workspace_id,m.project_id) WHERE m.installation_uuid=$1 AND m.provider_project=$2 AND m.active FOR UPDATE OF p FOR SHARE OF m`, o.Installation, o.ProviderProject).Scan(&workspace, &project)
-		if errors.Is(err, sql.ErrNoRows) {
-			http.Error(w, "unmapped installation or project", 403)
-			return
-		}
-		if err != nil {
-			http.Error(w, "intake unavailable", 503)
-			return
-		}
-		// Serialize rate checks per project. Retries of accepted events never consume allowance.
-		var limited bool
-		err = tx.QueryRowContext(ctx, `SELECT NOT EXISTS(SELECT FROM incident_inbox WHERE workspace_id=$1 AND project_id=$2 AND source='sentry' AND event_key=$3) AND
-		(SELECT count(*) FROM (SELECT 1 FROM incident_inbox WHERE workspace_id=$1 AND project_id=$2 AND source='sentry' AND accepted_at>now()-interval '1 minute' LIMIT 600) recent)>=600`, workspace, project, o.Event).Scan(&limited)
-		if err != nil {
-			http.Error(w, "intake unavailable", 503)
-			return
-		}
-		if limited {
-			w.Header().Set("Retry-After", "60")
-			http.Error(w, "project intake limit", 429)
-			return
-		}
-		inbox, fresh, err := insertObservation(ctx, tx, workspace, project, "sentry", o)
-		if err == nil && fresh {
-			ctx = audit.WithActor(ctx, audit.Provider, "sentry/"+o.Installation)
-			ctx = audit.WithDetails(ctx, audit.Details{Reason: "Signed Sentry event matched the authorized project", EvidenceRef: o.Event})
-			err = event(ctx, tx, workspace, project, "sentry.event_accepted", strconv.FormatInt(inbox, 10))
-		}
-		if err != nil || tx.Commit() != nil {
-			http.Error(w, "intake unavailable", 503)
-			return
-		}
-		w.WriteHeader(http.StatusAccepted)
-	})
 }
 
 func (s Store) Promote(ctx context.Context, workspace, project, id string, version int64) error {

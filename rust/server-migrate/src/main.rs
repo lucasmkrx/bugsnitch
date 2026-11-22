@@ -1,12 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-mod claims;
-mod config;
-mod coord;
-mod devices;
-mod events;
-mod jobs;
-mod migrations;
-
+use bugsnitch_server_migrate::{coord, migrations};
 use std::{env, process::ExitCode, time::Duration};
 
 fn main() -> ExitCode {

@@ -10,6 +10,8 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"github.com/lucasmkrx/bugsnitch/internal/testgithub"
+	"github.com/lucasmkrx/bugsnitch/internal/testserver"
 	"io"
 	"net/http"
 	"net/url"
@@ -17,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -24,7 +27,32 @@ import (
 	"github.com/lucasmkrx/bugsnitch/internal/storage"
 )
 
-func disposableStore(t *testing.T) Store {
+type fixtureStore struct {
+	Store
+	listener http.Handler
+}
+
+// Advance the queue or observe the packaged worker's concurrent transaction.
+// A skipped locked row can still be in progress on its separate connection.
+func (f fixtureStore) processAccepted(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	for {
+		if err := f.processOne(ctx); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
+		var pending bool
+		if err := f.DB.QueryRowContext(ctx, "SELECT EXISTS (SELECT FROM incident_inbox WHERE NOT processed)").Scan(&pending); err != nil {
+			return err
+		}
+		if !pending {
+			return nil
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func disposableStore(t *testing.T) fixtureStore {
 	t.Helper()
 	dsn := os.Getenv("BUGSNITCH_TEST_DATABASE_URL")
 	if dsn == "" {
@@ -60,7 +88,7 @@ func disposableStore(t *testing.T) Store {
 	mustExec(t, db, `INSERT INTO projects(id,workspace_id,name,repository) VALUES('p','personal','Fixture','example/disposable');
 	INSERT INTO sentry_mappings(workspace_id,project_id,installation_uuid,provider_project) VALUES('personal','p','`+installation+`',21);
 	INSERT INTO github_mappings(workspace_id,project_id,installation_id,repository_id) VALUES('personal','p',88,99)`)
-	return Store{db}
+	return fixtureStore{Store{db}, testserver.Start(t, u.String(), testserver.Config{SentrySecret: "sentry-fixture", GitHubSecret: "github-fixture"})}
 }
 func mustExec(t *testing.T, db *sql.DB, q string, args ...any) {
 	t.Helper()
@@ -68,7 +96,7 @@ func mustExec(t *testing.T, db *sql.DB, q string, args ...any) {
 		t.Fatal(err)
 	}
 }
-func one(t *testing.T, s Store) Incident {
+func one(t *testing.T, s fixtureStore) Incident {
 	t.Helper()
 	is, err := s.List(context.Background(), "personal")
 	if err != nil || len(is) != 1 {
@@ -76,8 +104,8 @@ func one(t *testing.T, s Store) Incident {
 	}
 	return is[0]
 }
-func signedEvent(s Store, b []byte) int {
-	return post(s.SentryWebhook("sentry-fixture"), b, map[string]string{"Sentry-Hook-Signature": sign("sentry-fixture", b), "Sentry-Hook-Resource": "error"}).Code
+func signedEvent(s fixtureStore, b []byte) int {
+	return post(s.listener, "/hooks/sentry", b, map[string]string{"Sentry-Hook-Signature": sign("sentry-fixture", b), "Sentry-Hook-Resource": "error"}).Code
 }
 
 type transportFixture func(*http.Request) (*http.Response, error)
@@ -87,7 +115,7 @@ func jsonResponse(status int, obj any) *http.Response {
 	b, _ := json.Marshal(obj)
 	return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(string(b)))}
 }
-func fixtureApp(t *testing.T) *github.App {
+func fixtureApp(t *testing.T, origin string) *github.App {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -97,7 +125,7 @@ func fixtureApp(t *testing.T) *github.App {
 	if err = os.WriteFile(file, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), 0600); err != nil {
 		t.Fatal(err)
 	}
-	app, err := github.NewApp("fixture", file)
+	app, err := github.NewLoopbackFixture("fixture", file, origin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,6 +137,16 @@ func TestPostgresReplayAndLostIssueResponse(t *testing.T) {
 	b := errorPayload(eventOne, "v1", "production", time.Now())
 	if got := signedEvent(s, []byte(strings.Replace(string(b), installation, "dc9783eb-e04b-4479-b167-42a4403d9590", 1))); got != 403 {
 		t.Fatalf("wrong installation got %d", got)
+	}
+	// Block the independent projector's incident insert until every retry has
+	// received its durable inbox acknowledgement. Ordinary SELECTs still run.
+	hold, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hold.Rollback()
+	if _, err = hold.ExecContext(ctx, "LOCK TABLE incidents IN SHARE MODE"); err != nil {
+		t.Fatal(err)
 	}
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
@@ -124,7 +162,10 @@ func TestPostgresReplayAndLostIssueResponse(t *testing.T) {
 	if i, err := s.List(ctx, "personal"); err != nil || len(i) > 0 {
 		t.Fatal("acceptance must precede processing", err)
 	}
-	if err := s.processOne(ctx); err != nil {
+	if err := hold.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.processAccepted(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.processOne(ctx); !errors.Is(err, sql.ErrNoRows) {
@@ -156,17 +197,15 @@ func TestPostgresReplayAndLostIssueResponse(t *testing.T) {
 	if err := s.Promote(ctx, "another-workspace", "p", inc.ID, inc.Version); !errors.Is(err, sql.ErrNoRows) {
 		t.Fatalf("cross-workspace promotion %v", err)
 	}
-	app := fixtureApp(t)
 	var body string
-	writes := 0
-	outage := true
-	previous := http.DefaultTransport
-	t.Cleanup(func() { http.DefaultTransport = previous })
-	http.DefaultTransport = transportFixture(func(req *http.Request) (*http.Response, error) {
-		if req.URL.Host != "api.github.com" || req.Header.Get("X-GitHub-Api-Version") != github.APIVersion {
+	var writes atomic.Int32
+	var outage atomic.Bool
+	outage.Store(true)
+	origin := testgithub.Serve(t, func(req *http.Request) (*http.Response, error) {
+		if req.Header.Get("X-GitHub-Api-Version") != github.APIVersion {
 			t.Error("invalid HTTP contract")
 		}
-		if outage {
+		if outage.Load() {
 			return nil, errors.New("fixture outage")
 		}
 		switch req.URL.Path {
@@ -185,7 +224,7 @@ func TestPostgresReplayAndLostIssueResponse(t *testing.T) {
 			return jsonResponse(200, map[string]any{"id": 99, "full_name": "example/disposable"}), nil
 		case "/repos/example/disposable/issues":
 			if req.Method == "POST" {
-				writes++
+				writes.Add(1)
 				var draft map[string]string
 				if json.NewDecoder(req.Body).Decode(&draft) != nil {
 					t.Error("unreadable issue")
@@ -204,6 +243,7 @@ func TestPostgresReplayAndLostIssueResponse(t *testing.T) {
 		t.Errorf("unexpected fixture request %v", req.URL)
 		return nil, errors.New("unexpected request")
 	})
+	app := fixtureApp(t, origin)
 	work := func() {
 		t.Helper()
 		mustExec(t, s.DB, "UPDATE incident_issues SET next_run=now()")
@@ -212,21 +252,21 @@ func TestPostgresReplayAndLostIssueResponse(t *testing.T) {
 		}
 	}
 	work()
-	if got := one(t, s); got.Promotion == nil || *got.Promotion != "queued" || writes != 0 {
+	if got := one(t, s); got.Promotion == nil || *got.Promotion != "queued" || writes.Load() != 0 {
 		t.Fatal("outage dropped intent", got)
 	}
-	outage = false
+	outage.Store(false)
 	work()
-	if got := one(t, s); *got.Promotion != "reconciling" || writes != 1 {
+	if got := one(t, s); *got.Promotion != "reconciling" || writes.Load() != 1 {
 		t.Fatal("lost reply incorrectly classified", got)
 	}
 	work()
-	if got := one(t, s); got.IssueNumber == nil || *got.IssueNumber != 7 || writes != 1 {
+	if got := one(t, s); got.IssueNumber == nil || *got.IssueNumber != 7 || writes.Load() != 1 {
 		t.Fatal("ambiguous write duplicated or lost", got)
 	}
 	hook := func(id, event, payload string) int {
 		b := []byte(payload)
-		return post(s.GitHubWebhook("github-fixture"), b, map[string]string{"X-GitHub-Delivery": id, "X-GitHub-Event": event, "X-Hub-Signature-256": "sha256=" + sign("github-fixture", b)}).Code
+		return post(s.listener, "/hooks/github", b, map[string]string{"X-GitHub-Delivery": id, "X-GitHub-Event": event, "X-Hub-Signature-256": "sha256=" + sign("github-fixture", b)}).Code
 	}
 	opened := `{"action":"opened","repository":{"id":99},"installation":{"id":88},"issue":{"id":55,"number":7}}`
 	for i := 0; i < 2; i++ {
@@ -237,7 +277,7 @@ func TestPostgresReplayAndLostIssueResponse(t *testing.T) {
 	if err := s.syncOne(ctx, app); err != nil {
 		t.Fatal(err)
 	}
-	if got := one(t, s); got.IssueState == nil || *got.IssueState != "closed" || writes != 1 {
+	if got := one(t, s); got.IssueState == nil || *got.IssueState != "closed" || writes.Load() != 1 {
 		t.Fatal("stale webhook overwrote current authority", got)
 	}
 	if got := hook("605e0fad-f2cc-4fa8-9ff1-36a35a765b64", "installation", `{"action":"suspend","installation":{"id":88}}`); got != 202 {
@@ -257,7 +297,7 @@ func TestPostgresReceiptsAndRecurrence(t *testing.T) {
 		if got := signedEvent(s, errorPayload(id, release, "production", at)); got != 202 {
 			t.Fatal(got)
 		}
-		if err := s.processOne(ctx); err != nil {
+		if err := s.processAccepted(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -273,20 +313,20 @@ func TestPostgresReceiptsAndRecurrence(t *testing.T) {
 		if kind == "deployment" {
 			r.WindowSeconds = 1800
 		}
-		if err := s.receipt(ctx, "personal", "p", inc.ID, r); err != nil {
+		if err := s.RecordReceipt(ctx, "personal", "p", inc.ID, r); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.receipt(ctx, "personal", "p", inc.ID, r); err != nil {
+		if err := s.RecordReceipt(ctx, "personal", "p", inc.ID, r); err != nil {
 			t.Fatal("idempotent receipt failed", err)
 		}
 		r.Evidence = "Different evidence, same command"
-		if !errors.Is(s.receipt(ctx, "personal", "p", inc.ID, r), ErrConflict) {
+		if !errors.Is(s.RecordReceipt(ctx, "personal", "p", inc.ID, r), ErrConflict) {
 			t.Fatal("conflicting receipt accepted")
 		}
 	}
 	expect := func(want string) {
 		t.Helper()
-		v, err := s.verdict(ctx, "personal", "p", one(t, s).ID, "production")
+		v, err := s.Verdict(ctx, "personal", "p", one(t, s).ID, "production")
 		if err != nil || v.Status != want {
 			t.Fatalf("verdict=%v err=%v want=%s", v.Status, err, want)
 		}

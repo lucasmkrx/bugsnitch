@@ -1,6 +1,6 @@
 # Bugsnitch
 
-Bugsnitch coordinates development across your GitHub projects and your own computers. The hosted service keeps project state in PostgreSQL. Rust coordinates job claims, paired devices and event replay on the server. It also applies schema migrations, manages local Git worktrees and SQLite journals, and supervises validators. The CLI, local model adapter, public HTTP service and provider clients run in Go. A macOS runner executes locally initiated work in a separate Git worktree, stores its evidence in SQLite, and reports bounded metadata to a React dashboard. An authenticated MCP server exposes the same workspace to compatible clients.
+Bugsnitch coordinates development across your GitHub projects and your own computers. The hosted service keeps project state in PostgreSQL. The public HTTP server, device coordination, GitHub App client, webhooks and hosted MCP transport run in Rust. A private Go worker handles planning, decisions and background jobs. On the runner, Rust manages worktrees, SQLite and validation, and Go runs the CLI and model adapter. A macOS runner executes locally initiated work in a separate Git worktree, stores its evidence in SQLite, and reports bounded metadata to a React dashboard. An authenticated MCP server exposes the same workspace to compatible clients.
 
 This rebuild is in development. The [verification ledger](docs/PROGRESS.md) records which workflows have run, their limits, and the outstanding live tests.
 
@@ -52,6 +52,8 @@ Database tests use a disposable instance with schema-creation privileges. Set BU
 ```sh
 export BUGSNITCH_JOURNAL_HELPER="$PWD/bin/bugsnitch-runner-journal"
 export BUGSNITCH_MIGRATOR="$PWD/bin/bugsnitch-server-migrate"
+export BUGSNITCH_PROVIDER="$PWD/bin/bugsnitch-provider"
+export BUGSNITCH_TEST_SERVER="$PWD/bin/bugsnitch-server"
 ```
 
 On macOS, install both compilation targets with `rustup target add aarch64-apple-darwin x86_64-apple-darwin` and run `make macos`. Each archive in `bin/packages/` contains the runner, its matching Rust executable and the service installer. For a complete installation exercise, build the binaries, set PGHOST, PGPORT and PGUSER for a disposable instance with CREATEDB permission, and run `python3 scripts/smoke.py`. The script creates two temporary databases, two runner profiles and a fixture checkout.

@@ -3,6 +3,7 @@ use super::{capacity, plan};
 use crate::coord::{Db, Error, Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::collections::HashMap;
 
 #[derive(Deserialize)]
 struct Next {
@@ -42,68 +43,159 @@ pub(super) fn next(db: &Db<'_>, token: &str, request: Value) -> Result<Value> {
     let Some(mut plan) = plan::approved(db, ws, &project)? else {
         return Ok(json!({"reason":"Approve a plan before requesting its next issue"}));
     };
+    let facts = ticket_facts(db, ws, &project, &plan.id)?;
     plan.tickets.sort_by_key(|t| (t.priority, t.number));
     let mut candidates = Vec::with_capacity(plan.tickets.len());
     for ticket in &plan.tickets {
-        candidates.push(candidate(db, ws, &project, &plan.id, repository, ticket)?);
+        candidates.push(candidate(&facts, repository, ticket)?);
     }
     Ok(
         json!({"plan":plan.document,"scope":{"deviceId":device,"projectId":project,"planId":plan.id,"policyVersion":row.i64(3)?},"candidates":candidates}),
     )
 }
 
-fn candidate(
+struct Canonical {
+    fresh_and_bound: bool,
+    state: String,
+    id: i64,
+    digest: String,
+    title: String,
+    revision: String,
+}
+
+impl Canonical {
+    fn eligible(&self, allow_closed: bool) -> bool {
+        self.fresh_and_bound && (self.state == "open" || allow_closed && self.state == "closed")
+    }
+}
+
+struct TicketFacts {
+    attempted: bool,
+    integrated: bool,
+    reserved: bool,
+    canonical: Option<Canonical>,
+}
+
+// Read one row per planned issue. The plan validator requires dependencies
+// to refer to issues in this same set. Evaluating every edge below is local,
+// so a full 64-ticket plan takes the same four SQL calls as a single ticket.
+fn ticket_facts(
     db: &Db<'_>,
     ws: &str,
     project: &str,
-    plan: &str,
+    plan_id: &str,
+) -> Result<HashMap<i64, TicketFacts>> {
+    let rows = db.rows(
+        "WITH tickets AS MATERIALIZED (
+            SELECT t.number,t.resources FROM plan_versions v
+            CROSS JOIN LATERAL jsonb_to_recordset(v.document->'tickets') AS t(number bigint,resources text[])
+            WHERE v.workspace_id=$1 AND v.project_id=$2 AND v.id=$3
+        ), attempted AS (
+            SELECT DISTINCT a.issue_number FROM admission a JOIN tickets t ON t.number=a.issue_number
+            WHERE a.workspace_id=$1 AND a.project_id=$2
+        ), reservations AS MATERIALIZED (
+            SELECT resources FROM admission WHERE workspace_id=$1 AND owns_issue AND attempt_id<>'' AND resources<>'[]'::jsonb
+        )
+        SELECT t.number, a.issue_number IS NOT NULL, e.issue_number IS NOT NULL,
+            EXISTS(SELECT FROM reservations r WHERE r.resources ?| t.resources),
+            z.source_state, coalesce(m.active AND z.availability='current' AND z.checked_at>now()-interval '20 minutes'
+                AND b.plan_id IS NOT NULL,false), z.github_id, z.digest, z.title, z.selection_revision
+        FROM tickets t
+        LEFT JOIN attempted a ON a.issue_number=t.number
+        LEFT JOIN prerequisite_evidence e ON e.workspace_id=$1 AND e.project_id=$2 AND e.plan_id=$3 AND e.issue_number=t.number
+        LEFT JOIN planned_issue_state z ON z.workspace_id=$1 AND z.project_id=$2 AND z.number=t.number
+        LEFT JOIN github_mappings m ON (m.workspace_id,m.project_id,m.installation_id,m.repository_id)=
+            (z.workspace_id,z.project_id,z.installation_id,z.repository_id)
+        LEFT JOIN plan_issue_bindings b ON b.plan_id=$3 AND
+            (b.workspace_id,b.project_id,b.number,b.generation)=(z.workspace_id,z.project_id,z.number,z.generation)",
+        &[ws, project, plan_id],
+    )?;
+    let mut facts = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let canonical = if let Some(state) = row.opt(4)? {
+            Some(Canonical {
+                state: state.into(),
+                fresh_and_bound: row.bool(5)?,
+                id: row.i64(6)?,
+                digest: row.text(7)?.into(),
+                title: row.text(8)?.into(),
+                revision: row.text(9)?.into(),
+            })
+        } else {
+            None
+        };
+        facts.insert(
+            row.i64(0)?,
+            TicketFacts {
+                attempted: row.bool(1)?,
+                integrated: row.bool(2)?,
+                reserved: row.bool(3)?,
+                canonical,
+            },
+        );
+    }
+    Ok(facts)
+}
+
+fn candidate(
+    facts: &HashMap<i64, TicketFacts>,
     repository: &str,
     ticket: &plan::Ticket,
 ) -> Result<Value> {
-    let n = ticket.number.to_string();
-    let blocked = |reason: &str| json!({"number":ticket.number,"reason":reason});
-    let state = db.one("SELECT EXISTS(SELECT FROM admission WHERE workspace_id=$1 AND project_id=$2 AND issue_number=$3),
-        EXISTS(SELECT FROM prerequisite_evidence WHERE workspace_id=$1 AND project_id=$2 AND issue_number=$3 AND plan_id=$4)", &[ws,project,&n,plan])?;
-    if state.bool(0)? {
+    let n = ticket.number;
+    let blocked = |reason: &str| json!({"number":n,"reason":reason});
+    let state = facts.get(&n).ok_or_else(Error::internal)?;
+    if state.attempted {
         return Ok(blocked(
             "an attempt already exists; inspect or explicitly retry it",
         ));
     }
-    if state.bool(1)? {
+    if state.integrated {
         return Ok(blocked("the plan already records integration evidence"));
     }
-    if let Some(reason) = plan::blocked(db, ws, project, plan, ticket, "", None)? {
-        return Ok(blocked(reason));
+    if state
+        .canonical
+        .as_ref()
+        .is_some_and(|issue| !issue.eligible(false))
+    {
+        return Ok(blocked(plan::DRIFT));
     }
-    if !ticket.dependencies().is_empty() {
-        let deps = serde_json::to_string(ticket.dependencies())?;
-        if db.one("SELECT EXISTS(SELECT FROM jsonb_array_elements_text($4::jsonb) dep(value)
-            WHERE NOT EXISTS(SELECT FROM plan_issue_bindings b JOIN planned_issue_state z USING(workspace_id,project_id,number,generation)
-            WHERE b.workspace_id=$1 AND b.project_id=$2 AND b.plan_id=$3 AND b.number=dep.value::bigint))", &[ws,project,plan,&deps])?.bool(0)? {
-            return Ok(blocked("a prerequisite lacks a verified canonical issue revision in this plan"));
+    let mut unbound_dep = false;
+    for dep in ticket.dependencies() {
+        let prerequisite = facts.get(dep).ok_or_else(Error::internal)?;
+        if prerequisite
+            .canonical
+            .as_ref()
+            .is_some_and(|issue| !issue.eligible(true))
+        {
+            return Ok(blocked(plan::DRIFT));
         }
+        if !prerequisite.integrated {
+            return Ok(blocked("Waiting for prerequisite integration evidence"));
+        }
+        unbound_dep |= prerequisite.canonical.is_none();
     }
-    let Some(issue) = db.optional(
-        "SELECT z.github_id,z.digest,z.title,z.selection_revision FROM planned_issue_state z
-        JOIN plan_issue_bindings b USING (workspace_id,project_id,number,generation)
-        WHERE b.plan_id=$1 AND z.workspace_id=$2 AND z.project_id=$3 AND z.number=$4",
-        &[plan, ws, project, &n],
-    )?
-    else {
+    if state.reserved {
+        return Ok(blocked("A shared resource is reserved"));
+    }
+    if unbound_dep {
+        return Ok(blocked(
+            "a prerequisite lacks a verified canonical issue revision in this plan",
+        ));
+    }
+    let Some(issue) = &state.canonical else {
         return Ok(blocked(
             "the approved plan lacks a verified canonical GitHub issue revision",
         ));
     };
-    let revision = issue.text(3)?;
-    let digest = issue.text(1)?;
-    if revision.is_empty() || digest.len() != 64 {
+    if issue.revision.is_empty() || issue.digest.len() != 64 {
         return Ok(blocked(
             "awaiting a canonical GitHub timestamp and a title suitable for sharing",
         ));
     }
-    Ok(json!({"number":ticket.number, "selection":{
-        "githubId":issue.i64(0)?, "requirementsDigest":digest, "schema":1, "repository":repository,
-        "number":ticket.number, "url":format!("https://github.com/{repository}/issues/{n}"),
-        "title":issue.text(2)?, "state":"open", "updatedAt":revision
+    Ok(json!({"number":n, "selection":{
+        "githubId":issue.id, "requirementsDigest":issue.digest, "schema":1, "repository":repository,
+        "number":n, "url":format!("https://github.com/{repository}/issues/{n}"),
+        "title":issue.title, "state":"open", "updatedAt":issue.revision
     }}))
 }

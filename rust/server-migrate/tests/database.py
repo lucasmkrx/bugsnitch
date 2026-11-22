@@ -2,9 +2,11 @@
 """Local PostgreSQL black-box tests, launched by the Cargo integration test."""
 import hashlib
 import ipaddress
+import json
 import os
 from pathlib import Path
 import secrets
+import struct
 import subprocess
 import sys
 import time
@@ -72,14 +74,16 @@ class Fixture:
         finally:
             self.sql("DROP SCHEMA " + name + " CASCADE")
 
-    def launch(self, schema, timeout=12000, url=None):
+    def launch(self, schema, timeout=12000, url=None, *, coordinate=False):
         # Exercise the same search_path extension as the Go service; do not pass
         # PGOPTIONS to the executable or let it hide broken URL handling.
         query = urlencode({**self.params, "search_path": schema, "application_name": self.tag + "_worker"})
         dsn = url or urlunsplit(self.url._replace(query=query))
         env = {k: v for k, v in self.env.items() if not k.startswith("PG")}
         env.update(DATABASE_URL=dsn, BUGSNITCH_MIGRATION_TIMEOUT_MS=str(timeout))
-        return subprocess.Popen([self.binary], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        args = [self.binary, "--coordinate"] if coordinate else [self.binary]
+        return subprocess.Popen(args, env=env, stdin=subprocess.PIPE if coordinate else None,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
     @staticmethod
     def finish(process, success, timeout=16):
@@ -93,6 +97,29 @@ class Fixture:
         assert MARKER.encode() not in output, "Migrator printed secret-bearing input"
         assert (process.returncode == 0) == success, f"Unexpected migrator exit {process.returncode}"
         return output
+
+
+def verify_coordination_frames(db, schema):
+    ready = {"version": 1, "op": "system.ready", "input": None, "actor": ["service", "test"]}
+    requests = [json.dumps({**ready, "version": 2}).encode(), b"{", json.dumps({**ready, "op": MARKER}).encode(),
+                json.dumps(ready).encode()]
+    frames = b"".join(struct.pack(">I", len(body)) + body for body in requests)
+    child = db.launch(schema, coordinate=True)
+    response, errors = child.communicate(frames, timeout=8)
+    assert child.returncode == 0 and MARKER.encode() not in response + errors
+    replies = []
+    while response:
+        length, = struct.unpack(">I", response[:4])
+        assert 0 < length <= len(response) - 4
+        replies.append(json.loads(response[4:4 + length]))
+        response = response[4 + length:]
+    assert len(replies) == len(requests) and all(r["version"] == 1 for r in replies)
+    assert [r["error"]["status"] for r in replies[:-1]] == [400, 400, 400]
+    assert replies[-1]["value"] == 1
+    for incomplete in (struct.pack(">I", 4 * 1024 * 1024 + 1), struct.pack(">I", 100) + b"{"):
+        child = db.launch(schema, coordinate=True)
+        response, errors = child.communicate(incomplete, timeout=8)
+        assert child.returncode != 0 and not response and not errors
 
 
 def verify_ledger(db, schema, migrations):
@@ -154,6 +181,7 @@ def main(binary):
     assert migrations and migrations[0].name == "001_core.sql"
     with db.schema("fresh") as schema:
         concurrent_start(db, schema)
+        verify_coordination_frames(db, schema)
         verify_ledger(db, schema, migrations)
         ledger = "SELECT name,digest,applied_at FROM bugsnitch_migrations ORDER BY name"
         before = db.sql(ledger, schema)
@@ -187,7 +215,7 @@ def main(binary):
         assert db.sql("SELECT applied_at='2001-01-01 UTC'::timestamptz FROM bugsnitch_migrations WHERE name='001_core.sql'", schema) == "t"
     invalid = f"postgresql://fixture:{MARKER}@127.0.0.1:invalidport/local"
     db.finish(db.launch("unused", url=invalid), success=False)
-    print("Verified fresh and legacy ledgers, concurrent startups, lock timeout, checksums, rollback and redacted errors.")
+    print("Verified fresh and legacy ledgers, concurrent startups, lock timeout, checksums, rollback, versioned coordination frames and redacted errors.")
 
 
 if __name__ == "__main__":

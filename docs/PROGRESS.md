@@ -4,7 +4,7 @@ The rebuild started on `rebuild/bugsnitch-v2` from clean main at `833637906ffc7d
 
 ## Rust storage migration
 
-Stage 1 started from `ed6064e` on 2026-11-22. The runner now uses bundled SQLite through Rust for both its execution and device journals. The hosted service runs a Rust PostgreSQL migrator before accepting traffic. Both existing command names and stored formats are retained. The [migration plan](IMPLEMENTATION_PLAN.md#rust-migration) tracks the remaining Go runner and server work.
+Stage 1 started from `ed6064e` on 2026-11-22. The runner now uses bundled SQLite through Rust for both its execution and device journals. The hosted service runs a Rust PostgreSQL migrator before accepting traffic. Both existing command names and stored formats are retained. The [migration plan](IMPLEMENTATION_PLAN.md#rust-migration) tracks the remaining Go runner and server work. GitHub reported that code scanning is disabled for this private repository when the PR workflow tried to publish its CodeQL results.
 
 - The Rust tests and race-enabled Go suite passed against disposable PostgreSQL. The opt-in migrator fixture separately exercised fresh and existing ledgers, two competing starts, lock timeout, rollback, checksum mismatch and sanitized failure output.
 - Journal tests opened an older SQLite database, preserved its attempt and receipt records, raced independent helper processes and reconciled a committed write whose acknowledgment was lost.

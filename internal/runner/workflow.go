@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -158,6 +157,11 @@ func advance(ctx context.Context, a *Attempt, feedback string, admitted func(Sum
 	err = steps(runCtx, a, admitted != nil)
 	cancel()
 	<-done
+	if errors.Is(err, errValidationUnconfirmed) {
+		// Keep ownership and any pending stop receipt until execution is reconciled.
+		a.Message = errValidationUnconfirmed.Error()
+		return *a, errors.Join(err, a.save())
+	}
 	if err != nil {
 		a.State = "failed"
 		a.ReasonCode = failureCode(err)
@@ -543,51 +547,3 @@ func reviewCandidate(ctx context.Context, a *Attempt) error {
 	return nil
 }
 func encoded(v any) string { b, _ := json.Marshal(v); return string(b) }
-func (a *Attempt) cleanAt(sha string) error {
-	if err := a.checkTree(); err != nil {
-		return err
-	}
-	head, err := git(a.Worktree, "rev-parse", "HEAD")
-	if err != nil || head != sha {
-		return errors.New("candidate revision changed; evidence stale")
-	}
-	out, err := git(a.Worktree, "status", "--porcelain", "--untracked-files=all")
-	if err != nil {
-		return err
-	}
-	if out != "" {
-		return errors.New("worktree changed; retained for inspection")
-	}
-	return nil
-}
-func validate(ctx context.Context, a *Attempt) (*int, error) {
-	secs := a.Project.Config.ValidationTimeoutSeconds
-	if secs == 0 {
-		secs = 600
-	}
-	ctx, cancel := context.WithTimeout(ctx, time.Duration(secs)*time.Second)
-	defer cancel()
-	scratch, err := os.MkdirTemp("", "bugsnitch-check-")
-	if err != nil {
-		return nil, err
-	}
-	defer os.RemoveAll(scratch)
-	argv := a.Project.Config.Validate
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Dir = a.Worktree
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "HOME=" + scratch, "TMPDIR=" + scratch, "LANG=C", "GIT_TERMINAL_PROMPT=0", "GIT_CONFIG_GLOBAL=" + os.DevNull}
-	cmd.WaitDelay = time.Second
-	configureValidationProcess(cmd)
-	err = cmd.Run()
-	if cmd.ProcessState == nil {
-		return nil, errors.New("validation executable did not start")
-	}
-	code := cmd.ProcessState.ExitCode()
-	if err != nil {
-		if ctx.Err() != nil {
-			return &code, errors.New("validation interrupted or timed out")
-		}
-		return &code, fmt.Errorf("validation exited %d", code)
-	}
-	return &code, nil
-}

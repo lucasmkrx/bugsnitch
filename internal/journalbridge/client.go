@@ -59,7 +59,17 @@ func Query(ctx context.Context, file, sql string) ([]byte, error) {
 	return shared.query(ctx, file, sql)
 }
 
+// Control sends a typed local pause, stop or settlement operation through the
+// same durable journal and never replays an interrupted request.
+func Control(ctx context.Context, file string, operation any) ([]byte, error) {
+	return shared.call(ctx, file, nil, operation)
+}
+
 func (c *client) query(ctx context.Context, file, sql string) ([]byte, error) {
+	return c.call(ctx, file, &sql, nil)
+}
+
+func (c *client) call(ctx context.Context, file string, sql *string, control any) ([]byte, error) {
 	select {
 	case c.gate <- struct{}{}:
 		defer func() { <-c.gate }()
@@ -77,10 +87,11 @@ func (c *client) query(ctx context.Context, file, sql string) ([]byte, error) {
 		return nil, errors.New("unsupported journal file")
 	}
 	frame, err := json.Marshal(struct {
-		Version int    `json:"version"`
-		Path    string `json:"path"`
-		SQL     string `json:"sql"`
-	}{1, path, sql})
+		Version int     `json:"version"`
+		Path    string  `json:"path"`
+		SQL     *string `json:"sql,omitempty"`
+		Control any     `json:"control,omitempty"`
+	}{1, path, sql, control})
 	if err != nil {
 		return nil, err
 	}

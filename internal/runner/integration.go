@@ -5,10 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 )
 
 type IntegrationCheck struct {
@@ -28,6 +25,8 @@ type IntegrationCheck struct {
 	Command         []string `json:"command"`
 	CreatedAt       string   `json:"createdAt"`
 	UpdatedAt       string   `json:"updatedAt"`
+	CleanedAt       string   `json:"cleanedAt,omitempty"`
+	ArchiveRef      string   `json:"archiveRef,omitempty"`
 }
 
 const integrationTable = "CREATE TABLE IF NOT EXISTS integration_checks(id TEXT PRIMARY KEY,attempt_id TEXT NOT NULL REFERENCES journal_attempts(id),data TEXT NOT NULL); "
@@ -49,6 +48,56 @@ func Checks(id string) ([]IntegrationCheck, error) {
 	err = json.Unmarshal(b, &checks)
 	return checks, err
 }
+
+type integrationOperation struct {
+	Version    int                 `json:"version"`
+	Operation  string              `json:"operation"`
+	Home       string              `json:"home"`
+	Project    string              `json:"project"`
+	Repository string              `json:"repository"`
+	TargetRef  string              `json:"targetRef"`
+	Identity   integrationIdentity `json:"identity"`
+}
+
+type integrationIdentity struct {
+	AttemptID    string `json:"attempt_id"`
+	CheckID      string `json:"check_id"`
+	CandidateSHA string `json:"candidate_sha"`
+	TargetSHA    string `json:"target_sha"`
+	CombinedSHA  string `json:"combined_sha"`
+}
+
+func (c IntegrationCheck) identity() integrationIdentity {
+	return integrationIdentity{AttemptID: c.Attempt, CheckID: c.ID, CandidateSHA: c.CandidateSHA, TargetSHA: c.TargetSHA, CombinedSHA: c.CombinedSHA}
+}
+
+type integrationResult struct {
+	Status      string `json:"status"`
+	Reason      string `json:"reason"`
+	TargetSHA   string `json:"targetSha"`
+	CombinedSHA string `json:"combinedSha"`
+	ArchiveRef  string `json:"archiveRef"`
+}
+
+func integrationGit(ctx context.Context, op string, c IntegrationCheck, a Attempt) (integrationResult, error) {
+	var result integrationResult
+	dir, err := home()
+	if err != nil {
+		return result, err
+	}
+	if !idPattern.MatchString(c.ID) || c.Attempt != a.ID || a.Branch != "bugsnitch/"+a.ID ||
+		c.Repository != a.Repository || c.Workspace != a.Workspace || c.Worktree != filepath.Join(dir, "integration", c.ID) {
+		return result, errors.New("integration check does not match the recorded attempt or location")
+	}
+	request := integrationOperation{Version: 1, Operation: op, Home: dir, Project: a.Project.Path,
+		Repository: c.Repository, TargetRef: c.TargetRef, Identity: c.identity()}
+	err = nativeOperation(ctx, "--integration", request, &result)
+	if err == nil && result.Status != "" {
+		err = errors.New(result.Reason)
+	}
+	return result, err
+}
+
 func CheckCombined(ctx context.Context, id, ref string) (IntegrationCheck, error) {
 	var c IntegrationCheck
 	unlock, err := attemptLock(id)
@@ -78,24 +127,7 @@ func CheckCombined(ctx context.Context, id, ref string) (IntegrationCheck, error
 	if !reviewed {
 		return c, errors.New("candidate lacks current independent review")
 	}
-	if err = checkOrigin(a.Project.Path, a.Repository); err != nil {
-		return c, err
-	}
-	if !strings.HasPrefix(ref, "refs/heads/") && !strings.HasPrefix(ref, "refs/remotes/origin/") {
-		return c, errors.New("use an explicit local branch or origin remote-tracking reference")
-	}
-	if _, err = git(a.Project.Path, "check-ref-format", ref); err != nil {
-		return c, errors.New("invalid integration target")
-	}
 	if err = verifyIssue(ctx, a.Issue); err != nil {
-		return c, err
-	}
-	candidate, err := git(a.Project.Path, "rev-parse", "--verify", "refs/heads/"+a.Branch+"^{commit}")
-	if err != nil || candidate != a.CandidateSHA {
-		return c, errors.New("candidate branch changed; review evidence is stale")
-	}
-	target, err := git(a.Project.Path, "rev-parse", "--verify", ref+"^{commit}")
-	if err != nil {
 		return c, err
 	}
 	checkID, err := newID()
@@ -106,15 +138,14 @@ func CheckCombined(ctx context.Context, id, ref string) (IntegrationCheck, error
 	if err != nil {
 		return c, err
 	}
-	parent := filepath.Join(dir, "integration")
-	if err = os.MkdirAll(parent, 0700); err != nil {
-		return c, err
+	c = IntegrationCheck{ID: checkID, Attempt: id, Workspace: a.Workspace, Repository: a.Repository,
+		TargetRef: ref, CandidateSHA: a.CandidateSHA, CriteriaVersion: a.Issue.UpdatedAt, Policy: "local-reviewed-files/v1",
+		Worktree: filepath.Join(dir, "integration", checkID), Status: "requested", Command: a.Project.Config.Validate, CreatedAt: now()}
+	resolved, err := integrationGit(ctx, "resolve", c, a)
+	if err != nil {
+		return IntegrationCheck{}, err
 	}
-	real, err := canonical(parent)
-	if err != nil || real != parent {
-		return c, errors.New("integration worktree parent moved")
-	}
-	c = IntegrationCheck{ID: checkID, Attempt: id, Workspace: a.Workspace, Repository: a.Repository, TargetRef: ref, TargetSHA: target, CandidateSHA: candidate, CriteriaVersion: a.Issue.UpdatedAt, Policy: "local-reviewed-files/v1", Worktree: filepath.Join(parent, checkID), Status: "requested", Command: a.Project.Config.Validate, CreatedAt: now()}
+	c.TargetSHA = resolved.TargetSHA
 	if err = c.save(); err != nil {
 		return c, err
 	}
@@ -122,46 +153,80 @@ func CheckCombined(ctx context.Context, id, ref string) (IntegrationCheck, error
 		c.Status = status
 		return c, errors.Join(e, c.save())
 	}
-	if _, err = git(a.Project.Path, "worktree", "add", "--detach", "--", c.Worktree, target); err != nil {
+	combined, err := integrationGit(ctx, "combine", c, a)
+	if err != nil {
+		if combined.Status != "" {
+			return finish(combined.Status, err)
+		}
 		return finish("worktree_unavailable", err)
 	}
-	top, err := git(c.Worktree, "rev-parse", "--show-toplevel")
-	if err != nil || top != c.Worktree {
-		return finish("worktree_unavailable", errors.New("integration worktree identity changed"))
-	}
-	if _, err = git(c.Worktree, "merge", "--no-ff", "--no-edit", candidate); err != nil {
-		return finish("merge_failed", errors.New("local integration failed; inspect retained worktree for conflicts"))
-	}
-	c.CombinedSHA, err = git(c.Worktree, "rev-parse", "HEAD")
-	if err != nil {
-		return finish("unverified", err)
-	}
+	c.CombinedSHA = combined.CombinedSHA
 	c.Status = "validating"
 	if err = c.save(); err != nil {
 		return c, err
 	}
-	local := a
-	local.Worktree = c.Worktree
-	c.ExitCode, err = validate(ctx, &local)
+	c.ExitCode, err = validateCombined(ctx, &a, &c)
+	if errors.Is(err, errValidationUnconfirmed) {
+		return finish("validation_unconfirmed", err)
+	}
 	if err != nil {
 		return finish("validation_failed", err)
 	}
-	head, err := git(c.Worktree, "rev-parse", "HEAD")
-	if err != nil || head != c.CombinedSHA {
-		return finish("stale", errors.New("validation moved the combined candidate"))
-	}
-	dirty, err := git(c.Worktree, "status", "--porcelain", "--untracked-files=all")
-	if err != nil || dirty != "" {
-		return finish("unverified", errors.New("validation changed the integration checkout"))
-	}
-	for refName, sha := range map[string]string{ref: target, "refs/heads/" + a.Branch: candidate} {
-		value, e := git(a.Project.Path, "rev-parse", "--verify", refName+"^{commit}")
-		if e != nil || value != sha {
-			return finish("stale", fmt.Errorf("reference changed during validation: %s", refName))
+	verified, err := integrationGit(ctx, "verify", c, a)
+	if err != nil {
+		if verified.Status != "" {
+			return finish(verified.Status, err)
 		}
+		return finish("unverified", err)
 	}
 	if err = verifyIssue(ctx, a.Issue); err != nil {
 		return finish("stale", err)
 	}
 	return finish("passed", nil)
+}
+
+// CleanupIntegration releases one completed, clean detached checkout while retaining
+// its verification receipt and the underlying tested commit in the local repository.
+func CleanupIntegration(ctx context.Context, attemptID, checkID string) error {
+	if !idPattern.MatchString(checkID) {
+		return errors.New("invalid integration check ID")
+	}
+	unlock, err := attemptLock(attemptID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	a, err := Get(attemptID)
+	if err != nil {
+		return err
+	}
+	data, err := query(integrationTable + "SELECT data FROM integration_checks WHERE id=" + literal(checkID) + " AND attempt_id=" + literal(attemptID) + ";")
+	if err != nil {
+		return err
+	}
+	var c IntegrationCheck
+	if len(data) == 0 {
+		return errors.New("integration check missing for this attempt")
+	}
+	if err = json.Unmarshal(data, &c); err != nil {
+		return err
+	}
+	if c.ID != checkID {
+		return errors.New("integration check identity differs from its receipt")
+	}
+	switch c.Status {
+	case "passed", "validation_failed", "unverified", "stale":
+	default:
+		return errors.New("cleanup requires a finished integration check with a recorded combined revision")
+	}
+	result, err := integrationGit(ctx, "cleanup", c, a)
+	if err != nil {
+		return err
+	}
+	if c.CleanedAt != "" && c.ArchiveRef == result.ArchiveRef {
+		return nil
+	}
+	c.CleanedAt = now()
+	c.ArchiveRef = result.ArchiveRef
+	return c.save()
 }

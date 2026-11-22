@@ -14,7 +14,6 @@ import (
 	"github.com/lucasmkrx/bugsnitch/internal/domain"
 	"github.com/lucasmkrx/bugsnitch/internal/incidents"
 	"github.com/lucasmkrx/bugsnitch/internal/planning"
-	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 )
 
 func (s *Server) proposePlan(w http.ResponseWriter, r *http.Request, ws string) error {
@@ -159,57 +158,6 @@ func (s *Server) attestPrerequisite(w http.ResponseWriter, r *http.Request, ws s
 		return err
 	}
 	return send(w, 201, object{"accepted": true})
-}
-
-// Only the approved version constrains admission. Requirements come from the same immutable document the owner reviewed.
-func planEligibility(ctx context.Context, tx *sql.Tx, ws string, a protocol.Admission) (string, []string, error) {
-	var id string
-	var raw []byte
-	err := tx.QueryRowContext(ctx, "SELECT id,document FROM plan_versions WHERE workspace_id=$1 AND project_id=$2 AND approved_at IS NOT NULL ORDER BY version DESC LIMIT 1", ws, a.ProjectID).Scan(&id, &raw)
-	if err == sql.ErrNoRows {
-		return "", []string{}, checkPlannedIssue(ctx, tx, ws, a.ProjectID, "", a.IssueNumber, false)
-	}
-	if err != nil {
-		return "", nil, err
-	}
-	var p domain.Plan
-	if err = json.Unmarshal(raw, &p); err != nil {
-		return "", nil, err
-	}
-	for _, t := range p.Tickets {
-		if t.Number != a.IssueNumber {
-			continue
-		}
-		if err = checkPlannedIssue(ctx, tx, ws, a.ProjectID, id, t.Number, false); err != nil {
-			return "", nil, err
-		}
-		if a.CriteriaHash != domain.CriteriaHash(t.Criteria) {
-			return "", nil, conflict("Local criteria differ from the approved plan")
-		}
-		var complete bool
-		for _, n := range t.Dependencies {
-			if err = checkPlannedIssue(ctx, tx, ws, a.ProjectID, id, n, true); err != nil {
-				return "", nil, err
-			}
-			if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT FROM prerequisite_evidence WHERE workspace_id=$1 AND plan_id=$2 AND issue_number=$3)", ws, id, n).Scan(&complete); err != nil {
-				return "", nil, err
-			}
-			if !complete {
-				return "", nil, conflict("Waiting for prerequisite integration evidence")
-			}
-		}
-		for _, name := range t.Resources {
-			var held bool
-			if err = tx.QueryRowContext(ctx, "SELECT EXISTS(SELECT FROM admission WHERE workspace_id=$1 AND owns_issue AND attempt_id<>$2 AND resources ? $3)", ws, a.AttemptID, name).Scan(&held); err != nil {
-				return "", nil, err
-			}
-			if held {
-				return "", nil, conflict("A shared resource is reserved")
-			}
-		}
-		return id, t.Resources, nil
-	}
-	return "", nil, conflict("Issue is outside approved scope")
 }
 
 func checkPlannedIssue(ctx context.Context, tx *sql.Tx, ws, p, plan string, number int, allowClosed bool) error {

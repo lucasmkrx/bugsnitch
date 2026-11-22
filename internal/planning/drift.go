@@ -11,6 +11,7 @@ import (
 	"github.com/lucasmkrx/bugsnitch/internal/domain"
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"github.com/lucasmkrx/bugsnitch/internal/incidents"
+	"github.com/lucasmkrx/bugsnitch/internal/storage"
 )
 
 var ErrIssueDrift = errors.New("GitHub issue changed, is closed, or lacks a recent authoritative read; review a fresh plan")
@@ -69,6 +70,10 @@ func CheckIssue(ctx context.Context, tx *sql.Tx, ws, p, plan string, number int,
 type readCanonical func(context.Context, int64, int64, string, int64) (github.Issue, error)
 
 func (s Store) reconcileIssue(ctx context.Context, read readCanonical) error {
+	claim, err := storage.ClaimJob(ctx, s.DB, "drift")
+	if err != nil {
+		return err
+	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -79,8 +84,9 @@ func (s Store) reconcileIssue(ctx context.Context, read readCanonical) error {
 	var failures int
 	err = tx.QueryRowContext(ctx, `SELECT z.workspace_id,z.project_id,p.repository,z.number,z.github_id,z.installation_id,z.repository_id,z.digest,z.source_state,z.availability,z.failures FROM planned_issue_state z
 	JOIN projects p ON (p.workspace_id,p.id)=(z.workspace_id,z.project_id) JOIN github_mappings m USING(installation_id,repository_id)
-	WHERE m.project_id=z.project_id AND m.workspace_id=z.workspace_id AND m.active AND z.next_check<=now()
-	ORDER BY z.next_check,z.project_id,z.number FOR UPDATE OF z SKIP LOCKED LIMIT 1`).Scan(&ws, &p, &name, &n, &identity, &install, &repository, &digest, &source, &avail, &failures)
+	WHERE m.project_id=z.project_id AND m.workspace_id=z.workspace_id AND m.active AND (z.workspace_id,z.project_id,z.number)=($1,$2,$3)
+	AND z.next_check=$4::timestamptz AND z.next_check>clock_timestamp() FOR UPDATE OF z SKIP LOCKED FOR SHARE OF m SKIP LOCKED`,
+		claim.Workspace, claim.Project, claim.Number, claim.Fence).Scan(&ws, &p, &name, &n, &identity, &install, &repository, &digest, &source, &avail, &failures)
 	if err != nil {
 		return err
 	}

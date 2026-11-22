@@ -3,7 +3,6 @@ package transport
 
 import (
 	"database/sql"
-	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"net/http"
 	"strings"
 )
@@ -55,30 +54,12 @@ func (s *Server) rotate(w http.ResponseWriter, r *http.Request) error {
 	if b.Credential == old || !credPattern.MatchString(b.Credential) {
 		return bad("Provide a fresh device credential")
 	}
-	current, next := hash(old), hash(b.Credential)
-	ctx := r.Context()
-	var id string
-	err := transaction(ctx, s.DB, func(tx *sql.Tx) error {
-		var ws, stored string
-		err := tx.QueryRowContext(ctx, "SELECT workspace_id,id,token_hash FROM devices WHERE NOT revoked AND (token_hash=$1 OR (previous_hash=$1 AND token_hash=$2 AND rotated_at>now()-interval '1 day')) FOR UPDATE", current, next).Scan(&ws, &id, &stored)
-		if err == sql.ErrNoRows {
-			return denied
-		}
-		if err != nil {
-			return err
-		}
-		if stored == next {
-			return nil
-		}
-		if _, err = tx.ExecContext(ctx, "UPDATE devices SET previous_hash=token_hash,token_hash=$1,rotated_at=now() WHERE id=$2", next, id); err != nil {
-			return err
-		}
-		principal := audit.WithActor(ctx, audit.Device, id)
-		recorded := audit.WithDetails(principal, audit.Details{Reason: "Device authenticated with its previous credential"})
-		return event(recorded, tx, ws, "", "device.rotated", id)
-	})
+	var result struct {
+		DeviceID string `json:"deviceId"`
+	}
+	err := s.coordinate(r.Context(), "device.rotate", object{"currentHash": hash(old), "nextHash": hash(b.Credential)}, &result)
 	if err != nil {
 		return err
 	}
-	return send(w, 200, object{"deviceId": id})
+	return send(w, 200, result)
 }

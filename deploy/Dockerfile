@@ -21,6 +21,8 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY rust ./rust
 COPY scripts/rust_notices.py /src/scripts/rust_notices.py
 COPY internal/storage/migrations ./internal/storage/migrations
+COPY internal/audit/record.sql ./internal/audit/record.sql
+COPY internal/incidents/sql ./internal/incidents/sql
 # Link the migrator against the runtime image's musl and libpq.
 RUN RUSTFLAGS="-C target-feature=-crt-static" cargo build --locked --release --manifest-path rust/server-migrate/Cargo.toml
 

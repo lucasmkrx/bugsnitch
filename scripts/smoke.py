@@ -54,7 +54,7 @@ def server(env):
         proc.stderr.close()
 
 
-def check(tmp, mcp_bridge):
+def check(tmp, mcp_bridge, runner):
     base = os.environ.copy()
     base.update(BUGSNITCH_OWNER_TOKEN=secrets.token_hex(32), BUGSNITCH_MCP_TOKEN=secrets.token_hex(32),
                 DATABASE_URL=f"postgresql:///{DB}?sslmode=disable")
@@ -82,10 +82,10 @@ def check(tmp, mcp_bridge):
         for name in ("one", "two"):
             grant = api("pairings", {"name": name, "projectIds": [project]})
             local = {**base, "BUGSNITCH_HOME": str(tmp / name)}
-            run(BIN / "bugsnitch", "pair", "--server", origin, "--code", grant["code"], env=local)
-            run(BIN / "bugsnitch", "rotate", env=local)
-            run(BIN / "bugsnitch", "register", "--project", project, "--path", checkout, env=local)
-            run(BIN / "bugsnitch", "sync", env=local)
+            run(runner, "pair", "--server", origin, "--code", grant["code"], env=local)
+            run(runner, "rotate", env=local)
+            run(runner, "register", "--project", project, "--path", checkout, env=local)
+            run(runner, "sync", env=local)
             homes.append(local)
         state = api("state")
         assert len({d["id"] for d in state["devices"]}) == 2
@@ -121,8 +121,10 @@ def check(tmp, mcp_bridge):
     with server(base):
         assert len(api("state")["devices"]) == 2
         for local in homes:
-            run(BIN / "bugsnitch", "sync", env=local)
+            run(runner, "sync", env=local)
         assert len(api("state")["devices"]) == 2
+        history = api("events?limit=150")
+        assert history["events"] and not history["hasMore"]
         dump = tmp / "backup.dump"
         run("pg_dump", "-Fc", "--no-owner", "-f", dump, DB)
     run("pg_restore", "--exit-on-error", "--no-owner", "-d", RESTORE, dump)
@@ -130,17 +132,21 @@ def check(tmp, mcp_bridge):
     with server(restored):
         state = api("state")
         assert len(state["devices"]) == 2 and len(state["incidents"]) == 1 and state["projects"][0]["id"] == project
+        assert api("events?limit=150") == history
         revoke = next(d["id"] for d in state["devices"] if d["name"] == "one")
         api(f"devices/{revoke}/revoke", {})
-        proc = subprocess.run([BIN / "bugsnitch", "sync"], env=homes[0], capture_output=True)
+        tail = api("events?after=" + history["nextCursor"])
+        assert any(e["kind"] == "device.revoked" and e["subjectId"] == revoke for e in tail["events"])
+        proc = subprocess.run([runner, "sync"], env=homes[0], capture_output=True)
         assert proc.returncode and b"403" in proc.stderr
-        run(BIN / "bugsnitch", "sync", env=homes[1])
+        run(runner, "sync", env=homes[1])
     print("Restart, migration replay, backup restore, session continuity, runner reconnect and revocation passed.")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mcp-bridge", type=Path, default=BIN / "bugsnitch-mcp", help="Bugsnitch STDIO bridge executable, including an extracted plugin binary")
+    parser.add_argument("--runner", type=Path, default=BIN / "bugsnitch", help="Runner executable to exercise, including a previous release")
     args = parser.parse_args()
     if not os.getenv("PGHOST"):
         raise SystemExit("Set PGHOST, PGPORT and PGUSER for a disposable PostgreSQL instance with CREATEDB.")
@@ -149,4 +155,4 @@ if __name__ == "__main__":
             run("createdb", database)
             cleanup.callback(run, "dropdb", database)
         with tempfile.TemporaryDirectory() as tmp:
-            check(Path(tmp), args.mcp_bridge.resolve())
+            check(Path(tmp), args.mcp_bridge.resolve(), args.runner.resolve())

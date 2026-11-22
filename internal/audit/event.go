@@ -6,6 +6,7 @@ package audit
 import (
 	"context"
 	"database/sql"
+	_ "embed"
 )
 
 type Source string
@@ -43,11 +44,19 @@ func WithDetails(ctx context.Context, d Details) context.Context {
 	return context.WithValue(ctx, detailsKey{}, d)
 }
 
+//go:embed record.sql
+var insertEvent string
+
+// Actor returns attribution established by the authenticated transport.
+func Actor(ctx context.Context) (string, string) {
+	a, _ := ctx.Value(actorKey{}).(principal)
+	return string(a.source), a.id
+}
+
 func Record(ctx context.Context, tx *sql.Tx, workspace, project, kind, subject string) error {
 	a, _ := ctx.Value(actorKey{}).(principal)
 	d, _ := ctx.Value(detailsKey{}).(Details)
-	_, err := tx.ExecContext(ctx, `INSERT INTO events(workspace_id,project_id,kind,subject_id,actor_source,actor_id,reason,policy_version,subject_version,evidence_ref)
-	VALUES($1,NULLIF($2,''),$3,$4,NULLIF($5,''),NULLIF($6,''),NULLIF($7,''),NULLIF($8::bigint,0),NULLIF($9::bigint,0),NULLIF($10,''))`,
+	_, err := tx.ExecContext(ctx, insertEvent,
 		workspace, project, kind, subject, a.source, a.id, d.Reason, d.PolicyVersion, d.SubjectVersion, d.EvidenceRef)
 	return err
 }

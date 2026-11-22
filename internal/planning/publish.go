@@ -9,13 +9,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
+	"time"
+
 	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"github.com/lucasmkrx/bugsnitch/internal/domain"
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"github.com/lucasmkrx/bugsnitch/internal/incidents"
-	"log/slog"
-	"strings"
-	"time"
+	"github.com/lucasmkrx/bugsnitch/internal/storage"
 )
 
 type Store struct{ DB *sql.DB }
@@ -161,6 +163,10 @@ func (s Store) Run(ctx context.Context, app *github.App) {
 	}
 }
 func (s Store) step(ctx context.Context, open openRepo) error {
+	claim, err := storage.ClaimJob(ctx, s.DB, "planned_issue")
+	if err != nil {
+		return err
+	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -169,7 +175,9 @@ func (s Store) step(ctx context.Context, open openRepo) error {
 	var j job
 	var raw []byte
 	err = tx.QueryRowContext(ctx, `SELECT i.workspace_id,i.project_id,i.publication_id,i.local_number,i.marker,i.status,i.tries,i.created_at,x.document,m.installation_id,m.repository_id,p.repository FROM planned_issues i JOIN publications x ON x.id=i.publication_id JOIN projects p ON p.id=i.project_id JOIN github_mappings m ON (m.workspace_id,m.project_id,m.installation_id,m.repository_id)=(x.workspace_id,x.project_id,x.installation_id,x.repository_id)
- WHERE i.status IN('queued','reconciling') AND x.status='publishing' AND m.active AND NOT p.paused AND (i.status='reconciling' OR (p.allow_publication AND x.policy_version=p.policy_version)) AND i.next_run<=now() AND NOT EXISTS(SELECT FROM planned_issues prev WHERE prev.publication_id=i.publication_id AND prev.position<i.position AND prev.status<>'linked') ORDER BY i.next_run,i.publication_id,i.position FOR UPDATE OF i SKIP LOCKED LIMIT 1`).Scan(&j.ws, &j.p, &j.pub, &j.local, &j.marker, &j.status, &j.tries, &j.created, &raw, &j.install, &j.repository, &j.repo)
+ WHERE i.status IN('queued','reconciling') AND x.status='publishing' AND m.active AND NOT p.paused AND (i.status='reconciling' OR (p.allow_publication AND x.policy_version=p.policy_version)) AND (i.workspace_id,i.project_id,i.publication_id,i.local_number)=($1,$2,$3,$4)
+ AND i.next_run=$5::timestamptz AND i.next_run>clock_timestamp() AND NOT EXISTS(SELECT FROM planned_issues prev WHERE prev.publication_id=i.publication_id AND prev.position<i.position AND prev.status<>'linked') FOR UPDATE OF i SKIP LOCKED FOR SHARE OF m SKIP LOCKED`,
+		claim.Workspace, claim.Project, claim.Item, claim.Number, claim.Fence).Scan(&j.ws, &j.p, &j.pub, &j.local, &j.marker, &j.status, &j.tries, &j.created, &raw, &j.install, &j.repository, &j.repo)
 	if err != nil {
 		return err
 	}

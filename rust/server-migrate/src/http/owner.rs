@@ -24,7 +24,7 @@ async fn command(
     let input = json!({"workspace":o.workspace,"id":p.get("id").map(String::as_str).unwrap_or(""),
         "project":p.get("project").map(String::as_str).unwrap_or(""),"number":p.get("number").map(String::as_str).unwrap_or(""),
         "environment":env.unwrap_or_default(),"body":body});
-    let result = s.domain(op, ["owner".into(), o.account], input).await?;
+    let mut result = s.domain(op, ["owner".into(), o.account], input).await?;
     let status = result["status"]
         .as_u64()
         .and_then(|n| u16::try_from(n).ok())
@@ -33,28 +33,45 @@ async fn command(
         .ok_or_else(WebError::internal)?;
     Ok((
         status,
-        Json(result.get("body").cloned().ok_or_else(WebError::internal)?),
+        Json(
+            result
+                .as_object_mut()
+                .and_then(|r| r.remove("body"))
+                .ok_or_else(WebError::internal)?,
+        ),
     ))
 }
-pub(super) fn routes() -> Router<Shared> {
-    let mut r = Router::new();
+// These queries resolve the cookie's unexpired session in the same database
+// snapshot as the response. An HTTP caller cannot supply a workspace or actor.
+pub(super) fn reads() -> Router<Shared> {
+    let mut routes = Router::new();
     for (path, op) in [
         ("/api/v1/state", "workspace.state"),
         ("/api/v1/diagnostics", "workspace.diagnostics"),
-        (
-            "/api/v1/projects/{project}/incidents/{id}/verification",
-            "incident.verdict",
-        ),
     ] {
-        r = r.route(
+        routes = routes.route(
             path,
             get(
-                move |State(s), Extension(o), Path(p), Query(q): Query<Filters>| {
-                    command(s, o, op, p, q.environment, Value::Null)
+                move |State(s): State<Shared>, headers: axum::http::HeaderMap| async move {
+                    let hash = session::session_hash(&headers)?;
+                    s.coord_raw(op, service_actor(), Value::String(hash)).await
                 },
             ),
         );
     }
+    routes
+}
+
+pub(super) fn routes() -> Router<Shared> {
+    let mut r = Router::new();
+    r = r.route(
+        "/api/v1/projects/{project}/incidents/{id}/verification",
+        get(
+            |State(s), Extension(o), Path(p), Query(q): Query<Filters>| {
+                command(s, o, "incident.verdict", p, q.environment, Value::Null)
+            },
+        ),
+    );
     for (path, op) in [
         ("/api/v1/projects", "project.create"),
         ("/api/v1/projects/{id}/policy", "project.policy"),

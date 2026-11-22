@@ -1,0 +1,11 @@
+# 0008 · Move repeated work across the Rust boundary where measurements justify it
+
+Accepted on 2026-11-22. Compare installed releases on the same computer using the public API, a real local PostgreSQL instance and real SQLite journals. Use reproducible fixtures where live provider workloads are unavailable.
+
+The caller and writer of a dashboard snapshot used to build and traverse the same JSON several times. The native coordinator now requests the permitted rows together in PostgreSQL. The HTTP listener validates the versioned envelope and returns a slice of the response bytes. The same path supplies the three MCP list operations, each capped at 100 rows. PostgreSQL enforces workspace scoping. The previous 32 MiB read ceiling and 4 MiB coordination command ceiling still apply to their respective messages. The coordinator's cancellation deadline still reaps a stalled child before another caller takes its slot.
+
+Background workers previously visited several queues on independent timers. A committed PostgreSQL notification now wakes a scheduler that scans only available queues. Rust reserves due provider jobs in one transaction. The application worker rechecks each durable fence before contacting the provider. A periodic scan picks up future deadlines, restarts and missed notifications. Payloads are empty. [PostgreSQL LISTEN](https://www.postgresql.org/docs/17/sql-listen.html) · [PostgreSQL NOTIFY](https://www.postgresql.org/docs/17/sql-notify.html)
+
+The runner keeps typed SQLite operations inside its existing Rust helper. Attempt data travels as bound JSON. Bulk authority reads preserve the device and assignment checks on each synchronization. Durable revisions remain the basis for reconciling an interrupted write.
+
+A trial port of the single-project MCP status read increased warm median latency on the local fixture from about 0.21 ms to 0.27 ms. Keep that small query and single-attempt inspection with the Go domain worker. The Go CLI, Codex session lifecycle, low-frequency application decisions and React dashboard also remain. Moving those components would need its own workload, compatibility tests and measured benefit. See the [release measurements](../PROGRESS.md#rust-performance-work).

@@ -18,8 +18,6 @@ import (
 
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"github.com/lucasmkrx/bugsnitch/internal/incidents"
-	"github.com/lucasmkrx/bugsnitch/internal/integration"
-	"github.com/lucasmkrx/bugsnitch/internal/planning"
 	"github.com/lucasmkrx/bugsnitch/internal/storage"
 	"github.com/lucasmkrx/bugsnitch/internal/transport"
 )
@@ -67,10 +65,10 @@ func run() error {
 	if err = os.Chmod(os.Args[1], 0600); err != nil {
 		return errors.New("cannot restrict domain socket")
 	}
-	go storage.Maintain(ctx, db)
-	go store.Run(ctx, app)
-	go (integration.Store{DB: db, App: app}).RunDrafts(ctx)
-	go (planning.Store{DB: db}).Run(ctx, app)
+	var work sync.WaitGroup
+	defer func() { stop(); work.Wait() }()
+	work.Go(func() { storage.Maintain(ctx, db) })
+	work.Go(func() { runBackground(ctx, db, dsn, app) })
 	go func() { <-ctx.Done(); _ = listener.Close() }()
 	if _, err = os.Stdout.Write([]byte{1}); err != nil {
 		return err
@@ -78,8 +76,6 @@ func run() error {
 	// Bound active domain operations, including callers that drop their IPC
 	// connection while an authorized transaction or provider call is pending.
 	permits := make(chan struct{}, 32)
-	var work sync.WaitGroup
-	defer work.Wait()
 	for {
 		conn, err := listener.Accept()
 		if err != nil {

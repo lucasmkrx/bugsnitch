@@ -2,7 +2,7 @@
 use super::{WebError, WebResult};
 use axum::http::StatusCode;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     env,
     path::{Path, PathBuf},
@@ -97,6 +97,13 @@ impl Worker {
     }
 }
 
+#[derive(serde::Serialize)]
+struct CommandFrame<'a> {
+    version: u8,
+    operation: &'a str,
+    actor: [String; 2],
+    input: Value,
+}
 #[derive(Deserialize)]
 struct Reply {
     version: u8,
@@ -116,9 +123,13 @@ pub(super) async fn call(
             "Domain worker unavailable".into(),
         )
     })?;
-    let payload =
-        serde_json::to_vec(&json!({"version":1,"operation":op,"actor":actor,"input":input}))
-            .map_err(|_| WebError::internal())?;
+    let payload = serde_json::to_vec(&CommandFrame {
+        version: 1,
+        operation: op,
+        actor,
+        input,
+    })
+    .map_err(|_| WebError::internal())?;
     if payload.len() > 256 << 10 {
         return Err(WebError(
             StatusCode::PAYLOAD_TOO_LARGE,

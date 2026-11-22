@@ -7,4 +7,6 @@ mod events;
 pub mod http;
 mod jobs;
 pub mod migrations;
+mod plugin_reads;
 mod redact;
+mod snapshot;

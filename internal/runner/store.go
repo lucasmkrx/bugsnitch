@@ -149,12 +149,32 @@ func project(w, r string) (Project, error) {
 	err = json.Unmarshal(b, &p)
 	return p, err
 }
+
+type checkpoint struct {
+	ID      string   `json:"id"`
+	Version int      `json:"version"`
+	Data    *Attempt `json:"data"`
+	Claim   bool     `json:"claim"`
+}
+
+func journalAttempt(action string, args any) ([]byte, error) {
+	dir, err := home()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	return journalbridge.Operation(ctx, filepath.Join(dir, "runner.sqlite"), action, args)
+}
+
 func Get(id string) (Attempt, error) {
 	var a Attempt
 	if !idPattern.MatchString(id) {
 		return a, errors.New("invalid attempt id")
 	}
-	b, err := query("SELECT data FROM journal_attempts WHERE id=" + literal(id) + ";")
+	b, err := journalAttempt("get", struct {
+		ID string `json:"id"`
+	}{id})
 	if err != nil {
 		return a, err
 	}
@@ -165,7 +185,7 @@ func Get(id string) (Attempt, error) {
 	return a, err
 }
 func Summaries() ([]Summary, error) {
-	b, err := query("SELECT json_group_array(json_object('id',id,'workspace',workspace,'repository',repo,'issueNumber',issue,'issueUpdatedAt',json_extract(data,'$.Issue.updatedAt'),'reasonCode',json_extract(data,'$.reasonCode'),'phase',json_extract(data,'$.phase'),'state',json_extract(data,'$.state'),'baseSha',json_extract(data,'$.baseSha'),'candidateSha',json_extract(data,'$.candidateSha'),'version',version,'evidence',json_extract(data,'$.evidence'))) FROM (SELECT * FROM journal_attempts ORDER BY rowid);")
+	b, err := journalAttempt("summaries", struct{}{})
 	if err != nil {
 		return nil, err
 	}
@@ -173,25 +193,26 @@ func Summaries() ([]Summary, error) {
 	err = json.Unmarshal(b, &records)
 	return records, err
 }
-func (a *Attempt) save() error { return a.persist("") }
+func (a *Attempt) save() error { return a.persist(false) }
 func (a *Attempt) claimRunning() error {
 	// A lost process still recorded as running holds capacity until reconciled.
-	return a.persist(" AND json_extract(data,'$.state')='waiting' AND (SELECT count(*) FROM journal_attempts WHERE workspace=" + literal(a.Workspace) + " AND json_extract(data,'$.state')='running')<2")
+	return a.persist(true)
 }
-func (a *Attempt) persist(precondition string) error {
-	old := a.Version
-	a.Version++
-	a.UpdatedAt = now()
-	b, err := query(fmt.Sprintf("UPDATE journal_attempts SET version=%d,data=%s WHERE id=%s AND version=%d%s; SELECT changes();", a.Version, packed(a), literal(a.ID), old, precondition))
+func (a *Attempt) persist(claim bool) error {
+	next := *a
+	next.Version++
+	next.UpdatedAt = now()
+	b, err := journalAttempt("save", checkpoint{ID: a.ID, Version: a.Version, Data: &next, Claim: claim})
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(string(b)) != "1" {
-		if precondition != "" {
+	if string(b) != "1" {
+		if claim {
 			return errors.New("local workspace ticket capacity reserved or attempt revision changed")
 		}
 		return errors.New("attempt changed in another process")
 	}
+	a.Version, a.UpdatedAt = next.Version, next.UpdatedAt
 	return nil
 }
 func (a *Attempt) add(artifact Artifact) {

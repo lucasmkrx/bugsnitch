@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"regexp"
 	"strings"
 	"time"
@@ -20,6 +19,7 @@ import (
 	"github.com/lucasmkrx/bugsnitch/internal/planning"
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 	"github.com/lucasmkrx/bugsnitch/internal/storage"
+	"github.com/lucasmkrx/bugsnitch/internal/transport/views"
 )
 
 type DraftRequest struct {
@@ -52,20 +52,14 @@ func scanDraft(row scanner) (Draft, error) {
 	return d, err
 }
 func (s Store) Drafts(ctx context.Context, w string) ([]Draft, error) {
-	rows, err := s.DB.QueryContext(ctx, "SELECT "+draftCols+" FROM draft_pr_intents WHERE workspace_id=$1 ORDER BY updated_at DESC,attempt_id LIMIT 500", w)
+	var raw []byte
+	err := s.DB.QueryRowContext(ctx, "SELECT coalesce(json_agg(d.document),'[]') FROM ("+views.Drafts+") d", w).Scan(&raw)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	result := []Draft{}
-	for rows.Next() {
-		d, err := scanDraft(rows)
-		if err != nil {
-			return nil, err
-		}
-		result = append(result, d)
-	}
-	return result, rows.Err()
+	var out []Draft
+	err = json.Unmarshal(raw, &out)
+	return out, err
 }
 
 type candidate struct {
@@ -212,32 +206,16 @@ func (j job) check(ctx context.Context, tx *sql.Tx) error {
 	}
 	return nil
 }
-func (s Store) RunDrafts(ctx context.Context) {
-	ctx = audit.WithActor(ctx, audit.Service, "draft-pr-worker")
-	if s.App == nil {
-		return
-	}
-	tick := time.NewTicker(2 * time.Second)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-tick.C:
-		}
-		task, cancel := context.WithTimeout(ctx, 45*time.Second)
-		err := s.syncDraft(task)
-		cancel()
-		if err != nil && !errors.Is(err, sql.ErrNoRows) && ctx.Err() == nil {
-			slog.Warn("draft synchronization deferred")
-		}
-	}
-}
 func (s Store) syncDraft(ctx context.Context) error {
 	claim, err := storage.ClaimJob(ctx, s.DB, "draft")
 	if err != nil {
 		return err
 	}
+	return s.SyncDraft(ctx, claim)
+}
+
+func (s Store) SyncDraft(ctx context.Context, claim storage.JobClaim) error {
+	ctx = audit.WithActor(ctx, audit.Service, "draft-pr-worker")
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err

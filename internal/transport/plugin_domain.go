@@ -52,14 +52,6 @@ func (s *Server) integrationDomain(ctx context.Context, op string, actor [2]stri
 	const ws = "personal"
 	call := domainCall{Body: input}
 	switch op {
-	case "plugin.list_projects", "plugin.list_attempts", "plugin.list_decisions":
-		if err := call.decode(&struct{}{}); err != nil {
-			return nil, err
-		}
-		view := map[string]string{"plugin.list_projects": "projects", "plugin.list_attempts": "attempts", "plugin.list_decisions": "decisions"}[op]
-		var rows json.RawMessage
-		err := s.DB.QueryRowContext(ctx, "SELECT COALESCE(json_agg(t),'[]') FROM (SELECT * FROM ("+views[view]+") v LIMIT 100)t", ws).Scan(&rows)
-		return rows, err
 	case "plugin.report_incident":
 		var a reportArgs
 		if err := call.decode(&a); err != nil {

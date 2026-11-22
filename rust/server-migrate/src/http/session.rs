@@ -53,7 +53,7 @@ fn cookie(s: &AppState, token: &str, active: bool) -> Response {
     )
         .into_response()
 }
-fn session_hash(headers: &HeaderMap) -> WebResult<String> {
+pub(super) fn session_hash(headers: &HeaderMap) -> WebResult<String> {
     let token = headers
         .get_all(header::COOKIE)
         .iter()

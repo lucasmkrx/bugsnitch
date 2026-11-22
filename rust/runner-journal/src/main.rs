@@ -6,11 +6,12 @@ use serde::Deserialize;
 use std::{
     env,
     io::{self, Read, Write},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::ExitCode,
     time::Duration,
 };
 
+mod attempts;
 mod controls;
 mod integration;
 #[cfg(target_os = "macos")]
@@ -32,6 +33,7 @@ struct Request {
     path: PathBuf,
     sql: Option<String>,
     control: Option<controls::Control>,
+    operation: Option<attempts::Operation>,
 }
 
 #[repr(u8)]
@@ -65,7 +67,88 @@ fn append(output: &mut Vec<u8>, bytes: &[u8]) -> Result<(), Failure> {
     Ok(())
 }
 
-fn execute(request: Request) -> Result<Vec<u8>, Failure> {
+fn open(path: &Path, runner: bool) -> Result<Connection, Failure> {
+    let connection = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    connection.busy_timeout(Duration::from_secs(5))?;
+    connection.pragma_update(None, "foreign_keys", runner)?;
+    Ok(connection)
+}
+
+#[cfg(unix)]
+#[derive(PartialEq, Eq)]
+struct FileIdentity {
+    device: u64,
+    inode: u64,
+}
+
+#[cfg(unix)]
+impl FileIdentity {
+    fn read(path: &Path) -> Result<Self, Failure> {
+        use std::os::unix::fs::MetadataExt;
+        let metadata = std::fs::metadata(path).map_err(|_| Failure::Database)?;
+        Ok(Self {
+            device: metadata.dev(),
+            inode: metadata.ino(),
+        })
+    }
+}
+
+#[derive(Default)]
+struct RunnerConnection {
+    #[cfg(unix)]
+    cached: Option<(Connection, FileIdentity)>,
+}
+
+impl RunnerConnection {
+    #[cfg(unix)]
+    fn connection(&mut self, path: &Path) -> Result<&mut Connection, Failure> {
+        let before = FileIdentity::read(path)?;
+        let reuse = self.cached.as_ref().is_some_and(|(db, identity)| {
+            if &before != identity || db.path().map(Path::new) != Some(path) || !db.is_autocommit()
+            {
+                return false;
+            }
+            // SQLite checks the inode of its open handle against the path;
+            // the filesystem device distinguishes matching inodes across volumes.
+            let mut moved = -1;
+            db.file_control(
+                rusqlite::DEFAULT_NAME,
+                rusqlite::FileControl::HasMoved(&mut moved),
+            )
+            .is_ok()
+                && moved == 0
+        });
+        if !reuse {
+            self.cached.take();
+            let db = open(path, true)?;
+            // If the path changed while SQLite opened it, leave the operation
+            // unexecuted. Never associate an uncertain handle with a new file.
+            if before != FileIdentity::read(path)? {
+                return Err(Failure::Database);
+            }
+            self.cached = Some((db, before));
+        }
+        Ok(&mut self.cached.as_mut().ok_or(Failure::Database)?.0)
+    }
+
+    fn run(
+        &mut self,
+        path: &Path,
+        op: impl FnOnce(&mut Connection) -> Result<Vec<u8>, Failure>,
+    ) -> Result<Vec<u8>, Failure> {
+        #[cfg(unix)]
+        let db = self.connection(path)?;
+        #[cfg(not(unix))]
+        let db = &mut open(path, true)?;
+        schema::prepare(db, true)?;
+        op(db)
+    }
+}
+
+fn execute(request: Request, cached: &mut RunnerConnection) -> Result<Vec<u8>, Failure> {
     let runner = match request.path.file_name().and_then(|name| name.to_str()) {
         Some("runner.sqlite") => true,
         Some("device.sqlite") => false,
@@ -74,21 +157,25 @@ fn execute(request: Request) -> Result<Vec<u8>, Failure> {
     if request.version != PROTOCOL || !request.path.is_absolute() {
         return Err(Failure::Protocol);
     }
-    // The parent creates the owner's file privately. A new connection preserves
-    // CLI invocation isolation: an unfinished transaction rolls back on drop,
-    // per-connection PRAGMAs reset, and a restored/replaced file is reopened.
-    let mut connection = Connection::open_with_flags(
-        request.path,
-        OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
-    )?;
-    connection.busy_timeout(Duration::from_secs(5))?;
-    connection.pragma_update(None, "foreign_keys", runner)?;
-    schema::prepare(&mut connection, runner)?;
-    let sql = match (request.sql, request.control) {
-        (Some(sql), None) => sql,
-        (None, Some(control)) if runner => return controls::execute(&mut connection, control),
+    let sql = match (request.sql, request.control, request.operation) {
+        (Some(sql), None, None) => sql,
+        (None, Some(control), None) if runner => {
+            return cached.run(&request.path, |db| controls::execute(db, control));
+        }
+        (None, None, Some(attempts::Operation::SyncAuthority { device, workspace })) if !runner => {
+            let mut db = open(&request.path, false)?;
+            schema::prepare(&mut db, false)?;
+            return attempts::sync_authority(&db, &device, &workspace);
+        }
+        (None, None, Some(op)) if runner => {
+            return cached.run(&request.path, |db| attempts::execute(db, op));
+        }
         _ => return Err(Failure::Protocol),
     };
+    // Compatibility SQL may leave a transaction, attachment, or PRAGMA behind.
+    // Its connection is never shared with another batch or a typed operation.
+    let mut connection = open(&request.path, runner)?;
+    schema::prepare(&mut connection, runner)?;
     let mut batch = Batch::new(&connection, &sql);
     let mut output = Vec::new();
     while let Some(mut statement) = batch.next()? {
@@ -118,6 +205,7 @@ fn execute(request: Request) -> Result<Vec<u8>, Failure> {
 }
 
 fn serve(mut input: impl Read, mut output: impl Write) -> io::Result<()> {
+    let mut runner = RunnerConnection::default();
     loop {
         let mut length = [0; 4];
         if input.read(&mut length[..1])? == 0 {
@@ -132,7 +220,7 @@ fn serve(mut input: impl Read, mut output: impl Write) -> io::Result<()> {
         input.read_exact(&mut frame)?;
         let result = serde_json::from_slice(&frame)
             .map_err(|_| Failure::Protocol)
-            .and_then(execute);
+            .and_then(|request| execute(request, &mut runner));
         let (status, bytes) = match result {
             Ok(bytes) => (0, bytes),
             Err(failure) => (failure as u8, Vec::new()),
@@ -149,7 +237,7 @@ fn main() -> ExitCode {
     match args.as_slice() {
         [arg] if arg == "--version" => {
             println!(
-                "bugsnitch-runner-journal {} protocol={PROTOCOL} sqlite={} execution={} controls=1",
+                "bugsnitch-runner-journal {} protocol={PROTOCOL} sqlite={} execution={} controls=1 attempts=1",
                 env!("CARGO_PKG_VERSION"),
                 rusqlite::version(),
                 u8::from(cfg!(any(target_os = "macos", target_os = "linux"))),
@@ -182,6 +270,38 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(unix)]
+    #[test]
+    fn cache_reopens_when_inode_matches_on_a_different_device() {
+        let path = env::temp_dir().join(format!(
+            "bugsnitch-volume-test-{}.sqlite",
+            std::process::id()
+        ));
+        std::fs::File::create_new(&path).unwrap();
+        let path = path.canonicalize().unwrap();
+        let mut runner = RunnerConnection::default();
+        runner
+            .connection(&path)
+            .unwrap()
+            .execute_batch("CREATE TEMP TABLE old_connection(n INTEGER)")
+            .unwrap();
+        let count = |db: &Connection| {
+            db.query_row(
+                "SELECT count(*) FROM sqlite_temp_schema WHERE name='old_connection'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(count(runner.connection(&path).unwrap()), 1);
+        // Model a cached handle from an unmounted volume which allocated
+        // the same inode number as this path on the replacement volume.
+        runner.cached.as_mut().unwrap().1.device ^= 1;
+        assert_eq!(count(runner.connection(&path).unwrap()), 0);
+        drop(runner);
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn invalid_requests_can_be_followed_by_another_frame() {

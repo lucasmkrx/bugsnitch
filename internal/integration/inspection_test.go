@@ -10,15 +10,19 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"github.com/lucasmkrx/bugsnitch/internal/storage"
 )
 
 func TestHealthyHeadCannotAuthorizeUnverifiedCombination(t *testing.T) {
-	p := Pull{PullObservation: github.PullObservation{Checks: "SUCCESS", CheckCount: 1, Review: "APPROVED", IssueState: "OPEN", State: "OPEN", Base: "base"}, ObservedAt: time.Now()}
-	assess(&p, flags{active: true, current: true}, time.Now())
+	db, _ := scratchDB(t)
+	s := Store{DB: db}
+	obs := github.PullObservation{Checks: "SUCCESS", CheckCount: 1, Review: "APPROVED", IssueState: "OPEN", State: "OPEN", Base: "base"}
+	p, err := s.save(context.Background(), "personal", "p", 4, 3, 0, 10, 11, "example/test", obs)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if p.AutoMerge || !strings.Contains(strings.Join(p.Blockers, " "), "Combined validation evidence is missing") {
 		t.Fatal(p)
 	}
@@ -105,12 +109,23 @@ func TestPostgresInvalidateEvidenceOnSubjectChange(t *testing.T) {
 }
 
 func TestQueueAndPassingChecksCannotReplaceDecisionForTarget(t *testing.T) {
-	now := time.Now()
+	db, run := scratchDB(t)
+	s := Store{DB: db}
 	observed := github.PullObservation{Queue: &github.QueueObservation{OwnerType: "Organization", Present: true, Rules: &github.RuleSnapshot{QueueRequired: true, RequiredChecks: 2, AppBoundChecks: 2}}, Head: strings.Repeat("a", 40), Base: strings.Repeat("b", 40), Target: "disposable", State: "OPEN", IssueState: "OPEN", Review: "APPROVED", Checks: "SUCCESS", CheckCount: 2}
-	for _, target := range []string{"disposable", "production"} {
+	for i, target := range []string{"disposable", "production"} {
 		observed.Target = target
-		p := Pull{PullObservation: observed, ObservedAt: now, Validation: "artifact-a", IndependentReview: "artifact-b"}
-		assess(&p, flags{active: true, current: true}, now)
+		number := int64(i + 4)
+		p, err := s.save(context.Background(), "personal", "p", number, 3, 0, 10, 11, "example/test", observed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, kind := range []string{"combined_validation", "independent_review"} {
+			run("INSERT INTO pull_evidence(workspace_id,project_id,number,version,kind,reference) VALUES('personal','p',$1,$2,$3,'test-artifact')", number, p.Version, kind)
+		}
+		p, err = s.save(context.Background(), "personal", "p", number, 3, p.Version, 10, 11, "example/test", observed)
+		if err != nil || p.Validation == "" || p.IndependentReview == "" {
+			t.Fatal(err, p)
+		}
 		if p.AutoMerge || !strings.Contains(strings.Join(p.Blockers, " "), "approved target") {
 			t.Fatalf("accepted a queue without a target-bound decision for %s", target)
 		}

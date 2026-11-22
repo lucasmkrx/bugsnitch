@@ -4,6 +4,7 @@ package journalbridge
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -141,4 +142,89 @@ func TestInterruptedReplyDoesNotReplayCommittedWrite(t *testing.T) {
 	if pid == one.cmd.Process.Pid {
 		t.Fatal("cancelled helper was reused")
 	}
+}
+
+func TestTypedJournalFollowsReplacementAndRecognizesUpgrade(t *testing.T) {
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "runner.sqlite")
+	c := testClient(t)
+	const id = "11111111111111111111111111111111"
+	seed := func(marker string) {
+		checked(t, c, path, "INSERT INTO journal_attempts VALUES('"+id+"','one','a/b',1,1,'"+marker+"',1);", "")
+	}
+	get := func() ([]byte, error) {
+		return c.call(t.Context(), path, request{Operation: map[string]any{"get": map[string]string{"id": id}}})
+	}
+	expect := func(marker string) {
+		t.Helper()
+		b, e := get()
+		if string(b) != marker || e != nil {
+			t.Fatalf("read %q, %v; wanted %q", b, e, marker)
+		}
+	}
+	seed("original")
+	expect("original")
+	if err := os.Rename(path, filepath.Join(dir, "saved.sqlite")); err != nil {
+		t.Fatal(err)
+	}
+	seed("restored")
+	expect("restored")
+	checked(t, c, path, "PRAGMA user_version=99;", "")
+	if _, err := get(); err == nil || !strings.Contains(err.Error(), "compatible Bugsnitch version") {
+		t.Fatalf("newer on-disk schema: %v", err)
+	}
+}
+
+func TestJournalRejectsMisroutedOperations(t *testing.T) {
+	c := testClient(t)
+	dir := t.TempDir()
+	for _, tt := range []struct {
+		file, op string
+		args     any
+	}{
+		{"runner.sqlite", "sync_authority", map[string]string{"device": "x"}},
+		{"device.sqlite", "summaries", struct{}{}},
+		{"runner.sqlite", "save", map[string]any{"id": "x", "version": 1, "query": "a", "claim": false}},
+	} {
+		_, err := c.call(t.Context(), filepath.Join(dir, tt.file), request{Operation: map[string]any{tt.op: tt.args}})
+		if err == nil || !strings.Contains(err.Error(), "protocol incompatible") {
+			t.Fatalf("accepted %s on %s: %v", tt.op, tt.file, err)
+		}
+	}
+}
+
+func TestNativeCheckpointsCompeteForFinalWorkspaceSlot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "runner.sqlite")
+	one, two := testClient(t), testClient(t)
+	ids := []string{strings.Repeat("1", 32), strings.Repeat("2", 32), strings.Repeat("3", 32)}
+	for i, id := range ids {
+		state := "waiting"
+		if i == 0 {
+			state = "running"
+		}
+		checked(t, one, path, fmt.Sprintf("INSERT INTO journal_attempts VALUES('%s','one','a/b',%d,1,'{\"id\":\"%s\",\"state\":\"%s\",\"version\":1}',1);", id, i+1, id, state), "")
+	}
+	start := make(chan struct{})
+	replies := make(chan string, 2)
+	for i, c := range []*client{one, two} {
+		go func() {
+			<-start
+			id := ids[i+1]
+			body := map[string]any{"id": id, "version": 1, "claim": true, "data": map[string]any{"id": id, "version": 2, "state": "running"}}
+			b, err := c.call(t.Context(), path, request{Operation: map[string]any{"save": body}})
+			if err != nil {
+				t.Error(err)
+			}
+			replies <- string(b)
+		}()
+	}
+	close(start)
+	a, b := <-replies, <-replies
+	if !(a == "1" && b == "0" || a == "0" && b == "1") {
+		t.Fatalf("competing claims returned %q and %q", a, b)
+	}
+	checked(t, one, path, "SELECT count(*) FROM journal_attempts WHERE json_extract(data,'$.state')='running'; SELECT count(*) FROM journal_attempts WHERE version=2;", "2\n1\n")
 }

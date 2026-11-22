@@ -137,3 +137,125 @@ func TestPostgresNativeInboxRollsBackWithoutEvent(t *testing.T) {
 		t.Fatalf("replay counted %d occurrences", inc.Occurrences)
 	}
 }
+
+// Two independent dispatchers can reserve different lanes in the same scan.
+// Busy lanes are omitted, and a dropped reply keeps the reservations fenced.
+func TestPostgresBackgroundScheduling(t *testing.T) {
+	s := disposableStore(t)
+	ctx := context.Background()
+	id, err := s.Report(ctx, "personal", "p", "Missing total", "Show total", "Open basket", "scheduled-incident")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Promote(ctx, "personal", "p", id, 1); err != nil {
+		t.Fatal(err)
+	}
+	mustExec(t, s.DB, `INSERT INTO planned_issue_state(workspace_id,project_id,number,github_id,installation_id,repository_id) VALUES('personal','p',1,11,88,99),('personal','p',2,12,88,99)`)
+	type job struct {
+		storage.JobClaim
+		Lane string
+	}
+	schedule := func(lanes ...string) ([]job, error) {
+		var jobs []job
+		err := storage.Coordinate(ctx, s.DB, "jobs.schedule", lanes, &jobs)
+		return jobs, err
+	}
+	// An omitted lane must not acquire a lease even when immediately due.
+	jobs, err := schedule("inbox", "triage")
+	if err != nil || len(jobs) != 0 {
+		t.Fatalf("unrequested work: %v %v", jobs, err)
+	}
+	var group sync.WaitGroup
+	winners := make(chan []job, 2)
+	for range 2 {
+		group.Go(func() {
+			batch, err := schedule("incident_issue", "draft", "planned_issue", "drift")
+			if err != nil {
+				t.Error(err)
+			}
+			winners <- batch
+		})
+	}
+	group.Wait()
+	close(winners)
+	got := map[string]int{}
+	for batch := range winners {
+		inBatch := map[string]bool{}
+		for _, j := range batch {
+			if inBatch[j.Lane] || j.Fence == "" || j.Workspace != "personal" || j.Project != "p" {
+				t.Fatalf("invalid reservation: %+v", j)
+			}
+			inBatch[j.Lane] = true
+			got[fmt.Sprint(j.Lane, "/", j.Number, "/", j.Item)]++
+		}
+	}
+	if len(got) != 3 || got["incident_issue/0/"+id] != 1 || got["drift/1/"] != 1 || got["drift/2/"] != 1 {
+		t.Fatalf("duplicate or missing claims: %v", got)
+	}
+	jobs, err = schedule("incident_issue", "drift")
+	if err != nil || len(jobs) != 0 {
+		t.Fatalf("lost replies were claimed again before lease expiry: %v %v", jobs, err)
+	}
+	mustExec(t, s.DB, `UPDATE planned_issue_state SET next_check=now(); UPDATE github_mappings SET active=false`)
+	jobs, err = schedule("drift")
+	if err != nil || len(jobs) != 0 {
+		t.Fatalf("inactive mapping selected: %v %v", jobs, err)
+	}
+}
+
+// The packaged listener must recover durable queued work even when PG_NOTIFY is
+// unavailable. Its provider-disabled profile still processes local observations.
+func TestPostgresBackgroundWakeRecovery(t *testing.T) {
+	s := disposableStore(t)
+	// Verify the listener established a session for this test schema. Drain a
+	// signaled observation before isolating recovery from the initial scan.
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		var connected bool
+		err := s.DB.QueryRow(`SELECT EXISTS (SELECT FROM pg_stat_activity WHERE state='idle' AND query=
+        'LISTEN "bugsnitch_jobs_'||pg_catalog.md5(current_schema())||'"')`).Scan(&connected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if connected {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("schema notification listener did not subscribe")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	mustExec(t, s.DB, `INSERT INTO incident_inbox(workspace_id,project_id,source,event_key,group_key,observed,seen_at)
+        VALUES('personal','p','sentry','initial-wake','wake-group','initial observation',now())`)
+	for {
+		var processed bool
+		if err := s.DB.QueryRow("SELECT processed FROM incident_inbox WHERE event_key='initial-wake'").Scan(&processed); err != nil {
+			t.Fatal(err)
+		}
+		if processed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("first queued observation was stranded")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	mustExec(t, s.DB, "ALTER TABLE incident_inbox DISABLE TRIGGER wake_inbox")
+	mustExec(t, s.DB, `INSERT INTO incident_inbox(workspace_id,project_id,source,event_key,group_key,observed,seen_at)
+    VALUES('personal','p','sentry','wake-test','wake-group','network unavailable',now())`)
+	until := time.Now().Add(12 * time.Second)
+	for {
+		var observations int
+		if err := s.DB.QueryRow("SELECT count(*) FROM events WHERE kind='incident.observed'").Scan(&observations); err != nil {
+			t.Fatal(err)
+		}
+		if observations == 2 {
+			return
+		}
+		if time.Now().After(until) {
+			t.Fatal("committed observation was stranded after lost notification")
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}

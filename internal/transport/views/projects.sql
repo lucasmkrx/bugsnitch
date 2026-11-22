@@ -1,0 +1,1 @@
+SELECT id,name,repository,paused,version,preset,policy_version AS "policyVersion",require_plan AS "requirePlan",allow_publication AS "allowPublication",allow_promotion AS "allowPromotion",allow_draft_pr AS "allowDraftPR",auto_triage AS "autoTriage",retention_days AS "retentionDays" FROM projects WHERE workspace_id=$1 ORDER BY name,id

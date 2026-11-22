@@ -1,6 +1,6 @@
 # Working locally
 
-Build the runner and its companion with `make runner`, or extract the macOS package for your architecture. Keep `bugsnitch` and `bugsnitch-runner-journal` in the same directory. Put Git and the supported Codex binary on PATH. Run `bin/bugsnitch doctor` from the build tree, or `./bugsnitch doctor` from the extracted package, to check the journal, execution and control protocol versions, bundled SQLite, Git and Codex. This release reports `execution=1 controls=1` on a compatible native helper. The runner uses the current OS account. Its local records live in `os.UserConfigDir()/bugsnitch` (on macOS, `~/Library/Application Support/bugsnitch`). A private absolute `BUGSNITCH_HOME` selects a separate runner identity and journal.
+Build the runner and its companion with `make runner`, or extract the macOS package for your architecture. Keep `bugsnitch` and `bugsnitch-runner-journal` in the same directory. Put Git and the supported Codex binary on PATH. Run `bin/bugsnitch doctor` from the build tree, or `./bugsnitch doctor` from the extracted package, to check the journal, execution and control protocol versions, bundled SQLite, Git and Codex. This release reports `execution=1 controls=1 attempts=1` on a compatible native helper. The runner uses the current OS account. Its local records live in `os.UserConfigDir()/bugsnitch` (on macOS, `~/Library/Application Support/bugsnitch`). A private absolute `BUGSNITCH_HOME` selects a separate runner identity and journal.
 
 ## Select a project
 

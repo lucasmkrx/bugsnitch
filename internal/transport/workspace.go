@@ -4,82 +4,15 @@ package transport
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
 	"errors"
 	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"strings"
-	"time"
 
 	"github.com/lucasmkrx/bugsnitch/internal/incidents"
 )
 
 const inferenceReason = "Hosted inference requires confirmation of this deployment’s eligibility for Sign in with ChatGPT. Local account-backed runs can be started on the computer."
 
-var views = map[string]string{
-	"publications": `SELECT x.id,x.project_id AS "projectId",x.version,x.status,x.document,x.plan_id AS "planId", x.created_at AS "createdAt",COALESCE((SELECT json_agg(t ORDER BY position) FROM (SELECT position,local_number AS "localNumber",canonical_number AS "number",status,reason FROM planned_issues WHERE publication_id=x.id)t),'[]') AS issues FROM publications x WHERE x.workspace_id=$1 ORDER BY x.created_at DESC LIMIT 100`,
-	"projects":     `SELECT id,name,repository,paused,version,preset,policy_version AS "policyVersion",require_plan AS "requirePlan",allow_publication AS "allowPublication",allow_promotion AS "allowPromotion",allow_draft_pr AS "allowDraftPR",auto_triage AS "autoTriage",retention_days AS "retentionDays" FROM projects WHERE workspace_id=$1 ORDER BY name,id`,
-	"devices":      `SELECT id,name,platform,last_contact AS "lastContact",revoked,COALESCE((SELECT jsonb_agg(project_id ORDER BY project_id) FROM device_projects WHERE device_id=d.id),'[]'::jsonb) AS projects FROM devices d WHERE workspace_id=$1 ORDER BY name,id`,
-	"decisions":    `SELECT d.id,d.project_id AS "projectId",question, jsonb_build_array('Resume dispatch','Keep paused') AS options, d.version, d.subject_version AS "subjectVersion", d.answer, d.request_id AS "requestId", CASE WHEN answer IS NOT NULL THEN 'answered' WHEN expires_at<=now() OR p.version<>subject_version THEN 'stale' ELSE 'pending' END AS status, expires_at AS "expiresAt" FROM decisions d JOIN projects p ON p.id=d.project_id WHERE d.workspace_id=$1 ORDER BY d.created_at DESC LIMIT 200`,
-	"messages":     `SELECT id,project_id AS "projectId",body,'blocked' AS status,'Hosted model authorization pending' AS reason,created_at AS "createdAt" FROM (SELECT * FROM manager_messages WHERE workspace_id=$1 ORDER BY created_at DESC LIMIT 200) m ORDER BY created_at,id`,
-	"attempts":     `SELECT a.id,a.project_id AS "projectId",a.device_id AS "deviceId",d.name AS machine,(SELECT jsonb_build_object('id',id,'operation',operation,'status',CASE WHEN status IN('requested','received') AND expires_at<=now() THEN 'expired' ELSE status END) FROM controls c WHERE c.workspace_id=a.workspace_id AND c.attempt_id=a.id ORDER BY created_at DESC LIMIT 1) AS control,p.repository,a.issue_number AS "issueNumber",a.base_sha AS "baseSha",a.candidate_sha AS "candidateSha",a.phase,a.state,a.reason_code AS "reasonCode",a.version,a.evidence,(SELECT jsonb_build_object('digest',digest,'baseSha',base_sha,'candidateSha',candidate_sha,'sharedAt',created_at) FROM shared_diffs f WHERE f.workspace_id=a.workspace_id AND f.attempt_id=a.id AND f.candidate_sha=a.candidate_sha AND f.version=a.version) AS "sharedDiff",a.updated_at AS "updatedAt",CASE WHEN d.revoked OR d.last_contact < now()-interval '2 minutes' THEN 'disconnected' ELSE 'connected' END AS connection FROM attempt_reports a JOIN devices d ON d.id=a.device_id JOIN projects p ON p.id=a.project_id WHERE a.workspace_id=$1 ORDER BY a.updated_at DESC LIMIT 500`,
-	"tickets": `SELECT * FROM (
-	SELECT x.incident_id AS id,x.project_id AS "projectId",x.number,p.repository,i.observed AS title,x.github_state AS state,'incident' AS source,
-	  x.reason, x.checked_at AS "checkedAt" FROM incident_issues x JOIN incidents i ON i.id=x.incident_id JOIN projects p ON p.id=x.project_id WHERE x.workspace_id=$1 AND x.number IS NOT NULL
-	UNION ALL
-	SELECT 'github-'||z.repository_id||'-'||z.github_id,z.project_id,z.number,p.repository,coalesce(nullif(z.title,''),'Issue #'||z.number),
-	  CASE WHEN NOT m.active OR z.availability<>'current' OR z.checked_at IS NULL OR z.checked_at<=now()-interval '20 minutes' THEN 'unknown' ELSE z.source_state END,'plan',
-	  CASE WHEN NOT m.active THEN 'Repository mapping disabled' WHEN z.availability<>'current' THEN z.reason
-	       WHEN z.checked_at<=now()-interval '20 minutes' THEN 'GitHub state needs a fresh read'
-	       WHEN NOT EXISTS(SELECT FROM plan_issue_bindings b JOIN plan_versions v ON v.id=b.plan_id WHERE (b.workspace_id,b.project_id,b.number,b.generation)=(z.workspace_id,z.project_id,z.number,z.generation) AND v.id=(SELECT id FROM plan_versions WHERE workspace_id=z.workspace_id AND project_id=z.project_id AND approved_at IS NOT NULL ORDER BY version DESC LIMIT 1)) THEN 'A fresh reviewed plan is required' ELSE '' END,z.checked_at
-	FROM planned_issue_state z JOIN projects p ON (p.workspace_id,p.id)=(z.workspace_id,z.project_id) JOIN github_mappings m ON (m.workspace_id,m.project_id,m.repository_id,m.installation_id)=(z.workspace_id,z.project_id,z.repository_id,z.installation_id) WHERE z.workspace_id=$1) all_tickets ORDER BY "checkedAt" DESC NULLS LAST,id LIMIT 500`,
-}
-
-func (s *Server) state(call *domainCall) error {
-	ws := call.Workspace
-	data := object{"capabilities": object{"hostedInference": false, "reason": inferenceReason}, "plans": []string{}, "pullRequests": []string{}}
-	var name string
-	var tickets, turns, limitsV, dispatchV int
-	var stopped bool
-	if err := s.DB.QueryRowContext(call.ctx, "SELECT name,ticket_limit,turn_limit,limits_version,stopped,dispatch_version FROM workspaces WHERE id=$1", ws).Scan(&name, &tickets, &turns, &limitsV, &stopped, &dispatchV); err != nil {
-		return err
-	}
-	data["limits"] = object{"tickets": tickets, "turns": turns, "version": limitsV}
-	data["workspace"] = object{"id": ws, "name": name, "stopped": stopped, "dispatchVersion": dispatchV}
-	var events json.RawMessage
-	if err := s.coordinate(call.ctx, "events.snapshot", object{"workspace": ws}, &events); err != nil {
-		return err
-	}
-	data["events"] = events
-	for key, q := range views {
-		var b json.RawMessage
-		if err := s.DB.QueryRowContext(call.ctx, "SELECT COALESCE(json_agg(t),'[]') FROM ("+q+") t", ws).Scan(&b); err != nil {
-			return err
-		}
-		data[key] = b
-	}
-	plans, err := s.listPlans(call.ctx, ws)
-	if err != nil {
-		return err
-	}
-	data["plans"] = plans
-	pulls, err := s.pulls().List(call.ctx, ws)
-	if err != nil {
-		return err
-	}
-	data["pullRequests"] = pulls
-	drafts, err := s.pulls().Drafts(call.ctx, ws)
-	if err != nil {
-		return err
-	}
-	data["draftPRs"] = drafts
-	list, err := s.Incidents.List(call.ctx, ws)
-	if err != nil {
-		return err
-	}
-	data["incidents"] = list
-	data["updatedAt"] = time.Now().UTC()
-	return call.reply(200, data)
-}
 func (s *Server) createProject(call *domainCall) error {
 	ws := call.Workspace
 	var b struct{ Name, Repository string }

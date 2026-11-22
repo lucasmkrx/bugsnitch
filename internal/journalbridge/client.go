@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 // Package journalbridge accesses the local runner's two SQLite journals through
-// its private native helper. The caller supplies SQL assembled by trusted code.
+// its private native helper. Typed operations and trusted compatibility SQL
+// share a bounded transport.
 package journalbridge
 
 import (
@@ -62,14 +63,27 @@ func Query(ctx context.Context, file, sql string) ([]byte, error) {
 // Control sends a typed local pause, stop or settlement operation through the
 // same durable journal and never replays an interrupted request.
 func Control(ctx context.Context, file string, operation any) ([]byte, error) {
-	return shared.call(ctx, file, nil, operation)
+	return shared.call(ctx, file, request{Control: operation})
 }
 
 func (c *client) query(ctx context.Context, file, sql string) ([]byte, error) {
-	return c.call(ctx, file, &sql, nil)
+	return c.call(ctx, file, request{SQL: &sql})
 }
 
-func (c *client) call(ctx context.Context, file string, sql *string, control any) ([]byte, error) {
+// Operation executes a fixed native journal action on the selected local file.
+func Operation(ctx context.Context, file, name string, arguments any) ([]byte, error) {
+	return shared.call(ctx, file, request{Operation: map[string]any{name: arguments}})
+}
+
+type request struct {
+	Version   int     `json:"version"`
+	Path      string  `json:"path"`
+	SQL       *string `json:"sql,omitempty"`
+	Control   any     `json:"control,omitempty"`
+	Operation any     `json:"operation,omitempty"`
+}
+
+func (c *client) call(ctx context.Context, file string, request request) ([]byte, error) {
 	select {
 	case c.gate <- struct{}{}:
 		defer func() { <-c.gate }()
@@ -86,12 +100,8 @@ func (c *client) call(ctx context.Context, file string, sql *string, control any
 	if name := filepath.Base(path); name != "runner.sqlite" && name != "device.sqlite" {
 		return nil, errors.New("unsupported journal file")
 	}
-	frame, err := json.Marshal(struct {
-		Version int     `json:"version"`
-		Path    string  `json:"path"`
-		SQL     *string `json:"sql,omitempty"`
-		Control any     `json:"control,omitempty"`
-	}{1, path, sql, control})
+	request.Version, request.Path = 1, path
+	frame, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
 	}

@@ -10,12 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
 
+	"github.com/lucasmkrx/bugsnitch/internal/journalbridge"
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 )
 
@@ -132,56 +132,10 @@ func query(q string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	file := filepath.Join(dir, "runner.sqlite")
-	f, err := os.OpenFile(file, os.O_RDWR|os.O_CREATE, 0600)
-	if err != nil {
-		return nil, err
-	}
-	if err = f.Close(); err != nil {
-		return nil, err
-	}
-	b, err := sqlite(file, "PRAGMA user_version;")
-	if err != nil {
-		return nil, err
-	}
-	switch strings.TrimSpace(string(b)) {
-	case "2":
-	case "0", "1":
-		if _, err = sqlite(file, upgradeJournal); err != nil {
-			return nil, err
-		}
-	default:
-		return nil, errors.New("runner journal requires a compatible Bugsnitch version")
-	}
-	return sqlite(file, q)
-}
-func sqlite(file, sql string) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "sqlite3", "-batch", "-bail", "-init", os.DevNull, file)
-	cmd.Stdin = strings.NewReader(".timeout 5000\nPRAGMA foreign_keys=ON;\n" + sql + "\n")
-	b, err := cmd.Output()
-	if err != nil {
-		return nil, errors.New("SQLite runner journal operation failed")
-	}
-	return b, nil
+	return journalbridge.Query(ctx, filepath.Join(dir, "runner.sqlite"), q)
 }
-
-// The first schema assigned a single permanent row to each issue. Preserve its
-// attempts and command receipts as generation 1 in one crash-atomic migration.
-// Multiple startup processes may both decide to migrate; this SQL is replayable.
-const upgradeJournal = `BEGIN IMMEDIATE;
-CREATE TABLE IF NOT EXISTS local_projects(workspace TEXT NOT NULL,repo TEXT NOT NULL,data TEXT NOT NULL,PRIMARY KEY(workspace,repo));
-CREATE TABLE IF NOT EXISTS local_attempts(id TEXT PRIMARY KEY,workspace TEXT NOT NULL,repo TEXT NOT NULL,issue INTEGER NOT NULL,version INTEGER NOT NULL,data TEXT NOT NULL,UNIQUE(workspace,repo,issue));
-CREATE TABLE IF NOT EXISTS control_receipts(command_id TEXT PRIMARY KEY,attempt_id TEXT NOT NULL REFERENCES local_attempts(id),op TEXT NOT NULL,subject_version INTEGER NOT NULL,status TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS journal_attempts(id TEXT PRIMARY KEY,workspace TEXT NOT NULL,repo TEXT NOT NULL,issue INTEGER NOT NULL,version INTEGER NOT NULL,data TEXT NOT NULL,generation INTEGER NOT NULL CHECK(generation BETWEEN 1 AND 3),UNIQUE(workspace,repo,issue,generation));
-CREATE TABLE IF NOT EXISTS journal_controls(command_id TEXT PRIMARY KEY,attempt_id TEXT NOT NULL REFERENCES journal_attempts(id),op TEXT NOT NULL,subject_version INTEGER NOT NULL,status TEXT NOT NULL);
-INSERT OR IGNORE INTO journal_attempts SELECT id,workspace,repo,issue,version,data,1 FROM local_attempts;
-INSERT OR IGNORE INTO journal_controls SELECT * FROM control_receipts;
-DROP TABLE control_receipts;
-DROP TABLE local_attempts;
-PRAGMA user_version=2;
-COMMIT;`
 
 func project(w, r string) (Project, error) {
 	var p Project

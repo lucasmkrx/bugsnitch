@@ -11,7 +11,7 @@ From the Bugsnitch repository root, install the locked browser harness and optio
 (cd examples/checkout && npm ci && npm run build:sdk)
 ```
 
-Install Chrome or set `BUGSNITCH_TEST_CHROME` to a Chromium executable. Select a disposable PostgreSQL database via `BUGSNITCH_TEST_DATABASE_URL`. The test creates and drops an isolated schema. Sign in to the supported local Codex runtime with your ChatGPT account. The following explicit opt-in spends that account's allowance on real planning, implementation and separate review turns.
+Build the helpers and export their absolute paths as described in the [test setup](../../README.md#verification-and-operations). Install Chrome or set `BUGSNITCH_TEST_CHROME` to a Chromium executable. Select a disposable PostgreSQL database via `BUGSNITCH_TEST_DATABASE_URL`. The test creates and drops an isolated schema. Sign in to the supported local Codex runtime with your ChatGPT account. The following explicit opt-in spends that account's allowance on real planning, implementation and separate review turns.
 
 ```sh
 BUGSNITCH_TEST_LIVE_CHECKOUT=1 go test -count=1 -v -timeout 15m \

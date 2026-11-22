@@ -13,6 +13,8 @@ use std::{
 
 mod controls;
 mod integration;
+#[cfg(target_os = "macos")]
+mod macos_group;
 mod operations;
 mod schema;
 mod validation;

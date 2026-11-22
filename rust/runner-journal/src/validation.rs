@@ -34,6 +34,7 @@ mod unix {
     const VERSION: u8 = 1;
     const MAX_FRAME: usize = 8 << 20;
     const POLL_INTERVAL: Duration = Duration::from_millis(25);
+    const STOP_DEADLINE: Duration = Duration::from_secs(5);
 
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
@@ -120,6 +121,78 @@ mod unix {
         Ok(unsafe { info.si_pid() } != 0)
     }
 
+    fn wait_tick(deadline: Instant) -> io::Result<()> {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(io::ErrorKind::TimedOut.into());
+        }
+        std::thread::sleep(remaining.min(POLL_INTERVAL));
+        Ok(())
+    }
+
+    fn reap_leader(child: &mut Child, deadline: Instant) -> io::Result<i32> {
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => return Ok(status.code().unwrap_or(-1)),
+                Ok(None) => wait_tick(deadline)?,
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn adopt_descendants() -> io::Result<()> {
+        // This executable supervises exactly one validator. When a group member
+        // exits, its orphaned descendants become our children, even in containers
+        // whose PID 1 does not reap orphans.
+        let rc = unsafe {
+            libc::prctl(
+                libc::PR_SET_CHILD_SUBREAPER,
+                1 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+                0 as libc::c_ulong,
+            )
+        };
+        if rc < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn reap_descendants(group: libc::pid_t, deadline: Instant) -> io::Result<()> {
+        loop {
+            // waitpid can only reap this supervisor's own children. The original
+            // leader has been reaped, so no terminating signal can be sent here.
+            let pid = unsafe { libc::waitpid(-group, std::ptr::null_mut(), libc::WNOHANG) };
+            if pid > 0 {
+                continue;
+            }
+            if pid < 0 {
+                let e = io::Error::last_os_error();
+                if e.kind() == io::ErrorKind::Interrupted {
+                    continue;
+                }
+                if e.raw_os_error() != Some(libc::ECHILD) {
+                    return Err(e);
+                }
+                // Confirm absence across any concurrent reparenting. Signal 0
+                // probes group existence without delivering a signal. Numeric
+                // reuse can only delay or withhold a terminal receipt.
+                if unsafe { libc::kill(-group, 0) } < 0 {
+                    let e = io::Error::last_os_error();
+                    if e.raw_os_error() == Some(libc::ESRCH) {
+                        return Ok(());
+                    }
+                    return Err(e);
+                }
+            }
+            wait_tick(deadline)?;
+        }
+    }
+
     fn supervise(mut child: Child, input: &File, deadline: Instant) -> io::Result<(Outcome, i32)> {
         let outcome = loop {
             match finished(&child) {
@@ -141,7 +214,9 @@ mod unix {
         };
         // Kill remaining group members even on ordinary leader exit. A validator
         // deliberately escaping this process group is outside the trusted profile.
-        let rc = unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+        let group = child.id() as libc::pid_t;
+        let stop_deadline = Instant::now() + STOP_DEADLINE;
+        let rc = unsafe { libc::kill(-group, libc::SIGKILL) };
         if rc < 0 {
             let err = io::Error::last_os_error();
             // Darwin can return EPERM when the only group member is a zombie.
@@ -150,11 +225,17 @@ mod unix {
             if err.raw_os_error() != Some(libc::ESRCH) && !exited_leader {
                 // Try to reap the direct child even if group signaling failed.
                 let _ = child.kill();
-                let _ = child.wait();
+                let _ = reap_leader(&mut child, stop_deadline);
                 return Err(err);
             }
         }
-        let code = child.wait()?.code().unwrap_or(-1);
+        #[cfg(target_os = "macos")]
+        let group_result = crate::macos_group::wait_for_descendants(group);
+        let code = reap_leader(&mut child, stop_deadline)?;
+        #[cfg(target_os = "macos")]
+        group_result?;
+        #[cfg(target_os = "linux")]
+        reap_descendants(group, stop_deadline)?;
         Ok((outcome?, code))
     }
 
@@ -238,6 +319,10 @@ mod unix {
                     Err(io::Error::last_os_error())
                 }
             });
+        }
+        #[cfg(target_os = "linux")]
+        if adopt_descendants().is_err() {
+            return Ok((Outcome::DidNotStart, -1));
         }
         match command.spawn() {
             Ok(child) => supervise(child, input, deadline),

@@ -27,9 +27,18 @@ func TestValidatorProcessFixture(t *testing.T) {
 		t.Skip("child process fixture")
 	}
 	switch args[len(args)-1] {
-	case "spawn":
+	case "spawn", "exit-first":
 		cmd := exec.Command(args[0], "-test.run=^TestValidatorProcessFixture$", "--", "hold")
-		if err := cmd.Run(); err != nil {
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		if args[len(args)-1] == "exit-first" {
+			// Simulate a validator returning while another group member owns
+			// a shared test resource. The supervisor still owns its teardown.
+			waitValidationFile(t, "validator.ready")
+			return
+		}
+		if err := cmd.Wait(); err != nil {
 			t.Fatal(err)
 		}
 	case "hold":
@@ -101,10 +110,14 @@ func waitValidationFile(t *testing.T, path string) string {
 }
 
 func TestValidationSupervisesDescendants(t *testing.T) {
-	for _, name := range []string{"cancel", "timeout", "parent-death"} {
+	for _, name := range []string{"cancel", "timeout", "parent-death", "exit-first"} {
 		t.Run(name, func(t *testing.T) {
 			a := validationAttempt(t)
-			a.Project.Config.Validate = []string{os.Args[0], "-test.run=^TestValidatorProcessFixture$", "--", "spawn"}
+			fixtureMode := "spawn"
+			if name == "exit-first" {
+				fixtureMode = name
+			}
+			a.Project.Config.Validate = []string{os.Args[0], "-test.run=^TestValidatorProcessFixture$", "--", fixtureMode}
 			a.Project.Config.ValidationTimeoutSeconds = 10
 			if name == "timeout" {
 				a.Project.Config.ValidationTimeoutSeconds = 2
@@ -147,7 +160,11 @@ func TestValidationSupervisesDescendants(t *testing.T) {
 			if parent == nil {
 				select {
 				case r := <-done:
-					if r.err == nil || r.code == nil || *r.code != -1 {
+					if name == "exit-first" {
+						if r.err != nil || r.code == nil || *r.code != 0 {
+							t.Fatal("validator leader exit was lost", r)
+						}
+					} else if r.err == nil || r.code == nil || *r.code != -1 {
 						t.Fatal("missing interrupted validator exit", r)
 					}
 					if name == "timeout" && !strings.Contains(r.err.Error(), "timed out") {

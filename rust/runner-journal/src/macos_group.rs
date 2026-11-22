@@ -92,6 +92,9 @@ pub(crate) fn wait_for_descendants(group: libc::pid_t) -> io::Result<()> {
         let pids = members(group)?;
         let mut finished = true;
         for &pid in &pids {
+            if Instant::now() >= deadline {
+                return Err(io::ErrorKind::TimedOut.into());
+            }
             if !exited_or_gone(group, pid)? {
                 finished = false;
                 break;

@@ -33,8 +33,12 @@ jobs:
           BUGSNITCH_OWNER_TOKEN: ephemeral-ci-only-owner-token-000000000000
         run: |
           docker compose -f deploy/compose.yml up --build --detach
-          curl --fail --silent --show-error --retry 15 --retry-all-errors http://localhost:8787/readyz
-          docker compose -f deploy/compose.yml down --volumes
+          trap 'docker compose -f deploy/compose.yml down --volumes' EXIT
+          if ! curl --fail --silent --show-error --retry 20 --retry-delay 2 --retry-all-errors --max-time 3 --retry-max-time 50 http://localhost:8787/readyz; then
+            docker compose -f deploy/compose.yml ps --all
+            docker compose -f deploy/compose.yml logs --tail 20 server
+            exit 1
+          fi
   macos-runner:
     strategy:
       fail-fast: false

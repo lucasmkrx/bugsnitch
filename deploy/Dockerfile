@@ -27,12 +27,14 @@ RUN RUSTFLAGS="-C target-feature=-crt-static" cargo build --locked --release --m
 RUN python3 scripts/rust_notices.py bugsnitch-server-migrate /licenses
 
 FROM alpine:3.23
-RUN apk add --no-cache ca-certificates libpq && adduser -D -u 10001 bugsnitch
+RUN apk add --no-cache ca-certificates libgcc libpq && adduser -D -u 10001 bugsnitch
 COPY --from=build /server /usr/local/bin/bugsnitch-server
 COPY --from=migrations /src/target/release/bugsnitch-server-migrate /usr/local/bin/bugsnitch-server-migrate
 COPY --from=migrations /licenses /usr/share/licenses/bugsnitch-server-migrate
 COPY --from=dashboard /web/dist /srv/dashboard
 USER bugsnitch
+# Check the dynamic loader and libpq on the final runtime image.
+RUN bugsnitch-server-migrate 2>&1 | grep -Fx "Set DATABASE_URL for the migrator"
 ENV BUGSNITCH_LISTEN=0.0.0.0:8787 BUGSNITCH_WEB_DIR=/srv/dashboard
 EXPOSE 8787
 ENTRYPOINT ["bugsnitch-server"]

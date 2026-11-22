@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/lucasmkrx/bugsnitch/internal/testgithub"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,10 +20,12 @@ import (
 // in-process provider fixtures. The external test uses the real runner package.
 type CheckoutFixture struct {
 	t      *testing.T
-	s      Store
+	s      fixtureStore
 	issue  protocol.IssueSelection
 	body   string
 	writes int
+	origin string
+	mu     sync.Mutex
 }
 
 func NewCheckoutFixture(t *testing.T) *CheckoutFixture {
@@ -29,12 +33,15 @@ func NewCheckoutFixture(t *testing.T) *CheckoutFixture {
 	old := http.DefaultTransport
 	t.Cleanup(func() { http.DefaultTransport = old })
 	http.DefaultTransport = transportFixture(f.github)
+	f.origin = testgithub.Serve(t, f.github)
 	return f
 }
 
 func (f *CheckoutFixture) github(r *http.Request) (*http.Response, error) {
 	const repo = "example/disposable"
-	if r.URL.Host != "api.github.com" {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if r.URL.Host != "" && r.URL.Host != "api.github.com" {
 		return nil, errors.New("unexpected fixture host")
 	}
 	switch r.Method + " " + r.URL.Path {
@@ -93,7 +100,7 @@ func (f *CheckoutFixture) Deliver(projected map[string]any, replay bool, expecte
 	if replay {
 		send()
 	}
-	if err = f.s.processOne(context.Background()); err != nil {
+	if err = f.s.processAccepted(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if got := one(t, f.s); got.Occurrences != expectedOccurrences || got.Observed != "ShippingThresholdError reported by Sentry" {
@@ -111,9 +118,11 @@ func (f *CheckoutFixture) Promote() protocol.IssueSelection {
 			t.Fatal(err)
 		}
 	}
-	if err := f.s.syncOne(ctx, fixtureApp(t)); err != nil {
+	if err := f.s.syncOne(ctx, fixtureApp(t, f.origin)); err != nil {
 		t.Fatal(err)
 	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	inc = one(t, f.s)
 	if inc.IssueNumber == nil || *inc.IssueNumber != int64(f.issue.Number) || inc.Promotion == nil || *inc.Promotion != "linked" || f.writes != 1 {
 		t.Fatal("promotion did not produce one linked canonical ticket")
@@ -132,11 +141,11 @@ func (f *CheckoutFixture) Observe(r Receipt, want string) {
 	inc := one(t, f.s)
 	if r.Kind != "" {
 		r.At, r.Version, r.CommandID = time.Now().UTC(), inc.Version, "checkout-"+r.Kind
-		if err := f.s.receipt(context.Background(), "personal", "p", inc.ID, r); err != nil {
+		if err := f.s.RecordReceipt(context.Background(), "personal", "p", inc.ID, r); err != nil {
 			t.Fatal(err)
 		}
 	}
-	v, err := f.s.verdict(context.Background(), "personal", "p", inc.ID, "bugsnitch-fixture")
+	v, err := f.s.Verdict(context.Background(), "personal", "p", inc.ID, "bugsnitch-fixture")
 	if err != nil || v.Status != want {
 		t.Fatalf("verdict=%s want=%s err=%v", v.Status, want, err)
 	}

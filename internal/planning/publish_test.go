@@ -21,6 +21,8 @@ type fakeIssues struct {
 	last   github.Issue
 }
 
+func (*fakeIssues) Close() {}
+
 func (f *fakeIssues) Create(_ context.Context, title, body string) (github.Issue, error) {
 	f.bodies = append(f.bodies, body)
 	n := int64(len(f.bodies) + 40)

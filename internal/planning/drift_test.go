@@ -18,8 +18,8 @@ import (
 
 	"github.com/lucasmkrx/bugsnitch/internal/domain"
 	"github.com/lucasmkrx/bugsnitch/internal/github"
-	"github.com/lucasmkrx/bugsnitch/internal/incidents"
 	"github.com/lucasmkrx/bugsnitch/internal/storage"
+	"github.com/lucasmkrx/bugsnitch/internal/testserver"
 )
 
 func TestPlannedIssueDriftCannotReviveStaleScope(t *testing.T) {
@@ -38,16 +38,16 @@ func TestPlannedIssueDriftCannotReviveStaleScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer admin.Close()
+	t.Cleanup(func() { admin.Close() })
 	schema := "plan_drift_" + id()
 	if _, err = admin.Exec("CREATE SCHEMA " + schema); err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
+	t.Cleanup(func() {
 		if _, err := admin.Exec("DROP SCHEMA " + schema + " CASCADE"); err != nil {
 			t.Error(err)
 		}
-	}()
+	})
 	q := u.Query()
 	q.Set("search_path", schema)
 	u.RawQuery = q.Encode()
@@ -56,7 +56,7 @@ func TestPlannedIssueDriftCannotReviveStaleScope(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() { db.Close() })
 	exec := func(query string, args ...any) {
 		t.Helper()
 		if _, e := db.Exec(query, args...); e != nil {
@@ -100,6 +100,7 @@ func TestPlannedIssueDriftCannotReviveStaleScope(t *testing.T) {
 	bind("old")
 	eligible("old", true)
 	eligible("", false)
+	listener := testserver.Start(t, u.String(), testserver.Config{GitHubSecret: "fixture"})
 	hook := func(action string, delivery int) {
 		t.Helper()
 		body, _ := json.Marshal(map[string]any{"action": action, "issue": map[string]int{"number": 17, "id": 70}, "installation": map[string]int{"id": 31}, "repository": map[string]int{"id": 32}})
@@ -110,7 +111,7 @@ func TestPlannedIssueDriftCannotReviveStaleScope(t *testing.T) {
 		req.Header.Set("X-GitHub-Event", "issues")
 		req.Header.Set("X-Hub-Signature-256", "sha256="+hex.EncodeToString(m.Sum(nil)))
 		r := httptest.NewRecorder()
-		(incidents.Store{DB: db}).GitHubWebhook("fixture").ServeHTTP(r, req)
+		listener.ServeHTTP(r, req)
 		if r.Code != 202 {
 			t.Fatal(r.Code, r.Body.String())
 		}

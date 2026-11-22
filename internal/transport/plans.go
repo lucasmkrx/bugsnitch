@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/lucasmkrx/bugsnitch/internal/audit"
-	"net/http"
 	"slices"
 	"strings"
 
@@ -16,13 +15,14 @@ import (
 	"github.com/lucasmkrx/bugsnitch/internal/planning"
 )
 
-func (s *Server) proposePlan(w http.ResponseWriter, r *http.Request, ws string) error {
+func (s *Server) proposePlan(call *domainCall) error {
+	ws := call.Workspace
 	var b struct {
 		ProjectID string
 		Version   int64
 		Plan      domain.Plan
 	}
-	if err := decode(w, r, &b); err != nil {
+	if err := call.decode(&b); err != nil {
 		return err
 	}
 	order, err := b.Plan.Order()
@@ -30,7 +30,7 @@ func (s *Server) proposePlan(w http.ResponseWriter, r *http.Request, ws string) 
 		return bad(err.Error())
 	}
 	id := random(16)
-	ctx := r.Context()
+	ctx := call.ctx
 	err = transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		var v int64
 		if err := tx.QueryRowContext(ctx, "SELECT version FROM projects WHERE workspace_id=$1 AND id=$2 FOR UPDATE", ws, b.ProjectID).Scan(&v); err != nil {
@@ -59,15 +59,16 @@ func (s *Server) proposePlan(w http.ResponseWriter, r *http.Request, ws string) 
 	if err != nil {
 		return err
 	}
-	return send(w, 201, object{"id": id, "order": order})
+	return call.reply(201, object{"id": id, "order": order})
 }
-func (s *Server) approvePlan(w http.ResponseWriter, r *http.Request, ws string) error {
+func (s *Server) approvePlan(call *domainCall) error {
+	ws := call.Workspace
 	var b struct{ Version int64 }
-	if err := decode(w, r, &b); err != nil {
+	if err := call.decode(&b); err != nil {
 		return err
 	}
-	ctx := r.Context()
-	id := r.PathValue("id")
+	ctx := call.ctx
+	id := call.ID
 	err := transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		var p string
 		var v, planVersion int64
@@ -111,21 +112,22 @@ func (s *Server) approvePlan(w http.ResponseWriter, r *http.Request, ws string) 
 	if err != nil {
 		return err
 	}
-	return send(w, 200, object{"id": id, "status": "approved"})
+	return call.reply(200, object{"id": id, "status": "approved"})
 }
-func (s *Server) attestPrerequisite(w http.ResponseWriter, r *http.Request, ws string) error {
+func (s *Server) attestPrerequisite(call *domainCall) error {
+	ws := call.Workspace
 	var b struct {
 		Number            int
 		Revision, Summary string
 	}
-	if err := decode(w, r, &b); err != nil {
+	if err := call.decode(&b); err != nil {
 		return err
 	}
 	if b.Number <= 0 || !shaPattern.MatchString(b.Revision) || strings.TrimSpace(b.Summary) == "" || len(b.Summary) > 1000 {
 		return bad("Supply the verified integration commit and acceptance evidence")
 	}
-	id := r.PathValue("id")
-	ctx := r.Context()
+	id := call.ID
+	ctx := call.ctx
 	err := transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		var project string
 		var raw []byte
@@ -157,7 +159,7 @@ func (s *Server) attestPrerequisite(w http.ResponseWriter, r *http.Request, ws s
 	if err != nil {
 		return err
 	}
-	return send(w, 201, object{"accepted": true})
+	return call.reply(201, object{"accepted": true})
 }
 
 func checkPlannedIssue(ctx context.Context, tx *sql.Tx, ws, p, plan string, number int, allowClosed bool) error {

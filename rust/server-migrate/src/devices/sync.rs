@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
-use super::{controls, projects};
+use super::{controls, projects, valid_key, valid_sha};
 use crate::coord::{Db, Details, Error, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -26,18 +27,101 @@ struct Report {
     project_id: String,
     issue_number: i64,
     base_sha: String,
+    #[serde(default)]
     candidate_sha: String,
     phase: String,
     state: String,
     version: i64,
-    #[serde(default)]
-    evidence: Vec<Value>,
+    evidence: Option<Vec<Evidence>>,
     #[serde(default)]
     issue_updated_at: String,
     #[serde(default)]
     reason_code: String,
 }
 
+#[derive(Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase", deny_unknown_fields, default)]
+struct Evidence {
+    phase: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    candidate_sha: String,
+    changed_files: i64,
+    important_findings: i64,
+    minor_findings: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    duration_ms: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    exit_code: Option<i64>,
+}
+
+impl Report {
+    fn validate(&self) -> Result<()> {
+        if !self.issue_updated_at.is_empty()
+            && (self.issue_updated_at.len() > 40
+                || OffsetDateTime::parse(&self.issue_updated_at, &Rfc3339).is_err())
+        {
+            return Err(Error::bad("Invalid canonical issue revision"));
+        }
+        let has_candidate = !self.candidate_sha.is_empty();
+        let valid_phase = match self.phase.as_str() {
+            "plan" => !has_candidate,
+            "implement" => true,
+            "validate" | "review" | "wrap_up" => has_candidate,
+            _ => false,
+        };
+        let valid_state = match self.state.as_str() {
+            "completed" => self.phase == "wrap_up" && has_candidate,
+            "running" | "waiting" | "failed" | "cancelled" => true,
+            _ => false,
+        };
+        if !valid_key(&self.id)
+            || self.issue_number < 1
+            || self.version < 1
+            || !valid_sha(&self.base_sha)
+            || (has_candidate && !valid_sha(&self.candidate_sha))
+            || !valid_state
+            || !valid_phase
+        {
+            return Err(Error::bad("Invalid attempt metadata"));
+        }
+        if !matches!(
+            self.reason_code.as_str(),
+            "" | "sign_in_required"
+                | "allowance_exhausted"
+                | "model_unavailable"
+                | "provider_rate_limited"
+                | "provider_unavailable"
+                | "device_unauthorized"
+                | "authority_unreachable"
+                | "authority_stale"
+                | "control_pending"
+                | "local_capacity"
+                | "task_failed"
+        ) {
+            return Err(Error::bad("Invalid attempt reason code"));
+        }
+        let evidence = self.evidence.as_deref().unwrap_or_default();
+        if evidence.len() > 40 {
+            return Err(Error::bad("Too many evidence records"));
+        }
+        for stage in evidence {
+            if !matches!(
+                stage.phase.as_str(),
+                "plan" | "implement" | "validate" | "review" | "wrap_up"
+            ) || (!stage.candidate_sha.is_empty() && !valid_sha(&stage.candidate_sha))
+                || stage.changed_files < 0
+                || stage.important_findings < 0
+                || stage.minor_findings < 0
+                || stage
+                    .duration_ms
+                    .is_some_and(|ms| !(0..=86_400_000).contains(&ms))
+            {
+                return Err(Error::bad("Invalid stage evidence"));
+            }
+        }
+        Ok(())
+    }
+}
 pub(super) fn handle(db: &Db<'_>, input: Value) -> Result<Value> {
     let Request {
         credential_hash,
@@ -47,6 +131,9 @@ pub(super) fn handle(db: &Db<'_>, input: Value) -> Result<Value> {
     let acks = sync.acks.unwrap_or_default();
     if sync.protocol != 1 || reports.len() > 64 || acks.len() > 64 {
         return Err(Error::bad("Invalid device sync envelope"));
+    }
+    for report in &reports {
+        report.validate()?;
     }
     let identity = db.optional("WITH prev AS MATERIALIZED (
         SELECT id,last_contact,diagnostics_since FROM devices WHERE token_hash=$1 AND NOT revoked FOR NO KEY UPDATE
@@ -116,7 +203,7 @@ fn save_report(db: &Db<'_>, workspace: &str, device: &str, a: &Report) -> Result
     // A reconciled snapshot can skip versions, but cannot move the issue,
     // machine, base or finished attempt. An older runner may supply the
     // issue revision later on an otherwise identical, already recorded report.
-    let evidence = serde_json::to_string(&a.evidence)?;
+    let evidence = serde_json::to_string(a.evidence.as_deref().unwrap_or_default())?;
     let updated = db.exec("INSERT INTO attempt_reports
         (id,workspace_id,project_id,device_id,issue_number,base_sha,candidate_sha,phase,state,version,evidence,issue_updated_at,reason_code)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13)

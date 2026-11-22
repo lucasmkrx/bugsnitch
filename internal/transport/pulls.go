@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"github.com/lucasmkrx/bugsnitch/internal/integration"
-	"net/http"
 	"strconv"
 )
 
@@ -23,42 +22,45 @@ func pullError(e error) error {
 	}
 	return e
 }
-func (s *Server) refreshPull(w http.ResponseWriter, r *http.Request, ws string) error {
-	n, e := strconv.ParseInt(r.PathValue("number"), 10, 64)
+func (s *Server) refreshPull(call *domainCall) error {
+	ws := call.Workspace
+	n, e := strconv.ParseInt(call.Number, 10, 64)
 	if e != nil || n < 1 {
 		return bad("Invalid PR number")
 	}
 	var b struct{ IssueNumber, Version int64 }
-	if e = decode(w, r, &b); e != nil {
+	if e = call.decode(&b); e != nil {
 		return e
 	}
-	v, e := s.pulls().Refresh(r.Context(), ws, r.PathValue("project"), n, b.IssueNumber, b.Version)
+	v, e := s.pulls().Refresh(call.ctx, ws, call.Project, n, b.IssueNumber, b.Version)
 	if e != nil {
 		return pullError(e)
 	}
-	return send(w, 200, v)
+	return call.reply(200, v)
 }
-func (s *Server) recordPull(w http.ResponseWriter, r *http.Request, ws string) error {
-	n, e := strconv.ParseInt(r.PathValue("number"), 10, 64)
+func (s *Server) recordPull(call *domainCall) error {
+	ws := call.Workspace
+	n, e := strconv.ParseInt(call.Number, 10, 64)
 	if e != nil || n < 1 {
 		return bad("Invalid PR number")
 	}
 	var b integration.Evidence
-	if e = decode(w, r, &b); e != nil {
+	if e = call.decode(&b); e != nil {
 		return e
 	}
-	if e = s.pulls().Record(r.Context(), ws, r.PathValue("project"), n, b); e != nil {
+	if e = s.pulls().Record(call.ctx, ws, call.Project, n, b); e != nil {
 		return pullError(e)
 	}
-	return send(w, 201, object{"accepted": true})
+	return call.reply(201, object{"accepted": true})
 }
 
-func (s *Server) requestDraft(w http.ResponseWriter, r *http.Request, ws string) error {
+func (s *Server) requestDraft(call *domainCall) error {
+	ws := call.Workspace
 	var b integration.DraftRequest
-	if err := decode(w, r, &b); err != nil {
+	if err := call.decode(&b); err != nil {
 		return err
 	}
-	d, err := s.pulls().RequestDraft(r.Context(), ws, r.PathValue("project"), r.PathValue("id"), b)
+	d, err := s.pulls().RequestDraft(call.ctx, ws, call.Project, call.ID, b)
 	if errors.Is(err, integration.ErrConflict) {
 		return conflict("Draft requires a current completed attempt, validated candidate, independent review and project permission")
 	}
@@ -68,5 +70,5 @@ func (s *Server) requestDraft(w http.ResponseWriter, r *http.Request, ws string)
 	if err != nil {
 		return pullError(err)
 	}
-	return send(w, 202, d)
+	return call.reply(202, d)
 }

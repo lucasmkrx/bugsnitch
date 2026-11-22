@@ -258,6 +258,7 @@ func (s Store) syncDraft(ctx context.Context) error {
 	if err != nil {
 		return j.finish(ctx, tx, j.state, "GitHub installation unavailable", nil, err)
 	}
+	defer repo.Close()
 	pr, err := repo.Find(ctx, j.branch(), j.target, j.mark())
 	if errors.Is(err, github.ErrSubjectChanged) {
 		return j.finish(ctx, tx, "blocked", "A different pull request uses this branch or marker", nil, err)

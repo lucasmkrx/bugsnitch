@@ -25,6 +25,17 @@ jobs:
       - run: make test GO_TEST_FLAGS="-race -count=1"
       - run: cargo test --locked -p bugsnitch-server-migrate --test database -- --ignored
       - run: make build plugin
+      - name: Exercise the packaged Rust HTTP server and provider protocols
+        env:
+          PGHOST: localhost
+          PGPORT: '5432'
+          PGUSER: postgres
+          PGPASSWORD: test
+        run: |
+          python3 scripts/smoke-devices.py
+          python3 scripts/smoke-server-lifecycle.py
+          python3 scripts/smoke_inbound.py
+          python3 scripts/smoke.py
       - run: npm --prefix web run test:browser
       - run: node --test examples/checkout/telemetry.test.mjs
       - name: Start the packaged hosted stack

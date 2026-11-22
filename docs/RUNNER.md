@@ -1,6 +1,6 @@
 # Working locally
 
-Build the CLI from the repository root with `go build -o ./bin/bugsnitch ./cmd/bugsnitch`. Put Git, the SQLite CLI and the supported Codex binary on PATH. Run `bin/bugsnitch doctor` to check their versions. The runner uses the current OS account. Its local records live in `os.UserConfigDir()/bugsnitch` (on macOS, `~/Library/Application Support/bugsnitch`). A private absolute `BUGSNITCH_HOME` selects a separate runner identity and journal.
+Build the runner and its companion with `make runner`, or extract the macOS package for your architecture. Keep `bugsnitch` and `bugsnitch-runner-journal` in the same directory. Put Git and the supported Codex binary on PATH. Run `bin/bugsnitch doctor` from the build tree, or `./bugsnitch doctor` from the extracted package, to check the journal protocol, bundled SQLite, Git and Codex versions. The runner uses the current OS account. Its local records live in `os.UserConfigDir()/bugsnitch` (on macOS, `~/Library/Application Support/bugsnitch`). A private absolute `BUGSNITCH_HOME` selects a separate runner identity and journal.
 
 ## Select a project
 
@@ -93,7 +93,7 @@ Use `local-show` and `git worktree list --porcelain` on the original computer af
 
 ## Verification
 
-`go test -v ./internal/runner ./internal/agent` runs a real temporary Git repository and SQLite journal with labeled test doubles for GitHub issue reads and model outputs. The regression check fails on the broken baseline, passes on the committed candidate, and independently supplied review output is recorded against that candidate. Tests exercise admission subject binding, owner feedback, duplicate starts, recreation after a worktree side effect, dirty-worktree preservation, pending stop acknowledgment, command replay, credential exclusion, provider failure classes, commit-before-ack recovery, retention of ignored files during cleanup, bounded explicit retries and migration from the single-attempt journal. This fixture is evidence of the runner workflow. [Live integration status](CODEX.md)
+After the [focused test setup](../README.md#verification-and-operations), `go test -v ./internal/runner ./internal/agent` runs a real temporary Git repository and SQLite journal with labeled test doubles for GitHub issue reads and model outputs. The regression check fails on the broken baseline, passes on the committed candidate, and independently supplied review output is recorded against that candidate. Tests exercise admission subject binding, owner feedback, duplicate starts, recreation after a worktree side effect, dirty-worktree preservation, pending stop acknowledgment, command replay, credential exclusion, provider failure classes, commit-before-ack recovery, retention of ignored files during cleanup, bounded explicit retries and migration from the single-attempt journal. This fixture is evidence of the runner workflow. [Live integration status](CODEX.md)
 
 ## Draft a plan from a local brief
 

@@ -1,6 +1,7 @@
 .git
 .local
 bin
+/target/
 **/node_modules
 **/dist
 **/test-results

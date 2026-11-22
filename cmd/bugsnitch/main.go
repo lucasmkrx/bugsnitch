@@ -17,13 +17,14 @@ import (
 
 	"github.com/lucasmkrx/bugsnitch/internal/agent"
 	"github.com/lucasmkrx/bugsnitch/internal/device"
+	"github.com/lucasmkrx/bugsnitch/internal/journalbridge"
 	"github.com/lucasmkrx/bugsnitch/internal/runner"
 )
 
 const usage = `Usage: bugsnitch COMMAND [OPTIONS]
 
   share-diff             Preview or share an approved candidate diff
-  doctor                 Check local Git, SQLite and Codex versions
+  doctor                 Check Git, the native journal helper and Codex
   models                 List models and reasoning settings on this runtime
   usage                  Read available ChatGPT allowance windows
   proof                  Run a read-only ChatGPT authorization check
@@ -89,7 +90,24 @@ func run(ctx context.Context, args []string) error {
 	case "doctor":
 		fmt.Printf("Platform %s/%s\n", runtime.GOOS, runtime.GOARCH)
 		var missing bool
-		for _, tool := range []string{"git", "sqlite3", "codex"} {
+		helper, err := journalbridge.HelperPath()
+		if err == nil {
+			var output []byte
+			output, err = exec.CommandContext(ctx, helper, "--version").Output()
+			if err == nil {
+				version := strings.TrimSpace(string(output))
+				if strings.HasPrefix(version, "bugsnitch-runner-journal ") && strings.Contains(version, " protocol=1 sqlite=") {
+					fmt.Println(version)
+				} else {
+					err = errors.New("journal helper protocol mismatch")
+				}
+			}
+		}
+		if err != nil {
+			fmt.Println("Native journal helper unavailable or incompatible. Install the matching runner bundle.")
+			missing = true
+		}
+		for _, tool := range []string{"git", "codex"} {
 			cmd := exec.CommandContext(ctx, tool, "--version")
 			out, err := cmd.Output()
 			if err != nil {
@@ -104,7 +122,7 @@ func run(ctx context.Context, args []string) error {
 			}
 		}
 		if missing {
-			return fmt.Errorf("install Git, SQLite CLI and Codex %s on PATH", agent.Version)
+			return fmt.Errorf("the runner requires its matching journal helper, Git and Codex %s", agent.Version)
 		}
 		return nil
 	case "models", "usage":

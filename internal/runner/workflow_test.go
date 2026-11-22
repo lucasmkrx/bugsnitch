@@ -318,7 +318,11 @@ func TestLegacyJournalMigrationRetainsControl(t *testing.T) {
 	db := filepath.Join(dir, "runner.sqlite")
 	id := strings.Repeat("c", 32)
 	a := Attempt{Summary: Summary{ID: id, Workspace: "personal", Repository: "example/app", IssueNumber: 5, Phase: "plan", State: "cancelled", BaseSHA: strings.Repeat("e", 40), Version: 2}}
-	_, err = sqlite(db, fmt.Sprintf("CREATE TABLE local_attempts(id TEXT PRIMARY KEY,workspace TEXT,repo TEXT,issue INTEGER,version INTEGER,data TEXT);CREATE TABLE control_receipts(command_id TEXT PRIMARY KEY,attempt_id TEXT,op TEXT,subject_version INTEGER,status TEXT);INSERT INTO local_attempts VALUES(%s,'personal','example/app',5,2,%s);INSERT INTO control_receipts VALUES('receipt',%s,'stop',1,'completed');", literal(id), packed(a), literal(id)))
+	sqlite, err := exec.LookPath("sqlite3")
+	if err != nil {
+		t.Skip("sqlite3 is required to create the pre-migration journal fixture")
+	}
+	err = exec.Command(sqlite, "-batch", "-bail", "-init", os.DevNull, db, fmt.Sprintf("CREATE TABLE local_attempts(id TEXT PRIMARY KEY,workspace TEXT,repo TEXT,issue INTEGER,version INTEGER,data TEXT);CREATE TABLE control_receipts(command_id TEXT PRIMARY KEY,attempt_id TEXT,op TEXT,subject_version INTEGER,status TEXT);INSERT INTO local_attempts VALUES(%s,'personal','example/app',5,2,%s);INSERT INTO control_receipts VALUES('receipt',%s,'stop',1,'completed');", literal(id), packed(a), literal(id))).Run()
 	if err != nil {
 		t.Fatal(err)
 	}

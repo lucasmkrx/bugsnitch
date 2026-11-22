@@ -1,6 +1,7 @@
 node_modules/
 dist/
 /bin/
+/target/
 /.local/
 coverage/
 *.tsbuildinfo
@@ -21,3 +22,5 @@ secrets/
 *.db
 test-results/
 playwright-report/
+
+__pycache__/

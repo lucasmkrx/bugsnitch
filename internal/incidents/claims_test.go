@@ -89,7 +89,7 @@ func TestPostgresNativeIncidentQualification(t *testing.T) {
 		if code := signedEvent(s, errorPayload(fmt.Sprintf("%032x", i+1), release, "production", time.Now())); code != 202 {
 			t.Fatalf("observation %d HTTP %d", i, code)
 		}
-		if err := s.processOne(ctx); err != nil {
+		if err := s.processAccepted(ctx); err != nil {
 			t.Fatal(err)
 		}
 		var wg sync.WaitGroup
@@ -118,10 +118,10 @@ func TestPostgresNativeIncidentQualification(t *testing.T) {
 func TestPostgresNativeInboxRollsBackWithoutEvent(t *testing.T) {
 	s := disposableStore(t)
 	ctx := context.Background()
+	mustExec(t, s.DB, "ALTER TABLE events ADD CONSTRAINT reject_projection CHECK (kind<>'incident.observed')")
 	if code := signedEvent(s, errorPayload(eventOne, "v1", "production", time.Now())); code != 202 {
 		t.Fatalf("observation HTTP %d", code)
 	}
-	mustExec(t, s.DB, "ALTER TABLE events ADD CONSTRAINT reject_projection CHECK (kind<>'incident.observed')")
 	if err := s.processOne(ctx); err == nil {
 		t.Fatal("expected audit rejection")
 	}
@@ -130,7 +130,7 @@ func TestPostgresNativeInboxRollsBackWithoutEvent(t *testing.T) {
 		t.Fatalf("partial projection persisted: incidents=%d processed=%d error=%v", counted, processed, err)
 	}
 	mustExec(t, s.DB, "ALTER TABLE events DROP CONSTRAINT reject_projection")
-	if err := s.processOne(ctx); err != nil {
+	if err := s.processAccepted(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if inc := one(t, s); inc.Occurrences != 1 {

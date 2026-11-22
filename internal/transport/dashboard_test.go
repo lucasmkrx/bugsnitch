@@ -25,7 +25,7 @@ func TestDashboardServesRegisteredAssetsAndNavigation(t *testing.T) {
 	const css = "body { color: navy; }"
 	publish("index.html", page)
 	publish("assets/theme.css", css)
-	handler := (&Server{WebDir: dir}).Handler()
+	handler := fixtureWithWeb(t, dir).handler
 	request := func(method, url string) *httptest.ResponseRecorder {
 		t.Helper()
 		w := httptest.NewRecorder()
@@ -64,7 +64,7 @@ func TestDashboardServesRegisteredAssetsAndNavigation(t *testing.T) {
 	if got = request("GET", "/assets/new.css"); got.Code != http.StatusNotFound {
 		t.Fatalf("unregistered asset returned %d", got.Code)
 	}
-	updated := (&Server{WebDir: dir}).Handler()
+	updated := fixtureWithWeb(t, dir).handler
 	w := httptest.NewRecorder()
 	updated.ServeHTTP(w, httptest.NewRequest("GET", "/assets/new.css", nil))
 	if w.Code != http.StatusOK || w.Body.String() != "body { color: black; }" {

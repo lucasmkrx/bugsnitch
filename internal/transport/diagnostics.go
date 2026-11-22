@@ -4,7 +4,6 @@ package transport
 import (
 	"database/sql"
 	"encoding/json"
-	"net/http"
 	"time"
 )
 
@@ -58,8 +57,9 @@ SELECT jsonb_build_object(
    'more',(SELECT count(*)>1000 FROM rejoins),'lastObservedReconnect24h',(SELECT max(created_at) FROM rejoins)))
 FROM contact`
 
-func (s *Server) diagnostics(w http.ResponseWriter, r *http.Request, workspace string) error {
-	ctx := r.Context()
+func (s *Server) diagnostics(call *domainCall) error {
+	workspace := call.Workspace
+	ctx := call.ctx
 	tx, err := s.DB.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
 		return err
@@ -90,5 +90,5 @@ func (s *Server) diagnostics(w http.ResponseWriter, r *http.Request, workspace s
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	return send(w, 200, object{"observedAt": observed, "queues": queues, "observations": samples})
+	return call.reply(200, object{"observedAt": observed, "queues": queues, "observations": samples})
 }

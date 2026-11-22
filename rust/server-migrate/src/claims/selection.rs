@@ -6,6 +6,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Next {
     #[serde(rename = "projectId")]
     project: String,

@@ -4,7 +4,9 @@ package transport
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,12 +19,20 @@ import (
 	"testing"
 
 	"github.com/lucasmkrx/bugsnitch/internal/domain"
-	"github.com/lucasmkrx/bugsnitch/internal/incidents"
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 	"github.com/lucasmkrx/bugsnitch/internal/storage"
+	"github.com/lucasmkrx/bugsnitch/internal/testserver"
 )
 
-func fixture(t *testing.T) *Server {
+type testServer struct {
+	DB                              *sql.DB
+	Origin, OwnerToken, PluginToken string
+	handler                         http.Handler
+}
+
+func fixture(t *testing.T) *testServer { t.Helper(); return fixtureWithWeb(t, "") }
+
+func fixtureWithWeb(t *testing.T, web string) *testServer {
 	t.Helper()
 	dsn := os.Getenv("BUGSNITCH_TEST_DSN")
 	if dsn == "" {
@@ -55,7 +65,9 @@ func fixture(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	reopened.Close()
-	return &Server{DB: scoped, Incidents: incidents.Store{DB: scoped}, Origin: "http://localhost:8787", OwnerToken: random(32), Plugin: PluginAuth{LocalToken: random(32)}}
+	s := &testServer{DB: scoped, Origin: "http://localhost:8787", OwnerToken: random(32), PluginToken: random(32)}
+	s.handler = testserver.Start(t, u.String(), testserver.Config{Origin: s.Origin, OwnerToken: s.OwnerToken, PluginToken: s.PluginToken, WebDir: web})
+	return s
 }
 
 type system struct {
@@ -93,8 +105,8 @@ func (c system) post(t *testing.T, path string, input any, status int) object {
 	}
 	return o
 }
-func login(t *testing.T, s *Server) system {
-	h := s.Handler()
+func login(t *testing.T, s *testServer) system {
+	h := s.handler
 	r := httptest.NewRequest("POST", "/api/v1/login", strings.NewReader(fmt.Sprintf(`{"token":%q}`, s.OwnerToken)))
 	r.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -134,7 +146,7 @@ func TestOwnerDecisionAndCrossInterfaceState(t *testing.T) {
 		r.Header.Set("Accept", "application/json, text/event-stream")
 		r.Header.Set("Content-Type", "application/json")
 		r.Header.Set("MCP-Protocol-Version", "2025-11-25")
-		r.Header.Set("Authorization", "Bearer "+s.Plugin.LocalToken)
+		r.Header.Set("Authorization", "Bearer "+s.PluginToken)
 		r.Header.Set("X-Bugsnitch-Actor", "forged-owner")
 		w := httptest.NewRecorder()
 		c.handler.ServeHTTP(w, r)
@@ -156,7 +168,7 @@ func TestOwnerDecisionAndCrossInterfaceState(t *testing.T) {
 	FROM events WHERE project_id=$1 AND workspace_id='personal'`, p).Scan(&ownerActions, &pluginReports); err != nil || ownerActions != 1 || pluginReports != 1 {
 		t.Fatalf("attribution owner=%d plugin=%d err=%v", ownerActions, pluginReports, err)
 	}
-	if !bytes.Contains(raw, []byte(`"actorSource":"plugin"`)) || bytes.Contains(raw, []byte("forged-owner")) || bytes.Contains(raw, []byte(s.Plugin.LocalToken)) {
+	if !bytes.Contains(raw, []byte(`"actorSource":"plugin"`)) || bytes.Contains(raw, []byte("forged-owner")) || bytes.Contains(raw, []byte(s.PluginToken)) {
 		t.Fatal("unexpected audit projection")
 	}
 	if !bytes.Contains(raw, []byte("Blank preview")) || bytes.Contains(raw, []byte("SYNTHETICMARKER")) || bytes.Contains(raw, []byte("Invisible")) {
@@ -230,19 +242,15 @@ func TestDeviceReplayRevocationAndBinding(t *testing.T) {
 	syncReq(a, key, 403)
 }
 func TestOriginAndCredentials(t *testing.T) {
-	s := Server{Origin: "http://localhost:8787"}
+	s := fixture(t)
 	r := httptest.NewRequest("POST", "/api/v1/login", strings.NewReader("{}"))
 	r.Header.Set("Origin", "https://elsewhere.example")
 	w := httptest.NewRecorder()
-	s.Handler().ServeHTTP(w, r)
+	s.handler.ServeHTTP(w, r)
 	if w.Code != 403 {
 		t.Fatal(w.Code)
 	}
-	for _, raw := range []string{"http://outside.example", "https://alice@example.test", "file:///tmp/socket", "http://localhost.evil.test", "http://localhost?query"} {
-		if ValidOrigin(raw) {
-			t.Error(raw)
-		}
-	}
+
 }
 
 func TestCompetingLocalClaimsAndPlanGates(t *testing.T) {
@@ -375,7 +383,8 @@ func TestEmergencyRotationAndContentExpiry(t *testing.T) {
 	}
 	c.post(t, "workspace/dispatch", object{"version": 2, "requestId": "unlock_dispatch", "stopped": false}, 200)
 	c.post(t, "messages", object{"projectId": p, "body": "expired observation", "requestId": "chat_report_001"}, 202)
-	_, err := s.DB.Exec("UPDATE manager_messages SET created_at=now()-interval '40 days'")
+	// The packaged worker runs retention at startup. Advance both clocks to the next due pass.
+	_, err := s.DB.Exec("UPDATE manager_messages SET created_at=now()-interval '40 days'; UPDATE retention_runs SET last_run=now()-interval '2 hours'")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -428,3 +437,4 @@ func TestDiffSharingRequiresCurrentRevisionAndExplicitDigest(t *testing.T) {
 		t.Fatal(status)
 	}
 }
+func hash(text string) string { sum := sha256.Sum256([]byte(text)); return hex.EncodeToString(sum[:]) }

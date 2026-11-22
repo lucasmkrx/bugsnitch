@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/lucasmkrx/bugsnitch/internal/audit"
-	"net/http"
 	"strings"
 	"time"
 
@@ -35,54 +34,56 @@ var views = map[string]string{
 	FROM planned_issue_state z JOIN projects p ON (p.workspace_id,p.id)=(z.workspace_id,z.project_id) JOIN github_mappings m ON (m.workspace_id,m.project_id,m.repository_id,m.installation_id)=(z.workspace_id,z.project_id,z.repository_id,z.installation_id) WHERE z.workspace_id=$1) all_tickets ORDER BY "checkedAt" DESC NULLS LAST,id LIMIT 500`,
 }
 
-func (s *Server) state(w http.ResponseWriter, r *http.Request, ws string) error {
+func (s *Server) state(call *domainCall) error {
+	ws := call.Workspace
 	data := object{"capabilities": object{"hostedInference": false, "reason": inferenceReason}, "plans": []string{}, "pullRequests": []string{}}
 	var name string
 	var tickets, turns, limitsV, dispatchV int
 	var stopped bool
-	if err := s.DB.QueryRowContext(r.Context(), "SELECT name,ticket_limit,turn_limit,limits_version,stopped,dispatch_version FROM workspaces WHERE id=$1", ws).Scan(&name, &tickets, &turns, &limitsV, &stopped, &dispatchV); err != nil {
+	if err := s.DB.QueryRowContext(call.ctx, "SELECT name,ticket_limit,turn_limit,limits_version,stopped,dispatch_version FROM workspaces WHERE id=$1", ws).Scan(&name, &tickets, &turns, &limitsV, &stopped, &dispatchV); err != nil {
 		return err
 	}
 	data["limits"] = object{"tickets": tickets, "turns": turns, "version": limitsV}
 	data["workspace"] = object{"id": ws, "name": name, "stopped": stopped, "dispatchVersion": dispatchV}
 	var events json.RawMessage
-	if err := s.coordinate(r.Context(), "events.snapshot", object{"workspace": ws}, &events); err != nil {
+	if err := s.coordinate(call.ctx, "events.snapshot", object{"workspace": ws}, &events); err != nil {
 		return err
 	}
 	data["events"] = events
 	for key, q := range views {
 		var b json.RawMessage
-		if err := s.DB.QueryRowContext(r.Context(), "SELECT COALESCE(json_agg(t),'[]') FROM ("+q+") t", ws).Scan(&b); err != nil {
+		if err := s.DB.QueryRowContext(call.ctx, "SELECT COALESCE(json_agg(t),'[]') FROM ("+q+") t", ws).Scan(&b); err != nil {
 			return err
 		}
 		data[key] = b
 	}
-	plans, err := s.listPlans(r.Context(), ws)
+	plans, err := s.listPlans(call.ctx, ws)
 	if err != nil {
 		return err
 	}
 	data["plans"] = plans
-	pulls, err := s.pulls().List(r.Context(), ws)
+	pulls, err := s.pulls().List(call.ctx, ws)
 	if err != nil {
 		return err
 	}
 	data["pullRequests"] = pulls
-	drafts, err := s.pulls().Drafts(r.Context(), ws)
+	drafts, err := s.pulls().Drafts(call.ctx, ws)
 	if err != nil {
 		return err
 	}
 	data["draftPRs"] = drafts
-	list, err := s.Incidents.List(r.Context(), ws)
+	list, err := s.Incidents.List(call.ctx, ws)
 	if err != nil {
 		return err
 	}
 	data["incidents"] = list
 	data["updatedAt"] = time.Now().UTC()
-	return send(w, 200, data)
+	return call.reply(200, data)
 }
-func (s *Server) createProject(w http.ResponseWriter, r *http.Request, ws string) error {
+func (s *Server) createProject(call *domainCall) error {
+	ws := call.Workspace
 	var b struct{ Name, Repository string }
-	if err := decode(w, r, &b); err != nil {
+	if err := call.decode(&b); err != nil {
 		return err
 	}
 	b.Name = strings.TrimSpace(b.Name)
@@ -91,7 +92,7 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, ws string
 		return bad("Enter a name and a GitHub owner/repository")
 	}
 	id := random(16)
-	ctx := r.Context()
+	ctx := call.ctx
 	err := transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "INSERT INTO projects(id,workspace_id,name,repository,paused) SELECT $1,$2,$3,$4,stopped FROM workspaces WHERE id=$2 FOR SHARE", id, ws, b.Name, b.Repository); err != nil {
 			return err
@@ -101,21 +102,22 @@ func (s *Server) createProject(w http.ResponseWriter, r *http.Request, ws string
 	if err != nil {
 		return err
 	}
-	return send(w, 201, object{"id": id})
+	return call.reply(201, object{"id": id})
 }
-func (s *Server) dispatch(w http.ResponseWriter, r *http.Request, ws string) error {
+func (s *Server) dispatch(call *domainCall) error {
+	ws := call.Workspace
 	var b struct {
 		Paused  *bool
 		Version int64
 	}
-	if err := decode(w, r, &b); err != nil {
+	if err := call.decode(&b); err != nil {
 		return err
 	}
 	if b.Paused == nil || b.Version < 1 {
 		return bad("Provide paused and version")
 	}
-	p := r.PathValue("id")
-	ctx := r.Context()
+	p := call.ID
+	ctx := call.ctx
 	var decision string
 	err := transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		var paused bool
@@ -161,9 +163,9 @@ func (s *Server) dispatch(w http.ResponseWriter, r *http.Request, ws string) err
 		return err
 	}
 	if decision != "" {
-		return send(w, 202, object{"decisionId": decision})
+		return call.reply(202, object{"decisionId": decision})
 	}
-	return send(w, 200, object{"paused": *b.Paused})
+	return call.reply(200, object{"paused": *b.Paused})
 }
 
 type decisionAnswer struct {
@@ -172,16 +174,17 @@ type decisionAnswer struct {
 	Version   int64  `json:"version"`
 }
 
-func (s *Server) answer(w http.ResponseWriter, r *http.Request, ws string) error {
+func (s *Server) answer(call *domainCall) error {
+	ws := call.Workspace
 	var b decisionAnswer
-	if err := decode(w, r, &b); err != nil {
+	if err := call.decode(&b); err != nil {
 		return err
 	}
-	id := r.PathValue("id")
-	if err := s.applyAnswer(r.Context(), ws, id, b); err != nil {
+	id := call.ID
+	if err := s.applyAnswer(call.ctx, ws, id, b); err != nil {
 		return err
 	}
-	return send(w, 200, object{"id": id, "answer": b.Answer})
+	return call.reply(200, object{"id": id, "answer": b.Answer})
 }
 func (s *Server) applyAnswer(ctx context.Context, ws, id string, b decisionAnswer) error {
 	if (b.Answer != "Resume dispatch" && b.Answer != "Keep paused") || !keyPattern.MatchString(b.RequestID) || b.Version < 1 {
@@ -231,16 +234,17 @@ type messageInput struct {
 	Body      string `json:"body"`
 }
 
-func (s *Server) message(w http.ResponseWriter, r *http.Request, ws string) error {
+func (s *Server) message(call *domainCall) error {
+	ws := call.Workspace
 	var b messageInput
-	if err := decode(w, r, &b); err != nil {
+	if err := call.decode(&b); err != nil {
 		return err
 	}
-	out, err := s.saveMessage(r.Context(), ws, b)
+	out, err := s.saveMessage(call.ctx, ws, b)
 	if err != nil {
 		return err
 	}
-	return send(w, 202, out)
+	return call.reply(202, out)
 }
 func (s *Server) saveMessage(ctx context.Context, ws string, b messageInput) (object, error) {
 	if !keyPattern.MatchString(b.RequestID) || strings.TrimSpace(b.Body) == "" || len(b.Body) > 4000 {
@@ -278,25 +282,27 @@ func incidentError(err error) error {
 	}
 	return err
 }
-func (s *Server) report(w http.ResponseWriter, r *http.Request, ws string) error {
+func (s *Server) report(call *domainCall) error {
+	ws := call.Workspace
 	var b struct{ ProjectID, RequestID, Observed, Expected, Steps string }
-	if err := decode(w, r, &b); err != nil {
+	if err := call.decode(&b); err != nil {
 		return err
 	}
-	id, err := s.Incidents.Report(r.Context(), ws, b.ProjectID, b.Observed, b.Expected, b.Steps, b.RequestID)
+	id, err := s.Incidents.Report(call.ctx, ws, b.ProjectID, b.Observed, b.Expected, b.Steps, b.RequestID)
 	if err != nil {
 		return incidentError(err)
 	}
-	return send(w, 201, object{"id": id})
+	return call.reply(201, object{"id": id})
 }
-func (s *Server) promote(w http.ResponseWriter, r *http.Request, ws string) error {
+func (s *Server) promote(call *domainCall) error {
+	ws := call.Workspace
 	var b struct{ Version int64 }
-	if err := decode(w, r, &b); err != nil {
+	if err := call.decode(&b); err != nil {
 		return err
 	}
-	err := s.Incidents.Promote(r.Context(), ws, r.PathValue("project"), r.PathValue("id"), b.Version)
+	err := s.Incidents.Promote(call.ctx, ws, call.Project, call.ID, b.Version)
 	if err != nil {
 		return incidentError(err)
 	}
-	return send(w, 202, object{"status": "accepted"})
+	return call.reply(202, object{"status": "accepted"})
 }

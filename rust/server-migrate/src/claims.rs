@@ -5,18 +5,19 @@ mod plan;
 mod selection;
 
 use crate::coord::{Db, Details, Error, Result};
+use crate::devices::{lower_hex, valid_key, valid_sha};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Envelope {
     token_hash: String,
     request: Value,
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Scope {
     device_id: String,
     project_id: String,
@@ -25,7 +26,7 @@ struct Scope {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Admission {
     project_id: String,
     attempt_id: String,
@@ -41,7 +42,7 @@ struct Admission {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Permit {
     workspace_id: String,
     device_id: String,
@@ -53,7 +54,7 @@ struct Permit {
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct Lease {
     workspace_id: String,
     device_id: String,
@@ -63,6 +64,7 @@ struct Lease {
     issue_number: i64,
     sequence: i64,
     subject_version: i64,
+    #[serde(default)]
     model_turn: bool,
     scope: Option<Scope>,
 }
@@ -70,8 +72,11 @@ struct Lease {
 pub fn handle(db: &Db<'_>, op: &str, input: Value) -> Result<Value> {
     let Envelope {
         token_hash,
-        request,
+        mut request,
     } = serde_json::from_value(input)?;
+    if request.as_object_mut().and_then(|v| v.remove("protocol")) != Some(json!(1)) {
+        return Err(Error::bad("Invalid claim protocol"));
+    }
     match op {
         "claims.admission" => admit(db, &token_hash, serde_json::from_value(request)?),
         "claims.permit" => permit(db, &token_hash, serde_json::from_value(request)?),
@@ -96,6 +101,25 @@ fn capacity(
 }
 
 fn admit(db: &Db<'_>, token: &str, a: Admission) -> Result<Value> {
+    if !valid_key(&a.attempt_id)
+        || !valid_sha(&a.base_sha)
+        || a.issue_number < 1
+        || a.sequence < 1
+        || !matches!(
+            a.operation.as_str(),
+            "admit" | "finish" | "turn_start" | "turn_end"
+        )
+    {
+        return Err(Error::bad("Invalid admission request"));
+    }
+    if a.operation == "finish"
+        && !matches!(
+            a.state.as_str(),
+            "waiting" | "completed" | "failed" | "cancelled"
+        )
+    {
+        return Err(Error::bad("Provide the demonstrated local outcome"));
+    }
     // All claim writers acquire device, workspace, then project locks in the
     // same order. Competing devices serialize workspace-wide limits here.
     let actor = db
@@ -272,6 +296,22 @@ fn admit(db: &Db<'_>, token: &str, a: Admission) -> Result<Value> {
 }
 
 fn permit(db: &Db<'_>, token: &str, a: Permit) -> Result<Value> {
+    let valid_project = match a.role.as_str() {
+        "manager" => a.project_id.len() == 32 && lower_hex(&a.project_id),
+        "planner" | "proof" => a.project_id.is_empty(),
+        _ => false,
+    };
+    if a.permit_id.len() != 32
+        || !lower_hex(&a.permit_id)
+        || a.device_id.len() != 32
+        || !lower_hex(&a.device_id)
+        || a.workspace_id.is_empty()
+        || a.workspace_id.len() > 100
+        || !matches!(a.version, 1 | 2)
+        || !valid_project
+    {
+        return Err(Error::bad("Invalid local model permit"));
+    }
     let ws = &a.workspace_id;
     let dev = &a.device_id;
     let actor=db.optional("SELECT turn_limit FROM devices WHERE id=$1 AND workspace_id=$2 AND token_hash=$3 AND NOT revoked FOR NO KEY UPDATE", &[dev,ws,token])?.ok_or_else(Error::denied)?;
@@ -333,6 +373,14 @@ fn permit(db: &Db<'_>, token: &str, a: Permit) -> Result<Value> {
 }
 
 fn lease(db: &Db<'_>, token: &str, a: Lease) -> Result<Value> {
+    if !valid_key(&a.attempt_id)
+        || a.issue_number < 1
+        || !valid_sha(&a.base_sha)
+        || a.sequence < 1
+        || a.subject_version < 1
+    {
+        return Err(Error::bad("Invalid worker lease subject"));
+    }
     let row=db.optional("SELECT coalesce(a.plan_id,''),p.policy_version,a.sequence,a.active AND NOT w.stopped AND NOT p.paused AND (NOT p.require_plan OR a.plan_id IS NOT NULL)
         AND a.plan_id IS NOT DISTINCT FROM (SELECT id FROM plan_versions WHERE workspace_id=w.id AND project_id=p.id AND approved_at IS NOT NULL ORDER BY version DESC LIMIT 1),
         a.in_turn,c.id,c.operation,to_char(c.expires_at AT TIME ZONE 'UTC','YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"')

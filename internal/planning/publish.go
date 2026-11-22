@@ -123,6 +123,7 @@ func (s Store) Approve(ctx context.Context, ws, pub string, version int64) error
 }
 
 type issueWriter interface {
+	Close()
 	Create(context.Context, string, string) (github.Issue, error)
 	Find(context.Context, string, time.Time) (*github.Issue, error)
 }
@@ -188,6 +189,7 @@ func (s Store) step(ctx context.Context, open openRepo) error {
 	if err != nil {
 		return deferJob(ctx, tx, j, "Repository authorization unavailable", err)
 	}
+	defer repo.Close()
 	if j.status == "reconciling" {
 		found, e := repo.Find(ctx, j.tag(), j.created)
 		if e != nil || found == nil {

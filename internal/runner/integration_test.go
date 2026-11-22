@@ -3,8 +3,10 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -76,10 +78,9 @@ func TestIndependentlyPassingChangesFailInCombination(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustGit(target, "commit", "-am", "Update right on target")
-	local := a
-	local.Worktree = target
-	code, err := validate(ctx, &local)
-	if err != nil || code == nil || *code != 0 {
+	independent := exec.CommandContext(ctx, "/bin/sh", "distinct.sh")
+	independent.Dir = target
+	if err = independent.Run(); err != nil {
 		t.Fatal("target must pass independently", err)
 	}
 	targetSHA := mustGit(target, "rev-parse", "HEAD")
@@ -98,6 +99,74 @@ func TestIndependentlyPassingChangesFailInCombination(t *testing.T) {
 	if err != nil || len(checks) != 2 || checks[1].ID != receipt.ID {
 		t.Fatal("missing durable integration evidence")
 	}
+
+	t.Run("target movement invalidates combination", func(t *testing.T) {
+		mustGit(dir, "commit", "--allow-empty", "-m", "Move integration target")
+		verified, err := integrationGit(ctx, "verify", positive, a)
+		if err == nil || verified.Status != "stale" {
+			t.Fatal("moved target accepted for existing integration check", verified, err)
+		}
+	})
+
+	t.Run("cleanup preserves ignored and unrelated work and reconciles a lost acknowledgment", func(t *testing.T) {
+		// Git's default status hides ignored data. Cleanup must inspect it explicitly.
+		exclude := filepath.Join(dir, ".git", "info", "exclude")
+		f, err := os.OpenFile(exclude, os.O_APPEND|os.O_WRONLY, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = f.WriteString("\nprivate-build-output\n"); err != nil {
+			t.Fatal(err)
+		}
+		if err = f.Close(); err != nil {
+			t.Fatal(err)
+		}
+		ignored := filepath.Join(positive.Worktree, "private-build-output")
+		if err = os.WriteFile(ignored, []byte("retained"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err = CleanupIntegration(ctx, a.ID, positive.ID); err == nil {
+			t.Fatal("removed checkout with ignored build output")
+		}
+		if b, err := os.ReadFile(ignored); err != nil || string(b) != "retained" {
+			t.Fatal("lost ignored output", err)
+		}
+		if err = os.Remove(ignored); err != nil {
+			t.Fatal(err)
+		}
+
+		// Interrupt after native removal but before the Go receipt update.
+		removed, err := integrationGit(ctx, "cleanup", positive, a)
+		if err != nil || mustGit(dir, "rev-parse", "--verify", removed.ArchiveRef) != positive.CombinedSHA {
+			t.Fatal("combined commit was not retained", err)
+		}
+		if _, err = os.Lstat(positive.Worktree); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("original checkout still present", err)
+		}
+		// Even a newly registered checkout at this exact path and commit has no
+		// ownership receipt from the original check.
+		mustGit(dir, "worktree", "add", "--detach", "--", positive.Worktree, positive.CombinedSHA)
+		if err = CleanupIntegration(ctx, a.ID, positive.ID); err == nil {
+			t.Fatal("replayed cleanup removed another checkout")
+		}
+		if head := mustGit(positive.Worktree, "rev-parse", "HEAD"); head != positive.CombinedSHA {
+			t.Fatal("replacement checkout changed")
+		}
+		mustGit(dir, "worktree", "remove", "--", positive.Worktree)
+		if err = CleanupIntegration(ctx, a.ID, positive.ID); err != nil {
+			t.Fatal(err)
+		}
+		checks, err := Checks(a.ID)
+		if err != nil || len(checks) != 2 || checks[0].Status != "passed" || checks[0].CleanedAt == "" || checks[0].ArchiveRef != removed.ArchiveRef {
+			t.Fatal("receipt did not reconcile after native cleanup", err)
+		}
+		if err = CleanupIntegration(ctx, a.ID, positive.ID); err != nil {
+			t.Fatal("second cleanup", err)
+		}
+		if _, err = os.Stat(receipt.Worktree); err != nil {
+			t.Fatal("unrelated check removed", err)
+		}
+	})
 }
 func TestLocalModelCapacitySurvivesReentry(t *testing.T) {
 	t.Setenv("BUGSNITCH_HOME", t.TempDir())

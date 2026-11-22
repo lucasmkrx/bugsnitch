@@ -1,6 +1,6 @@
 # Bugsnitch
 
-Bugsnitch coordinates development across your GitHub projects and your own computers. The hosted service keeps project state in PostgreSQL. Rust applies its schema migrations and owns the runner’s SQLite journals. The HTTP service and runner orchestration currently run in Go. A macOS runner executes locally initiated work in a separate Git worktree, stores its evidence in SQLite, and reports bounded metadata to a React dashboard. An authenticated MCP server exposes the same workspace to compatible clients.
+Bugsnitch coordinates development across your GitHub projects and your own computers. The hosted service keeps project state in PostgreSQL. Rust applies hosted schema migrations, manages local Git worktrees and SQLite journals, and supervises validation and cancellation. The CLI, model adapter and HTTP service currently run in Go. A macOS runner executes locally initiated work in a separate Git worktree, stores its evidence in SQLite, and reports bounded metadata to a React dashboard. An authenticated MCP server exposes the same workspace to compatible clients.
 
 This rebuild is in development. The [verification ledger](docs/PROGRESS.md) records which workflows have run, their limits, and the outstanding live tests.
 

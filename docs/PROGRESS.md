@@ -2,6 +2,15 @@
 
 The rebuild started on `rebuild/bugsnitch-v2` from clean main at `833637906ffc7d7de633b0de64e58c0636cd3bfd` in lucasmkrx/bugsnitch. The previous application was a TypeScript VS Code extension. Its history, MPL-2.0 license, trademarks and brand assets are preserved. [Implementation PR](https://github.com/lucasmkrx/bugsnitch/pull/24)
 
+## Rust runner execution
+
+This stage started from `917cf2f` on 2026-11-22. The CLI now uses Rust for ordinary and detached worktree creation and verification, validation supervision, pause/stop receipt transitions and cleanup. The CLI's model turns, artifact assembly and hosted lease checks continue in Go. Install the CLI and companion from the same build. [Runner guide](RUNNER.md#recovery-and-retention)
+
+- Real Git and SQLite tests exercised a complete local attempt, owner feedback, independent review with a model fixture, interrupted-commit recovery, and two independently passing candidates that failed when combined. Cleanup retained hidden edits, ignored files, mismatched registrations and the original branches. A separate SHA-256 Git repository exercise archived the exact tested combined commit after cleanup.
+- Pause/stop receipts survive a stale settlement, a lost acknowledgment and replay of a previous release's pending stop. A validator launches against the approved revision. Separate tests cancelled the validator, let its timeout expire, and killed the Go runner. In all three cases the validator grandchild released a kernel lock and its private temporary directory was removed. Killing the Rust supervisor itself left the attempt owned, its exit code unknown and its stop request pending.
+- The race-enabled Go suite, Rust tests and PostgreSQL migration fixture ran against a disposable database on macOS. Both macOS packages built. The installation smoke paired two runner processes, opened the dashboard in Chrome, exercised MCP, restored a backup and reconnected.
+- GitHub code scanning remains unavailable for this private repository. Live model and vendor deployment traces remain tracked separately below.
+
 ## Rust storage migration
 
 Stage 1 started from `ed6064e` on 2026-11-22. The runner now uses bundled SQLite through Rust for both its execution and device journals. The hosted service runs a Rust PostgreSQL migrator before accepting traffic. Both existing command names and stored formats are retained. The [migration plan](IMPLEMENTATION_PLAN.md#rust-migration) tracks the remaining Go runner and server work. GitHub reported that code scanning is disabled for this private repository when the PR workflow tried to publish its CodeQL results.

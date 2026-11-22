@@ -55,21 +55,12 @@ func canonical(path string) (string, error) {
 	return filepath.EvalSymlinks(abs)
 }
 func checkOrigin(root, repo string) error {
-	top, err := git(root, "rev-parse", "--show-toplevel")
-	if err != nil || root != top {
-		return errors.New("mapping must identify the canonical checkout root")
-	}
-	remote, err := git(root, "remote", "get-url", "origin")
-	if err != nil {
-		return err
-	}
-	remote = strings.TrimSuffix(strings.ToLower(remote), ".git")
-	for _, p := range []string{"git@github.com:", "https://github.com/", "ssh://git@github.com/"} {
-		if p+strings.ToLower(repo) == remote {
-			return nil
-		}
-	}
-	return errors.New("registered path and selected GitHub repository disagree")
+	return nativeOperation(context.Background(), "--worktree", struct {
+		Version    int    `json:"version"`
+		Op         string `json:"op"`
+		Project    string `json:"project"`
+		Repository string `json:"repository"`
+	}{1, "origin", root, repo}, nil)
 }
 func safeRelative(s string) bool {
 	if s == "" || !filepath.IsLocal(s) || filepath.ToSlash(filepath.Clean(s)) != s || s == "." || strings.ContainsAny(s, "\n\r\x00\\:") {
@@ -106,81 +97,44 @@ func readFile(root, rel string) (string, error) {
 	}
 	return string(b), nil
 }
-func (a *Attempt) checkLocation() error {
+
+// Only registered attempt identity crosses the worktree boundary. Model context,
+// device credentials and repository configuration stay in the runner.
+type worktreeIdentity struct {
+	Home       string `json:"home"`
+	Project    string `json:"project"`
+	Repository string `json:"repository"`
+	ID         string `json:"id"`
+	Branch     string `json:"branch"`
+	Worktree   string `json:"worktree"`
+	Base       string `json:"base"`
+}
+
+func (a *Attempt) nativeWorktreeIdentity() (worktreeIdentity, error) {
 	dir, err := home()
 	if err != nil {
-		return err
+		return worktreeIdentity{}, err
 	}
-	parent := filepath.Join(dir, "worktrees")
-	if !idPattern.MatchString(a.ID) || a.Branch != "bugsnitch/"+a.ID || a.Worktree != filepath.Join(parent, a.ID) {
-		return errors.New("attempt location differs from registered identity")
-	}
-	if err = os.MkdirAll(parent, 0700); err != nil {
-		return err
-	}
-	p, err := canonical(parent)
-	if err != nil || p != parent {
-		return errors.New("worktree parent changed")
-	}
-	return nil
+	return worktreeIdentity{dir, a.Project.Path, a.Repository, a.ID, a.Branch, a.Worktree, a.BaseSHA}, nil
 }
-func (a *Attempt) checkTree() error {
-	if err := a.checkLocation(); err != nil {
-		return err
-	}
-	projectRoot, err := canonical(a.Project.Path)
-	if err != nil || projectRoot != a.Project.Path {
-		return errors.New("registered checkout moved")
-	}
-	if err := checkOrigin(projectRoot, a.Repository); err != nil {
-		return err
-	}
-	expected, err := canonical(a.Worktree)
-	if err != nil || expected != a.Worktree || expected == projectRoot {
-		return errors.New("attempt worktree unavailable")
-	}
-	top, err := git(expected, "rev-parse", "--show-toplevel")
-	if err != nil || top != expected {
-		return errors.New("worktree root mismatch")
-	}
-	branch, err := git(expected, "symbolic-ref", "--short", "HEAD")
-	if err != nil || branch != a.Branch {
-		return errors.New("worktree branch mismatch")
-	}
-	common, err := git(expected, "rev-parse", "--path-format=absolute", "--git-common-dir")
+
+func (a *Attempt) worktreeOp(op, sha string) error {
+	identity, err := a.nativeWorktreeIdentity()
 	if err != nil {
 		return err
 	}
-	repoCommon, err := git(projectRoot, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil || common != repoCommon {
-		return errors.New("worktree association mismatch")
-	}
-	return nil
+	return nativeOperation(context.Background(), "--worktree", struct {
+		Version int              `json:"version"`
+		Op      string           `json:"op"`
+		Attempt worktreeIdentity `json:"attempt"`
+		SHA     string           `json:"sha,omitempty"`
+	}{1, op, identity, sha}, nil)
 }
-func (a *Attempt) prepare() error {
-	if err := a.checkLocation(); err != nil {
-		return err
-	}
-	if err := checkOrigin(a.Project.Path, a.Repository); err != nil {
-		return err
-	}
-	if _, err := os.Lstat(a.Worktree); errors.Is(err, os.ErrNotExist) {
-		if err = os.MkdirAll(filepath.Dir(a.Worktree), 0700); err != nil {
-			return err
-		}
-		if _, err = git(a.Project.Path, "worktree", "add", "-b", a.Branch, "--", a.Worktree, a.BaseSHA); err != nil {
-			return err
-		}
-	}
-	if err := a.checkTree(); err != nil {
-		return err
-	}
-	sha, err := git(a.Worktree, "rev-parse", "HEAD")
-	if err != nil || sha != a.BaseSHA {
-		return errors.New("worktree has diverged from the recorded base")
-	}
-	return nil
-}
+
+func (a *Attempt) checkTree() error         { return a.worktreeOp("inspect", "") }
+func (a *Attempt) prepare() error           { return a.worktreeOp("prepare", "") }
+func (a *Attempt) cleanAt(sha string) error { return a.worktreeOp("clean", sha) }
+
 func (a *Attempt) contextFiles() (map[string]string, error) {
 	files := map[string]string{}
 	total := 0

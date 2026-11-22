@@ -13,6 +13,8 @@ jobs:
         include:
           - language: javascript-typescript
             mode: none
+          - language: rust
+            mode: none
           - language: go
             mode: manual
     steps:

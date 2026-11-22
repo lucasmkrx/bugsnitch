@@ -1,12 +1,18 @@
 # Bugsnitch
 
-Bugsnitch coordinates development across your GitHub projects and your own computers. The Go service keeps project state in PostgreSQL. A macOS runner executes locally initiated work in a separate Git worktree, stores its evidence in SQLite, and reports bounded metadata to a React dashboard. An authenticated MCP server exposes the same workspace to compatible clients.
+Bugsnitch coordinates development across your GitHub projects and your own computers. The hosted service keeps project state in PostgreSQL. Rust applies its schema migrations and owns the runner’s SQLite journals. The HTTP service and runner orchestration currently run in Go. A macOS runner executes locally initiated work in a separate Git worktree, stores its evidence in SQLite, and reports bounded metadata to a React dashboard. An authenticated MCP server exposes the same workspace to compatible clients.
 
 This rebuild is in development. The [verification ledger](docs/PROGRESS.md) records which workflows have run, their limits, and the outstanding live tests.
 
 ## Start the dashboard
 
-Install Git, Go 1.26 or newer, Node 26.13.1 with npm, PostgreSQL 17 command-line tools and OpenSSL. From a clean checkout, start the service with
+Install Git, Go (tested with 1.27.4), rustup, Node 26.13.1 with npm, PostgreSQL 17 with libpq development headers, libclang, a C compiler and OpenSSL. Cargo selects the pinned Rust 1.100.0 toolchain. Put Cargo and `pg_config` on PATH. On macOS with Homebrew and Xcode Command Line Tools, run
+
+```sh
+export PATH="$(brew --prefix rustup)/bin:$(brew --prefix postgresql@17)/bin:$PATH"
+```
+
+Start the dashboard from the repository root with
 
 ```sh
 make dev
@@ -37,12 +43,18 @@ Use the public HTTPS service origin on another computer. Each project checkout n
 ## Verification and operations
 
 ```sh
-go test ./...
+make test
 make build
-make macos
 ```
 
-Database tests use a disposable instance with schema-creation privileges. Set BUGSNITCH_TEST_DSN and BUGSNITCH_TEST_DATABASE_URL to its PostgreSQL URI, then run `go test -race -count=1 ./...`. For a complete installation exercise, build the binaries, set PGHOST, PGPORT and PGUSER for a disposable instance with CREATEDB permission, and run `python3 scripts/smoke.py`. The script creates two temporary databases, two runner profiles and a fixture checkout.
+Database tests use a disposable instance with schema-creation privileges. Set BUGSNITCH_TEST_DSN and BUGSNITCH_TEST_DATABASE_URL to its PostgreSQL URI, then run `make test GO_TEST_FLAGS="-race -count=1"`. Run `cargo test --locked -p bugsnitch-server-migrate --test database -- --ignored` against the same disposable database for migration compatibility, concurrency and rollback. For focused Go tests that use either store, run `make helpers` and export the matching executable paths first.
+
+```sh
+export BUGSNITCH_JOURNAL_HELPER="$PWD/bin/bugsnitch-runner-journal"
+export BUGSNITCH_MIGRATOR="$PWD/bin/bugsnitch-server-migrate"
+```
+
+On macOS, install both compilation targets with `rustup target add aarch64-apple-darwin x86_64-apple-darwin` and run `make macos`. Each archive in `bin/packages/` contains the runner, its matching Rust executable and the service installer. For a complete installation exercise, build the binaries, set PGHOST, PGPORT and PGUSER for a disposable instance with CREATEDB permission, and run `python3 scripts/smoke.py`. The script creates two temporary databases, two runner profiles and a fixture checkout.
 
 [Operations guide](docs/OPERATIONS.md) · [Provider configuration](docs/INTEGRATIONS.md) · [Architecture](docs/ARCHITECTURE.md) · [Implementation plan](docs/IMPLEMENTATION_PLAN.md) · [Product brief](docs/PRODUCT.md)
 

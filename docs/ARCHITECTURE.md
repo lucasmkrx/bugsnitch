@@ -6,6 +6,12 @@ Owner sessions, pairing grants, device credentials, GitHub App installation toke
 
 A disconnected machine retains ownership of work. Last contact describes connectivity. Completion requires durable evidence from the owning runner. Raw logs, issue text, repository content and webhook payloads are untrusted inputs. Local execution assumes an owner-reviewed repository and validation configuration. A worktree shares Git metadata and the OS user.
 
+## Native storage components
+
+The runner calls a sibling Rust process over private STDIO for both SQLite files. Each request opens the selected journal, checks its schema and executes one batch. An interrupted transaction rolls back when its connection closes. If the reply is lost after a commit, the caller reconciles against durable attempt or receipt records. Only trusted local code constructs requests. The device protocol exposes typed commands.
+
+At hosted startup, the Go HTTP process starts a sibling Rust migrator. Both releases use the same PostgreSQL migration files, advisory lock and SHA-256 ledger. The server opens for traffic after migration and a successful database ping. Normal API queries still use the Go connection pool. [Migration decision](decisions/0004-staged-rust-migration.md)
+
 ## Local admission
 
 The person starts a local run. On enrolled computers, each admission checks credential revocation, workspace, repository mapping, project pause and the approved criteria hash when a plan exists. A PostgreSQL transaction locks the workspace before reserving ticket capacity or a model permit. Waiting releases active execution capacity and retains the issue and shared locks. The runner journals pending requests and sequence numbers to reconcile a lost acknowledgment. A missed heartbeat never releases a reservation. Global limits apply only to enrolled processes participating in the protocol.
@@ -29,4 +35,4 @@ GitHub and Sentry handlers validate the original signature, resolve an authorize
 
 Incident grouping preserves release and environment observations within one incident. A validated candidate, a deployment receipt and positive environment validation are distinct facts. Re-evaluation after a rollback or contradictory fixed-build occurrence preserves the earlier evidence. [Provider contracts](PROVIDERS.md) · [Pull-request and merge gates](INTEGRATION_QUEUE.md)
 
-The hosted HTTP service is the only process that needs PostgreSQL and the GitHub App signing key. macOS devices hold their own scoped service credentials, project mappings and runtime association. The independent dashboard and ChatGPT bridge see only data allowed by their respective grants. Worktree isolation and credential limits are described in the [runner guide](RUNNER.md).
+The hosted HTTP service owns provider integration credentials. Its startup migrator receives PostgreSQL connection settings. macOS devices hold their own scoped service credentials, project mappings and runtime association. The independent dashboard and ChatGPT bridge see only data allowed by their respective grants. Worktree isolation and credential limits are described in the [runner guide](RUNNER.md).

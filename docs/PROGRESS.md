@@ -2,6 +2,15 @@
 
 The rebuild started on `rebuild/bugsnitch-v2` from clean main at `833637906ffc7d7de633b0de64e58c0636cd3bfd` in lucasmkrx/bugsnitch. The previous application was a TypeScript VS Code extension. Its history, MPL-2.0 license, trademarks and brand assets are preserved. [Implementation PR](https://github.com/lucasmkrx/bugsnitch/pull/24)
 
+## Rust storage migration
+
+Stage 1 started from `ed6064e` on 2026-11-22. The runner now uses bundled SQLite through Rust for both its execution and device journals. The hosted service runs a Rust PostgreSQL migrator before accepting traffic. Both existing command names and stored formats are retained. The [migration plan](IMPLEMENTATION_PLAN.md#rust-migration) tracks the remaining Go runner and server work. GitHub reported that code scanning is disabled for this private repository when the PR workflow tried to publish its CodeQL results.
+
+- The Rust tests and race-enabled Go suite passed against disposable PostgreSQL. The opt-in migrator fixture separately exercised fresh and existing ledgers, two competing starts, lock timeout, rollback, checksum mismatch and sanitized failure output.
+- Journal tests opened an older SQLite database, preserved its attempt and receipt records, raced independent helper processes and reconciled a committed write whose acknowledgment was lost.
+- The installation smoke paired and synchronized two runner profiles, used real MCP STDIO and HTTP, opened persisted records in Chrome, restarted the service and restored its PostgreSQL backup. GitHub Actions built and exercised the native runner archive on Intel and Apple Silicon macOS, including the service installer. A clean archive of the repository initialized its own database and served the dashboard with a successful readiness probe using `make dev`. [Native package checks](https://github.com/lucasmkrx/bugsnitch/actions/runs/45023772062)
+- On an arm64 Mac, a committed journal update and read took a median **5.217 ms** with the previous CLI-backed journal and **0.291 ms** with the Rust helper. Each median covers five runs of 200 transactions on the same host, with setup excluded. The previous checkout used the identical `BenchmarkJournalTransaction` fixture. The comparison measures local journal latency, including the former subprocess startup. End-to-end task time and hosted throughput were outside this measurement.
+
 ## Milestones
 
 |Milestone|Working implementation and evidence|Open acceptance work|

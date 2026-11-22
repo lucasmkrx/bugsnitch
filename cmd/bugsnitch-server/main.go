@@ -45,7 +45,10 @@ func run() error {
 	db, err := storage.Open(startup, dsn)
 	cancel()
 	if err != nil {
-		return errors.New("could not connect or migrate PostgreSQL; check database configuration and migration checksums")
+		if errors.Is(err, storage.ErrMissingMigrator) {
+			return err
+		}
+		return errors.New("could not connect or migrate PostgreSQL; check database configuration, schema permissions and migration checksums")
 	}
 	defer db.Close()
 	var app *github.App

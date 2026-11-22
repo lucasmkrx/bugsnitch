@@ -11,3 +11,12 @@
 |6. Release|Clean install, authorization and recovery checks, backup restore, evidence inventory and implementation PR|
 
 A provider fixture verifies a protocol contract. Live service acceptance requires a deliberately configured test project and separately recorded evidence. Work that needs a provider account may proceed independently of storage, local execution, dashboard and recovery checks.
+
+## Rust migration
+
+|Stage|Scope and evidence required|
+|---|---|
+|1. Storage compatibility|Ship the SQLite journal and PostgreSQL startup migrator in Rust. Open journals from the Go runner, retain existing migration digests and timestamps, exercise lost acknowledgments and concurrent migrations, and run backup/restore through the packaged service. See the [verification ledger](PROGRESS.md#rust-storage-migration).|
+|2. Runner execution|Move named journal operations, worktree lifecycle, validation and cancellation behind the Rust runner. Exercise a real temporary Git checkout, owner feedback, interrupted validation and restart. Compare artifact and control-receipt formats before changing the CLI entry point.|
+|3. Hosted coordination|Move the PostgreSQL claim, receipt, device and event paths into Rust. Exercise competing dispatchers, revocation, outbox replay, stale approvals and rolling compatibility with the prior runner and dashboard.|
+|4. Entrypoint cutover|Finish the local runtime adapter, hosted HTTP and integration handlers, then switch both entry points. Exercise the packaged GitHub issue workflow, MCP, deployment evidence and restore before retiring the Go implementations. External provider checks retain their separate prerequisites.|

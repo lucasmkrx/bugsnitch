@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lucasmkrx/bugsnitch/internal/journalbridge"
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 	"github.com/lucasmkrx/bugsnitch/internal/runner"
 )
@@ -52,8 +53,6 @@ func folder() (string, error) {
 }
 func sqlValue(v string) string { return "CAST(X'" + hex.EncodeToString([]byte(v)) + "' AS TEXT)" }
 
-const authoritySchema = "CREATE TABLE IF NOT EXISTS authority(attempt TEXT PRIMARY KEY,device TEXT NOT NULL,acked INTEGER NOT NULL DEFAULT 0,pending TEXT NOT NULL DEFAULT '');"
-
 func journal(query string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
@@ -65,16 +64,9 @@ func journalContext(ctx context.Context, query string) (string, error) {
 		return "", err
 	}
 	file := filepath.Join(dir, "device.sqlite")
-	f, err := os.OpenFile(file, os.O_CREATE|os.O_RDWR, 0600)
+	b, err := journalbridge.Query(ctx, file, query)
 	if err != nil {
-		return "", err
-	}
-	f.Close()
-	cmd := exec.CommandContext(ctx, "sqlite3", "-batch", "-bail", "-init", "/dev/null", file)
-	cmd.Stdin = strings.NewReader(".timeout 5000\nCREATE TABLE IF NOT EXISTS profile(id INTEGER PRIMARY KEY CHECK(id=1),data TEXT NOT NULL); CREATE TABLE IF NOT EXISTS mappings(id TEXT PRIMARY KEY,path TEXT NOT NULL);\n" + authoritySchema + query)
-	b, err := cmd.Output()
-	if err != nil {
-		return "", errors.New("device journal unavailable or already paired")
+		return "", fmt.Errorf("device journal: %w", err)
 	}
 	return strings.TrimSpace(string(b)), nil
 }

@@ -50,9 +50,11 @@ func fixture(t *testing.T) *Server {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { scoped.Close() })
-	if err = storage.Migrate(ctx, scoped); err != nil {
+	reopened, err := storage.Open(ctx, u.String())
+	if err != nil {
 		t.Fatal(err)
 	}
+	reopened.Close()
 	return &Server{DB: scoped, Incidents: incidents.Store{DB: scoped}, Origin: "http://localhost:8787", OwnerToken: random(32), Plugin: PluginAuth{LocalToken: random(32)}}
 }
 

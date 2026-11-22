@@ -22,7 +22,6 @@ var views = map[string]string{
 	"devices":      `SELECT id,name,platform,last_contact AS "lastContact",revoked,COALESCE((SELECT jsonb_agg(project_id ORDER BY project_id) FROM device_projects WHERE device_id=d.id),'[]'::jsonb) AS projects FROM devices d WHERE workspace_id=$1 ORDER BY name,id`,
 	"decisions":    `SELECT d.id,d.project_id AS "projectId",question, jsonb_build_array('Resume dispatch','Keep paused') AS options, d.version, d.subject_version AS "subjectVersion", d.answer, d.request_id AS "requestId", CASE WHEN answer IS NOT NULL THEN 'answered' WHEN expires_at<=now() OR p.version<>subject_version THEN 'stale' ELSE 'pending' END AS status, expires_at AS "expiresAt" FROM decisions d JOIN projects p ON p.id=d.project_id WHERE d.workspace_id=$1 ORDER BY d.created_at DESC LIMIT 200`,
 	"messages":     `SELECT id,project_id AS "projectId",body,'blocked' AS status,'Hosted model authorization pending' AS reason,created_at AS "createdAt" FROM (SELECT * FROM manager_messages WHERE workspace_id=$1 ORDER BY created_at DESC LIMIT 200) m ORDER BY created_at,id`,
-	"events":       `SELECT seq,project_id AS "projectId",kind,subject_id AS "subjectId",created_at AS "createdAt",actor_source AS "actorSource",actor_id AS "actorId",reason,policy_version AS "policyVersion",subject_version AS "subjectVersion",evidence_ref AS "evidenceRef" FROM events WHERE workspace_id=$1 ORDER BY seq DESC LIMIT 150`,
 	"attempts":     `SELECT a.id,a.project_id AS "projectId",a.device_id AS "deviceId",d.name AS machine,(SELECT jsonb_build_object('id',id,'operation',operation,'status',CASE WHEN status IN('requested','received') AND expires_at<=now() THEN 'expired' ELSE status END) FROM controls c WHERE c.workspace_id=a.workspace_id AND c.attempt_id=a.id ORDER BY created_at DESC LIMIT 1) AS control,p.repository,a.issue_number AS "issueNumber",a.base_sha AS "baseSha",a.candidate_sha AS "candidateSha",a.phase,a.state,a.reason_code AS "reasonCode",a.version,a.evidence,(SELECT jsonb_build_object('digest',digest,'baseSha',base_sha,'candidateSha',candidate_sha,'sharedAt',created_at) FROM shared_diffs f WHERE f.workspace_id=a.workspace_id AND f.attempt_id=a.id AND f.candidate_sha=a.candidate_sha AND f.version=a.version) AS "sharedDiff",a.updated_at AS "updatedAt",CASE WHEN d.revoked OR d.last_contact < now()-interval '2 minutes' THEN 'disconnected' ELSE 'connected' END AS connection FROM attempt_reports a JOIN devices d ON d.id=a.device_id JOIN projects p ON p.id=a.project_id WHERE a.workspace_id=$1 ORDER BY a.updated_at DESC LIMIT 500`,
 	"tickets": `SELECT * FROM (
 	SELECT x.incident_id AS id,x.project_id AS "projectId",x.number,p.repository,i.observed AS title,x.github_state AS state,'incident' AS source,
@@ -46,6 +45,11 @@ func (s *Server) state(w http.ResponseWriter, r *http.Request, ws string) error 
 	}
 	data["limits"] = object{"tickets": tickets, "turns": turns, "version": limitsV}
 	data["workspace"] = object{"id": ws, "name": name, "stopped": stopped, "dispatchVersion": dispatchV}
+	var events json.RawMessage
+	if err := s.coordinate(r.Context(), "events.snapshot", object{"workspace": ws}, &events); err != nil {
+		return err
+	}
+	data["events"] = events
 	for key, q := range views {
 		var b json.RawMessage
 		if err := s.DB.QueryRowContext(r.Context(), "SELECT COALESCE(json_agg(t),'[]') FROM ("+q+") t", ws).Scan(&b); err != nil {

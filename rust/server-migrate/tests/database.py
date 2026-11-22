@@ -174,8 +174,16 @@ def main(binary):
         db.sql("BEGIN; CREATE TABLE bugsnitch_migrations (name text PRIMARY KEY,digest text NOT NULL,"
                "applied_at timestamptz NOT NULL DEFAULT now()); " + first.read_text() +
                f"INSERT INTO bugsnitch_migrations VALUES ('001_core.sql','{digest}','2001-01-01 UTC'); COMMIT;", schema)
+        db.sql("""INSERT INTO workspaces(id, account_id, name) VALUES ('other','owner','Other');
+               INSERT INTO events(workspace_id,kind,subject_id)
+               VALUES ('personal','legacy','first'),('other','legacy','private'),('personal','legacy','second')""", schema)
         db.finish(db.launch(schema), success=True)
         verify_ledger(db, schema, migrations)
+        assert db.sql("SELECT workspace_id,subject_id,position FROM events ORDER BY seq", schema).splitlines() == [
+            "personal|first|1", "other|private|1", "personal|second|2"
+        ]
+        db.sql("INSERT INTO events(workspace_id,kind,subject_id) VALUES ('personal','new','third')", schema)
+        assert db.sql("SELECT position FROM events WHERE kind='new'", schema) == "3"
         assert db.sql("SELECT applied_at='2001-01-01 UTC'::timestamptz FROM bugsnitch_migrations WHERE name='001_core.sql'", schema) == "t"
     invalid = f"postgresql://fixture:{MARKER}@127.0.0.1:invalidport/local"
     db.finish(db.launch("unused", url=invalid), success=False)

@@ -60,6 +60,8 @@ name = "bugsnitch-server-migrate"
 version = "0.1.0"
 dependencies = [
  "libpq",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

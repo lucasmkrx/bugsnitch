@@ -2,6 +2,16 @@
 
 The rebuild started on `rebuild/bugsnitch-v2` from clean main at `833637906ffc7d7de633b0de64e58c0636cd3bfd` in lucasmkrx/bugsnitch. The previous application was a TypeScript VS Code extension. Its history, MPL-2.0 license, trademarks and brand assets are preserved. [Implementation PR](https://github.com/lucasmkrx/bugsnitch/pull/24)
 
+## Rust hosted coordination
+
+Stage 3 began at `8b3fc23`. Rust now owns attempt admission, shared model permits, worker leases, eligibility queries, device operations, four provider queue reservations, incident processing and audit replay. The public service and provider calls still run in Go. The next migration stage covers the remaining hosted HTTP handlers and local model adapter. [Architecture decision](decisions/0006-hosted-coordination.md) · [Upgrade and recovery](OPERATIONS.md#hosted-coordination-and-recovery)
+
+- The Rust suite and full race-enabled Go suite passed against disposable PostgreSQL 17. Tests covered the last capacity slot, plan dependencies, earlier criteria hashes, repeated commands, competing pairing recipients, revoked mappings, stale claims and rollback on an invalid acknowledgment. Concurrent reconnect, claim and emergency-stop tests used actual PostgreSQL lock waits.
+- A transport fault fixture discarded the real Rust process's success reply after a device revocation committed. The API reported an unknown outcome. A fresh request recovered the recorded revocation with one audit event. Eight concurrent queue claims returned one reservation. Existing provider fixtures exercised uncertain external writes and reconciliation.
+- A migration fixture upgraded historical events from two workspaces and preserved their event identities. The replay test committed two same-workspace events in the opposite order to their sequence numbers. A reader that had already consumed the first commit saw the later commit on the next page. A rolled-back event and a different workspace's event stayed out of the response.
+- Two runner profiles built from `8b3fc23` paired, rotated credentials, registered projects and synchronized with the new service. The installation smoke exercised a restart, MCP, backup/restore, event cursor continuity, and selective revocation. Headless Chrome exercised the previous dashboard at 360×800 and 1440×900. The test used a local database and loopback HTTP. External GitHub, Sentry and hosted model acceptance retain their separate status below.
+- GitHub previously reported code scanning disabled for this private repository. Linux and both macOS CI jobs are tracked on the migration pull request.
+
 ## Rust runner execution
 
 This stage started from `917cf2f` on 2026-11-22. The CLI now uses Rust for ordinary and detached worktree creation and verification, validation supervision, pause/stop receipt transitions and cleanup. The CLI's model turns, artifact assembly and hosted lease checks continue in Go. Install the CLI and companion from the same build. [Runner guide](RUNNER.md#recovery-and-retention)

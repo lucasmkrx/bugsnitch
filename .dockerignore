@@ -6,7 +6,9 @@ bin
 **/dist
 **/test-results
 *.pem
+**/*.pem
 *.key
+**/*.key
 .env*
 **/.env*
 secrets

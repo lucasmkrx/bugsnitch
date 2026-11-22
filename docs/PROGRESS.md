@@ -2,6 +2,15 @@
 
 The rebuild started on `rebuild/bugsnitch-v2` from clean main at `833637906ffc7d7de633b0de64e58c0636cd3bfd` in lucasmkrx/bugsnitch. The previous application was a TypeScript VS Code extension. Its history, MPL-2.0 license, trademarks and brand assets are preserved. [Implementation PR](https://github.com/lucasmkrx/bugsnitch/pull/24)
 
+## Rust public HTTP and providers
+
+This cutover began at `3f837c6`. The installed `bugsnitch-server` is Rust and serves the public REST API, dashboard, signed webhooks, hosted MCP and OAuth discovery. The GitHub App client is Rust. The private Go application worker still owns planning and policy transactions, decisions, dashboard projections and background scheduling. Both interfaces use the same durable records. [Architecture decision](decisions/0007-rust-http-and-providers.md) · [Installation](OPERATIONS.md#hosted-coordination-and-recovery)
+
+- The full Rust and race-enabled Go suites passed with disposable PostgreSQL 17. The API contract suite now calls the packaged listener over loopback. It exercises scope checks, optimistic concurrency, emergency stop, issue selection, replay, artifacts and real runner subprocesses. A four-client cancellation test verifies that stalled native children are reaped before their slots can be reused.
+- The GitHub fixtures exercised actual Rust HTTP requests, verified App signatures and token scope, tested pagination and rate-limit responses, and reconciled a lost write response. The packaged webhook and MCP exercise used signed Sentry/GitHub deliveries and a TLS OAuth introspection fixture. It covered redaction, duplicate delivery, revoked credentials, read-only grants and an authorized incident report. Vendor production traffic and an installed ChatGPT client were outside these exercises.
+- An upgrade from the previous Go server preserved its owner cookie, enrolled runners and event cursors across restart and database restore. The earlier dashboard ran in Chrome at 360×800 and 1440×900 against both versions. The previous MCP bridge read the project and replayed a report with one durable incident. After restoring, the revoked runner received 403 and the other runner synchronized successfully. Use the `--initial-server`, `--runner` and `--mcp-bridge` options of the installation smoke to reproduce this check.
+- Process tests exercised incomplete installations, worker death and abrupt parent exit. Rust asset tests covered conditional GET, byte ranges, deep links and symlink isolation. Both macOS runner archives built locally. GitHub has previously declined CodeQL uploads because code scanning is disabled on this private repository.
+
 ## Rust hosted coordination
 
 Stage 3 began at `8b3fc23`. Rust now owns attempt admission, shared model permits, worker leases, eligibility queries, device operations, four provider queue reservations, incident processing and audit replay. The public service and provider calls still run in Go. The next migration stage covers the remaining hosted HTTP handlers and local model adapter. [Architecture decision](decisions/0006-hosted-coordination.md) · [Upgrade and recovery](OPERATIONS.md#hosted-coordination-and-recovery)

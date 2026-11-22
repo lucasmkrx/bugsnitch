@@ -1,0 +1,310 @@
+[
+  {
+    "description": "Apply the owner's explicit answer to a pending decision at the reviewed version. Reuse the request ID after a lost response.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "answer": {
+          "type": "string"
+        },
+        "decisionId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "decisionId",
+        "answer",
+        "version",
+        "requestId"
+      ],
+      "type": "object"
+    },
+    "name": "answer_decision"
+  },
+  {
+    "annotations": {
+      "idempotentHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Inspect project settings, reported work, decisions and incident counts for a workspace-owned project.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "projectId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectId"
+      ],
+      "type": "object"
+    },
+    "name": "get_project_status"
+  },
+  {
+    "annotations": {
+      "idempotentHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Inspect revision-bound validation and review counts for one attempt. Source text stays on the owner-selected artifact route.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectId",
+        "attemptId"
+      ],
+      "type": "object"
+    },
+    "name": "inspect_attempt"
+  },
+  {
+    "annotations": {
+      "idempotentHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Inspect the latest machine-reported execution state, revision and last update.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "name": "list_attempts"
+  },
+  {
+    "annotations": {
+      "idempotentHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Inspect decision versions, options and current status before asking the owner for a choice.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "name": "list_decisions"
+  },
+  {
+    "annotations": {
+      "idempotentHint": false,
+      "readOnlyHint": true
+    },
+    "description": "List projects owned by this workspace and their current dispatch settings.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "type": "object"
+    },
+    "name": "list_projects"
+  },
+  {
+    "description": "Stage a versioned plan for new GitHub issues. Numbers are provisional. The owner must approve external publication in Plans.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "plan": {
+          "additionalProperties": false,
+          "properties": {
+            "assumptions": {
+              "type": "string"
+            },
+            "forecast": {
+              "type": "string"
+            },
+            "milestone": {
+              "type": "string"
+            },
+            "target": {
+              "type": "string"
+            },
+            "tickets": {
+              "items": {
+                "additionalProperties": false,
+                "properties": {
+                  "criteria": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "null",
+                      "array"
+                    ]
+                  },
+                  "dependencies": {
+                    "items": {
+                      "type": "integer"
+                    },
+                    "type": [
+                      "null",
+                      "array"
+                    ]
+                  },
+                  "estimateHours": {
+                    "type": "integer"
+                  },
+                  "number": {
+                    "type": "integer"
+                  },
+                  "priority": {
+                    "type": "integer"
+                  },
+                  "resources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": [
+                      "null",
+                      "array"
+                    ]
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "verification": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "number",
+                  "title",
+                  "criteria",
+                  "verification",
+                  "priority",
+                  "estimateHours",
+                  "dependencies",
+                  "resources"
+                ],
+                "type": "object"
+              },
+              "type": [
+                "null",
+                "array"
+              ]
+            },
+            "title": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "title",
+            "milestone",
+            "assumptions",
+            "tickets"
+          ],
+          "type": "object"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "projectId",
+        "version",
+        "requestId",
+        "plan"
+      ],
+      "type": "object"
+    },
+    "name": "propose_ticket_plan"
+  },
+  {
+    "description": "Record an owner-authorized manual report in a selected project. Reuse the same requestId on retry. This records triage evidence.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "expected": {
+          "type": "string"
+        },
+        "observed": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "steps": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectId",
+        "observed",
+        "expected",
+        "steps",
+        "requestId"
+      ],
+      "type": "object"
+    },
+    "name": "report_incident"
+  },
+  {
+    "description": "Request pause or stop at the reviewed attempt version. The owning computer confirms quiescence separately.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "attemptId": {
+          "type": "string"
+        },
+        "operation": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        },
+        "version": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "attemptId",
+        "operation",
+        "requestId",
+        "version"
+      ],
+      "type": "object"
+    },
+    "name": "request_attempt_control"
+  },
+  {
+    "description": "Record an owner's project message. Hosted model processing remains blocked pending authorization.",
+    "inputSchema": {
+      "additionalProperties": false,
+      "properties": {
+        "body": {
+          "type": "string"
+        },
+        "projectId": {
+          "type": "string"
+        },
+        "requestId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "projectId",
+        "requestId",
+        "body"
+      ],
+      "type": "object"
+    },
+    "name": "submit_feedback"
+  }
+]

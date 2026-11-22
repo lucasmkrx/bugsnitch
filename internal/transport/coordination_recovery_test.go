@@ -2,12 +2,19 @@
 package transport
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+
+	"github.com/lucasmkrx/bugsnitch/internal/storage"
 )
 
 // The proxy forwards real frames to the shipped Rust process and discards its
@@ -47,20 +54,27 @@ while header := sys.stdin.buffer.read(4):
 	}
 	t.Setenv("BUGSNITCH_MIGRATOR", proxy)
 	s := fixture(t)
-	c := login(t, s)
+
 	if _, err = s.DB.Exec("INSERT INTO devices(id,workspace_id,name,platform) VALUES ('lost-reply','personal','test','linux')"); err != nil {
 		t.Fatal(err)
 	}
-	status, body := c.req(t, "POST", "/api/v1/devices/lost-reply/revoke", object{}, "")
+	revoke := func() error {
+		return storage.Coordinate(context.Background(), s.DB, "device.revoke", object{"workspace": "personal", "device": "lost-reply"}, nil)
+	}
+	if err = revoke(); !errors.Is(err, storage.ErrUnknownOutcome) {
+		t.Fatal("lost commit reply should have an unknown outcome", err)
+	}
 	var committed bool
-	if err = s.DB.QueryRow("SELECT revoked FROM devices WHERE id='lost-reply'").Scan(&committed); err != nil || !committed || status != 503 || !strings.Contains(body["error"].(string), "outcome unknown") {
-		t.Fatalf("revocation committed=%v, HTTP=%d, err=%v", committed, status, err)
+	if err = s.DB.QueryRow("SELECT revoked FROM devices WHERE id='lost-reply'").Scan(&committed); err != nil || !committed {
+		t.Fatalf("revocation committed=%v, err=%v", committed, err)
 	}
 	calls, err := os.ReadFile(seen)
 	if err != nil || string(calls) != "committed\n" {
 		t.Fatal("bridge replayed lost response", err)
 	}
-	c.post(t, "devices/lost-reply/revoke", object{}, 200)
+	if err = revoke(); err != nil {
+		t.Fatal("explicit retry failed", err)
+	}
 	var n int
 	if err = s.DB.QueryRow("SELECT count(*) FROM events WHERE kind='device.revoked' AND subject_id='lost-reply'").Scan(&n); err != nil || n != 1 {
 		t.Fatalf("reconciled events=%d, err=%v", n, err)
@@ -68,5 +82,62 @@ while header := sys.stdin.buffer.read(4):
 	calls, err = os.ReadFile(seen)
 	if err != nil || strings.Count(string(calls), "committed\n") != 2 {
 		t.Fatal("expected exactly one explicit retry", err)
+	}
+}
+
+// Drop the response only after the packaged server completed the request.
+// This exercises owner reconciliation at the public HTTP boundary even when
+// reverse proxies or the browser disconnect after a successful write.
+func TestLostHTTPResponseAfterNativeRevocation(t *testing.T) {
+	s := fixture(t)
+	owner := login(t, s)
+	if _, err := s.DB.Exec("INSERT INTO devices(id,workspace_id,name,platform) VALUES('ack-lost','personal','first','darwin/arm64')"); err != nil {
+		t.Fatal(err)
+	}
+	var completed atomic.Int32
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec := httptest.NewRecorder()
+		owner.handler.ServeHTTP(rec, r)
+		if rec.Code != 200 {
+			t.Errorf("native server status %d", rec.Code)
+			w.WriteHeader(rec.Code)
+			return
+		}
+		completed.Add(1)
+		conn, _, err := http.NewResponseController(w).Hijack()
+		if err != nil {
+			t.Errorf("drop reply: %v", err)
+			return
+		}
+		_ = conn.Close()
+	}))
+	defer proxy.Close()
+	path := "/api/v1/devices/ack-lost/revoke"
+	req, err := http.NewRequest("POST", proxy.URL+path, strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(owner.cookie)
+	response, err := proxy.Client().Do(req)
+	if err == nil {
+		response.Body.Close()
+		t.Fatal("client unexpectedly received an acknowledgment")
+	}
+	if completed.Load() != 1 {
+		t.Fatalf("completed native writes: %d", completed.Load())
+	}
+	code, state := owner.req(t, "GET", "/api/v1/state", nil, "")
+	if code != 200 {
+		t.Fatal(code)
+	}
+	devices := state["devices"].([]any)
+	if len(devices) != 1 || devices[0].(map[string]any)["revoked"] != true {
+		t.Fatal("fresh state did not show committed revocation")
+	}
+	owner.post(t, "devices/ack-lost/revoke", object{}, 200)
+	var events int
+	if err := s.DB.QueryRow("SELECT count(*) FROM events WHERE kind='device.revoked' AND subject_id='ack-lost'").Scan(&events); err != nil || events != 1 {
+		t.Fatalf("observed %d revocations: %v", events, err)
 	}
 }

@@ -1,0 +1,11 @@
+query BugsnitchInspection($owner:String!,$name:String!,$pr:Int!,$issue:Int!) {
+ repository(owner:$owner,name:$name) {
+   nameWithOwner owner { __typename }
+   issue(number:$issue) { id number title body state }
+   pullRequest(number:$pr) {
+     number title state isDraft headRefOid baseRefName baseRef {target{oid}} reviewDecision
+     mergeQueue {id} mergeQueueEntry {state position headCommit {oid} baseCommit {oid}} mergeCommit {oid}
+     commits(last:1){nodes{commit{oid statusCheckRollup{state contexts(first:1){totalCount}}}}}
+   }
+ }
+}

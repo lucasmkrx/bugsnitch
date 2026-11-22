@@ -5,12 +5,10 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
-	"github.com/lucasmkrx/bugsnitch/internal/audit"
-	"io"
-	"net/http"
 	"regexp"
-	"strings"
 	"time"
+
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 )
 
 var revision = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
@@ -49,7 +47,7 @@ func (r Receipt) valid() bool {
 	return false
 }
 func validBuild(s string) bool { return revision.MatchString(s) || label(s) != "" }
-func (s Store) receipt(ctx context.Context, w, p, id string, r Receipt) error {
+func (s Store) RecordReceipt(ctx context.Context, w, p, id string, r Receipt) error {
 	r.Evidence = Redact(r.Evidence)
 	if !r.valid() {
 		return ErrInvalid
@@ -161,7 +159,7 @@ func loadReceipt(ctx context.Context, tx *sql.Tx, w, p, id, kind, env string, si
 	}
 	return &r, err
 }
-func (s Store) verdict(ctx context.Context, w, p, id, env string) (Verdict, error) {
+func (s Store) Verdict(ctx context.Context, w, p, id, env string) (Verdict, error) {
 	v := Verdict{Environment: env, Source: "authenticated owner"}
 	if label(env) == "" {
 		return v, ErrInvalid
@@ -197,44 +195,4 @@ func (s Store) verdict(ctx context.Context, w, p, id, env string) (Verdict, erro
 		}
 	}
 	return evaluate(v, time.Now().UTC(), recurrence, unknown), tx.Commit()
-}
-
-// VerificationHTTP requires an outer owner-session and CSRF gate. Workspace is supplied by that gate.
-func (s Store) VerificationHTTP(w http.ResponseWriter, r *http.Request, workspace, project, incidentID string) {
-	var err error
-	var result any
-	switch r.Method {
-	case "GET":
-		result, err = s.verdict(r.Context(), workspace, project, incidentID, r.URL.Query().Get("environment"))
-	case "POST":
-		var receipt Receipt
-		d := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8192))
-		d.DisallowUnknownFields()
-		if d.Decode(&receipt) != nil || d.Decode(new(any)) != io.EOF {
-			err = ErrInvalid
-			break
-		}
-		err = s.receipt(r.Context(), workspace, project, incidentID, receipt)
-		result = map[string]string{"commandId": receipt.CommandID, "status": "recorded"}
-	default:
-		w.Header().Set("Allow", "GET, POST")
-		http.Error(w, "method unavailable", 405)
-		return
-	}
-	if err != nil {
-		code := 503
-		switch {
-		case errors.Is(err, ErrInvalid):
-			code = 400
-		case errors.Is(err, ErrConflict):
-			code = 409
-		case errors.Is(err, sql.ErrNoRows):
-			code = 404
-		}
-		http.Error(w, strings.ToLower(http.StatusText(code)), code)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(result)
 }

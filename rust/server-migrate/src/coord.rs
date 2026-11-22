@@ -14,8 +14,8 @@ const MAX_FRAME: usize = 4 << 20;
 
 #[derive(Debug, Serialize)]
 pub struct Error {
-    status: u16,
-    message: String,
+    pub(crate) status: u16,
+    pub(crate) message: String,
 }
 
 impl Error {
@@ -216,11 +216,13 @@ fn transaction(conn: &Connection, req: Request, schema: Option<&str>) -> Result<
         }
         checked(conn.exec("SET LOCAL statement_timeout='12s'; SET LOCAL client_min_messages=ERROR; SET LOCAL TIME ZONE 'UTC'"))?;
         match req.op.split('.').next() {
+            Some("session") => crate::http::session::apply(&db, &req.op, req.input),
             Some("claims") => claims::handle(&db, &req.op, req.input),
             Some("device") => devices::handle(&db, &req.op, req.input),
+            Some("hooks") => crate::http::integrations::hooks::apply(&db, &req.op, req.input),
             Some("jobs") => jobs::handle(&db, &req.op, req.input),
             Some("events") => events::handle(&db, &req.op, req.input),
-            _ if req.op == "system.ready" => {
+            _ if matches!(req.op.as_str(), "system.ready" | "system.http_ready") => {
                 db.one("SELECT 1", &[])?;
                 Ok(json!(1))
             }
@@ -255,11 +257,38 @@ fn transaction(conn: &Connection, req: Request, schema: Option<&str>) -> Result<
     }
 }
 
+// The HTTP parent normally kills a stuck request after 15 seconds. This second
+// deadline also covers abrupt parent death during a blocking libpq syscall.
+fn watchdog() -> std::sync::mpsc::Sender<bool> {
+    use std::{sync::mpsc, thread, time::Duration};
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut active = true; // initial database connection
+        loop {
+            if active {
+                match rx.recv_timeout(Duration::from_secs(20)) {
+                    Ok(next) => active = next,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => return,
+                    Err(mpsc::RecvTimeoutError::Timeout) => std::process::exit(1),
+                }
+            } else {
+                match rx.recv() {
+                    Ok(next) => active = next,
+                    Err(_) => return,
+                }
+            }
+        }
+    });
+    tx
+}
+
 pub fn serve() -> io::Result<()> {
     let invalid = || io::Error::other("coordination service unavailable");
     let settings =
         config::split(&env::var("DATABASE_URL").map_err(|_| invalid())?).map_err(|_| invalid())?;
+    let guard = watchdog();
     let conn = Connection::new(&settings.native).map_err(|_| invalid())?;
+    guard.send(false).map_err(|_| invalid())?;
     let mut input = io::stdin().lock();
     let mut output = io::stdout().lock();
     loop {
@@ -267,6 +296,7 @@ pub fn serve() -> io::Result<()> {
         if input.read(&mut header[..1])? == 0 {
             return Ok(());
         }
+        guard.send(true).map_err(|_| invalid())?;
         input.read_exact(&mut header[1..])?;
         let n = u32::from_be_bytes(header) as usize;
         if n > MAX_FRAME {
@@ -288,5 +318,6 @@ pub fn serve() -> io::Result<()> {
         output.write_all(&(frame.len() as u32).to_be_bytes())?;
         output.write_all(&frame)?;
         output.flush()?;
+        guard.send(false).map_err(|_| invalid())?;
     }
 }

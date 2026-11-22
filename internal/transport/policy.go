@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"encoding/json"
 	"github.com/lucasmkrx/bugsnitch/internal/audit"
-	"net/http"
 )
 
 type policy struct {
@@ -23,13 +22,14 @@ var presets = map[string]policy{
 	"Autonomous within limits": {Preset: "Autonomous within limits", RequirePlan: true, AllowPublication: true, AllowPromotion: true, AllowDraftPR: true, AutoTriage: true},
 }
 
-func (s *Server) policy(w http.ResponseWriter, r *http.Request, ws string) error {
+func (s *Server) policy(call *domainCall) error {
+	ws := call.Workspace
 	var b struct {
 		Version   int64
 		Preset    string
 		Overrides *policy
 	}
-	if err := decode(w, r, &b); err != nil {
+	if err := call.decode(&b); err != nil {
 		return err
 	}
 	next, ok := presets[b.Preset]
@@ -43,8 +43,8 @@ func (s *Server) policy(w http.ResponseWriter, r *http.Request, ws string) error
 	if next.AutoTriage && !next.AllowPromotion {
 		return bad("Automatic triage needs permission to promote incidents")
 	}
-	p := r.PathValue("id")
-	ctx := r.Context()
+	p := call.ID
+	ctx := call.ctx
 	err := transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		var version, policyV int64
 		if err := tx.QueryRowContext(ctx, "SELECT version,policy_version FROM projects WHERE workspace_id=$1 AND id=$2 FOR UPDATE", ws, p).Scan(&version, &policyV); err != nil {
@@ -66,17 +66,18 @@ func (s *Server) policy(w http.ResponseWriter, r *http.Request, ws string) error
 	if err != nil {
 		return err
 	}
-	return send(w, 200, next)
+	return call.reply(200, next)
 }
-func (s *Server) limits(w http.ResponseWriter, r *http.Request, ws string) error {
+func (s *Server) limits(call *domainCall) error {
+	ws := call.Workspace
 	var b struct{ Tickets, Turns, Version int }
-	if err := decode(w, r, &b); err != nil {
+	if err := call.decode(&b); err != nil {
 		return err
 	}
 	if b.Tickets < 1 || b.Tickets > 32 || b.Turns < 1 || b.Turns > 32 || b.Version < 1 {
 		return bad("Use limits from 1 to 32 and the current limits version")
 	}
-	ctx := r.Context()
+	ctx := call.ctx
 	err := transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		res, err := tx.ExecContext(ctx, "UPDATE workspaces SET ticket_limit=$1,turn_limit=$2,limits_version=limits_version+1 WHERE id=$3 AND limits_version=$4", b.Tickets, b.Turns, ws, b.Version)
 		if err != nil {
@@ -95,5 +96,5 @@ func (s *Server) limits(w http.ResponseWriter, r *http.Request, ws string) error
 	if err != nil {
 		return err
 	}
-	return send(w, 200, object{"tickets": b.Tickets, "turns": b.Turns, "version": b.Version + 1})
+	return call.reply(200, object{"tickets": b.Tickets, "turns": b.Turns, "version": b.Version + 1})
 }

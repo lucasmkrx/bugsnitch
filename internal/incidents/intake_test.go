@@ -25,8 +25,8 @@ func errorPayload(id, release, environment string, at time.Time) []byte {
 	}}})
 	return body
 }
-func post(handler http.Handler, body []byte, headers map[string]string) *httptest.ResponseRecorder {
-	r := httptest.NewRequest("POST", "/", bytes.NewReader(body))
+func post(handler http.Handler, path string, body []byte, headers map[string]string) *httptest.ResponseRecorder {
+	r := httptest.NewRequest("POST", path, bytes.NewReader(body))
 	for k, v := range headers {
 		r.Header.Set(k, v)
 	}
@@ -40,34 +40,10 @@ func sign(key string, body []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 func TestOnlyApprovedErrorFieldsSurvive(t *testing.T) {
-	payload := errorPayload(eventOne, "v2", "production", time.Now())
-	o, err := normalizeError(payload)
-	if err != nil {
-		t.Fatal(err)
-	}
-	bytes, _ := json.Marshal(o)
-	if strings.Contains(string(bytes), markerSecret) || len(o.Frames) != 1 || o.Frames[0].File != "main.js" || o.Observed != "TypeError reported by Sentry" {
-		t.Fatalf("unexpected projected fields: %s", bytes)
-	}
 	msg := "Cart total differed\nAuthorization: Bearer " + markerSecret + "\nEmail mail@example.invalid\nhttps://x.test/path?debug=" + markerSecret
 	x := Redact(msg)
 	if !strings.Contains(x, "Cart total") || strings.Contains(x, markerSecret) || strings.Contains(x, "@") {
 		t.Fatalf("redaction failed")
-	}
-}
-func TestGitHubPublishedSignatureVector(t *testing.T) {
-	req := httptest.NewRequest("POST", "/", strings.NewReader("Hello, World!"))
-	req.Header.Set("X-Hub-Signature-256", "sha256=757107ea0eb2509fc211221cce984b8a37570b6d7586c22c46f4379c8b043e17")
-	if _, ok := signedBody(httptest.NewRecorder(), req, "It's a Secret to Everybody", "X-Hub-Signature-256", "sha256="); !ok {
-		t.Fatal("official signature vector rejected")
-	}
-}
-func TestSignatureIsOverOriginalBytes(t *testing.T) {
-	good := errorPayload(eventOne, "v2", "production", time.Now())
-	changed := append([]byte(" "), good...)
-	w := post(Store{}.SentryWebhook("test-secret"), changed, map[string]string{"Sentry-Hook-Signature": sign("test-secret", good), "Sentry-Hook-Resource": "error"})
-	if w.Code != 401 {
-		t.Fatalf("HTTP %d", w.Code)
 	}
 }
 func TestVerificationGates(t *testing.T) {
@@ -103,20 +79,5 @@ func TestVerificationGates(t *testing.T) {
 	deploy.Candidate = "old"
 	if got := evaluate(v, now, false, false).Status; got != "Awaiting deployment" {
 		t.Fatal(got)
-	}
-}
-
-func TestSentryLabelProjectionFromTags(t *testing.T) {
-	before := errorPayload(eventOne, "", "", time.Now())
-	var p map[string]any
-	if err := json.Unmarshal(before, &p); err != nil {
-		t.Fatal(err)
-	}
-	e := p["data"].(map[string]any)["error"].(map[string]any)
-	e["tags"] = []any{[]any{"environment", "staging"}, []any{"release", "v1"}, []any{"customer", markerSecret}}
-	payload, _ := json.Marshal(p)
-	got, err := normalizeError(payload)
-	if err != nil || got.Environment != "staging" || got.Release != "v1" {
-		t.Fatal(got, err)
 	}
 }

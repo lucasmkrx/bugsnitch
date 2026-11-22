@@ -8,19 +8,18 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"github.com/lucasmkrx/bugsnitch/internal/testgithub"
 	"io"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 )
 
-type roundTrip func(*http.Request) (*http.Response, error)
-
-func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 func TestPostgresDraftReconcilesLostResponseAndRejectsStalePolicy(t *testing.T) {
 	db, exec := scratchDB(t)
 	ctx := context.Background()
@@ -43,17 +42,10 @@ func TestPostgresDraftReconcilesLostResponseAndRejectsStalePolicy(t *testing.T) 
 	if err = os.WriteFile(file, pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}), 0600); err != nil {
 		t.Fatal(err)
 	}
-	app, err := github.NewApp("fixture", file)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s := Store{DB: db, App: app}
 	request := DraftRequest{Version: 5, PolicyVersion: 1, Target: "main", Summary: "Fix threshold handling", Behavior: "Qualifying orders have free shipping"}
 	var saved string
-	writes := 0
-	previous := http.DefaultTransport
-	t.Cleanup(func() { http.DefaultTransport = previous })
-	http.DefaultTransport = roundTrip(func(r *http.Request) (*http.Response, error) {
+	var writes atomic.Int32
+	origin := testgithub.Serve(t, func(r *http.Request) (*http.Response, error) {
 		var obj any
 		status := 200
 		switch r.URL.Path {
@@ -86,7 +78,7 @@ func TestPostgresDraftReconcilesLostResponseAndRejectsStalePolicy(t *testing.T) 
 				if json.NewDecoder(r.Body).Decode(&payload) != nil || !payload.Draft || payload.Head != "bugsnitch/"+id || payload.Base != "main" || !strings.Contains(payload.Body, "Fix threshold handling") {
 					t.Fatal("bad draft payload")
 				}
-				writes++
+				writes.Add(1)
 				saved = payload.Body
 				return nil, errors.New("fixture lost response")
 			}
@@ -100,6 +92,11 @@ func TestPostgresDraftReconcilesLostResponseAndRejectsStalePolicy(t *testing.T) 
 		raw, _ := json.Marshal(obj)
 		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(string(raw)))}, nil
 	})
+	app, err := github.NewLoopbackFixture("fixture", file, origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := Store{DB: db, App: app}
 	for i := 0; i < 2; i++ {
 		d, err := s.RequestDraft(ctx, "personal", "p", id, request)
 		if err != nil || d.Status != "queued" {
@@ -110,16 +107,16 @@ func TestPostgresDraftReconcilesLostResponseAndRejectsStalePolicy(t *testing.T) 
 		t.Fatal(err)
 	}
 	list, err := s.Drafts(ctx, "personal")
-	if err != nil || len(list) != 1 || list[0].Status != "reconciling" || writes != 1 {
-		t.Fatal(list, writes, err)
+	if err != nil || len(list) != 1 || list[0].Status != "reconciling" || writes.Load() != 1 {
+		t.Fatal(list, writes.Load(), err)
 	}
 	exec("UPDATE draft_pr_intents SET next_run=now()")
 	if err = s.syncDraft(ctx); err != nil {
 		t.Fatal(err)
 	}
 	list, err = s.Drafts(ctx, "personal")
-	if err != nil || list[0].Number == nil || *list[0].Number != 18 || writes != 1 {
-		t.Fatal(list, writes, err)
+	if err != nil || list[0].Number == nil || *list[0].Number != 18 || writes.Load() != 1 {
+		t.Fatal(list, writes.Load(), err)
 	}
 	if _, err = s.RequestDraft(ctx, "personal", "p", second, request); err != nil {
 		t.Fatal(err)
@@ -129,7 +126,7 @@ func TestPostgresDraftReconcilesLostResponseAndRejectsStalePolicy(t *testing.T) 
 		t.Fatal(err)
 	}
 	list, err = s.Drafts(ctx, "personal")
-	if err != nil || len(list) != 2 || list[0].Status != "blocked" || writes != 1 {
-		t.Fatal("stale policy produced a side effect", list, writes, err)
+	if err != nil || len(list) != 2 || list[0].Status != "blocked" || writes.Load() != 1 {
+		t.Fatal("stale policy produced a side effect", list, writes.Load(), err)
 	}
 }

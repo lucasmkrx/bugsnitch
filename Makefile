@@ -1,4 +1,4 @@
-.PHONY: dev build test server runner helpers journal migrator macos macos-amd64 macos-arm64 plugin
+.PHONY: dev build test server runner helpers journal migrator provider macos macos-amd64 macos-arm64 plugin
 
 CARGO_TARGET_DIR ?= target
 GO_TEST_FLAGS ?=
@@ -14,10 +14,11 @@ build: runner server
 runner: journal
 	go build -o bin/bugsnitch ./cmd/bugsnitch
 
-server: migrator
-	go build -o bin/bugsnitch-server ./cmd/bugsnitch-server
+server: migrator provider
+	go build -o bin/bugsnitch-domain ./cmd/bugsnitch-domain
+	install -m 0755 "$(CARGO_TARGET_DIR)/release/bugsnitch-server" bin/bugsnitch-server
 
-helpers: journal migrator
+helpers: journal migrator provider
 
 journal:
 	cargo build --locked --release --target-dir "$(CARGO_TARGET_DIR)" --manifest-path rust/runner-journal/Cargo.toml
@@ -29,9 +30,14 @@ migrator:
 	mkdir -p bin
 	install -m 0755 "$(CARGO_TARGET_DIR)/release/bugsnitch-server-migrate" bin/bugsnitch-server-migrate
 
-test: helpers
+provider:
+	cargo build --locked --release --target-dir "$(CARGO_TARGET_DIR)" --manifest-path rust/provider/Cargo.toml
+	mkdir -p bin
+	install -m 0755 "$(CARGO_TARGET_DIR)/release/bugsnitch-provider" bin/bugsnitch-provider
+
+test: journal server
 	cargo test --locked --workspace --target-dir "$(CARGO_TARGET_DIR)"
-	BUGSNITCH_JOURNAL_HELPER="$(CURDIR)/bin/bugsnitch-runner-journal" BUGSNITCH_MIGRATOR="$(CURDIR)/bin/bugsnitch-server-migrate" go test $(GO_TEST_FLAGS) ./...
+	BUGSNITCH_TEST_SERVER="$(CURDIR)/bin/bugsnitch-server" BUGSNITCH_JOURNAL_HELPER="$(CURDIR)/bin/bugsnitch-runner-journal" BUGSNITCH_MIGRATOR="$(CURDIR)/bin/bugsnitch-server-migrate" BUGSNITCH_PROVIDER="$(CURDIR)/bin/bugsnitch-provider" go test $(GO_TEST_FLAGS) ./...
 
 macos: macos-arm64 macos-amd64
 

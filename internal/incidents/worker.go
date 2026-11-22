@@ -108,6 +108,7 @@ func (s Store) syncClaimed(ctx context.Context, app *github.App, claim storage.J
 	if err != nil {
 		return reschedule(ctx, tx, j, j.status, "GitHub authorization or repository access unavailable", err)
 	}
+	defer repo.Close()
 	switch j.status {
 	case "queued":
 		// Commit uncertainty BEFORE HTTP. Every observer after this commit may only search.

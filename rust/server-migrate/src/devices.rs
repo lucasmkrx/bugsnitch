@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Device operations execute inside the coordinator's single PostgreSQL transaction.
 //! Only hashes of pairing codes and bearer credentials cross the local protocol.
+mod artifacts;
 mod controls;
 mod sync;
 
@@ -44,6 +45,8 @@ struct Rotate {
 
 pub fn handle(db: &Db<'_>, op: &str, input: Value) -> Result<Value> {
     match op {
+        "device.share_diff" => artifacts::share(db, input),
+        "device.read_diff" => artifacts::read(db, input),
         "device.pairing" => pairing(db, serde_json::from_value(input)?),
         "device.redeem" => redeem(db, serde_json::from_value(input)?),
         "device.revoke" => revoke(db, serde_json::from_value(input)?),
@@ -223,9 +226,19 @@ fn rotate(db: &Db<'_>, b: Rotate) -> Result<Value> {
     Ok(json!({"deviceId":id}))
 }
 
-fn valid_key(id: &str) -> bool {
+pub(crate) fn valid_key(id: &str) -> bool {
     (8..=100).contains(&id.len())
         && id
             .bytes()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_'))
+}
+
+pub(crate) fn lower_hex(value: &str) -> bool {
+    value
+        .bytes()
+        .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+pub(crate) fn valid_sha(value: &str) -> bool {
+    matches!(value.len(), 40 | 64) && lower_hex(value)
 }

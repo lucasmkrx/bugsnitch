@@ -31,8 +31,8 @@ def port():
 
 
 @contextlib.contextmanager
-def server(env):
-    proc = subprocess.Popen([BIN / "bugsnitch-server"], env=env, stdout=subprocess.DEVNULL,
+def server(env, executable=None):
+    proc = subprocess.Popen([executable or BIN / "bugsnitch-server"], env=env, stdout=subprocess.DEVNULL,
                             stderr=subprocess.PIPE, cwd=ROOT)
     try:
         until = time.monotonic() + 15
@@ -54,7 +54,7 @@ def server(env):
         proc.stderr.close()
 
 
-def check(tmp, mcp_bridge, runner):
+def check(tmp, mcp_bridge, runner, initial_server=None):
     base = os.environ.copy()
     base.update(BUGSNITCH_OWNER_TOKEN=secrets.token_hex(32), BUGSNITCH_MCP_TOKEN=secrets.token_hex(32),
                 DATABASE_URL=f"postgresql:///{DB}?sslmode=disable")
@@ -70,26 +70,7 @@ def check(tmp, mcp_bridge, runner):
         with browser.open(req, timeout=10) as response:
             return json.load(response)
 
-    checkout = tmp / "checkout"
-    run("git", "init", "-q", str(checkout))
-    run("git", "-C", str(checkout), "remote", "add", "origin", "https://github.com/example/fixture.git")
-    homes = []
-    with server(base):
-        with browser.open(origin) as response:
-            assert 'id="root"' in response.read().decode()
-        api("login", {"token": base["BUGSNITCH_OWNER_TOKEN"]})
-        project = api("projects", {"name": "Smoke project", "repository": "example/fixture"})["id"]
-        for name in ("one", "two"):
-            grant = api("pairings", {"name": name, "projectIds": [project]})
-            local = {**base, "BUGSNITCH_HOME": str(tmp / name)}
-            run(runner, "pair", "--server", origin, "--code", grant["code"], env=local)
-            run(runner, "rotate", env=local)
-            run(runner, "register", "--project", project, "--path", checkout, env=local)
-            run(runner, "sync", env=local)
-            homes.append(local)
-        state = api("state")
-        assert len({d["id"] for d in state["devices"]}) == 2
-        print("Two independent runner processes paired, registered the fixture repository and synchronized.")
+    def exercise_interfaces(project):
         call = lambda i, method, params: {"jsonrpc": "2.0", "id": i, "method": method, "params": params}
         messages = [
             call(1, "initialize", {"protocolVersion": "2025-11-25", "capabilities": {},
@@ -118,11 +99,43 @@ def check(tmp, mcp_bridge, runner):
         if os.getenv("BUGSNITCH_BROWSER_SMOKE") == "1":
             run("node", ROOT / "web/tests/service-smoke.mjs", env=base)
             print("Headless Chrome signed in to the real service and inspected the persisted incident and devices.")
+
+    checkout = tmp / "checkout"
+    run("git", "init", "-q", str(checkout))
+    run("git", "-C", str(checkout), "remote", "add", "origin", "https://github.com/example/fixture.git")
+    homes = []
+    with server(base, initial_server):
+        with browser.open(origin) as response:
+            assert 'id="root"' in response.read().decode()
+        api("login", {"token": base["BUGSNITCH_OWNER_TOKEN"]})
+        project = api("projects", {"name": "Smoke project", "repository": "example/fixture"})["id"]
+        for name in ("one", "two"):
+            grant = api("pairings", {"name": name, "projectIds": [project]})
+            local = {**base, "BUGSNITCH_HOME": str(tmp / name)}
+            run(runner, "pair", "--server", origin, "--code", grant["code"], env=local)
+            run(runner, "rotate", env=local)
+            run(runner, "register", "--project", project, "--path", checkout, env=local)
+            run(runner, "sync", env=local)
+            homes.append(local)
+        state = api("state")
+        device_ids = {d["id"] for d in state["devices"]}
+        assert len(device_ids) == 2
+        print("Two independent runner processes paired, registered the fixture repository and synchronized.")
+        exercise_interfaces(project)
+        before = api("events?limit=150")
+        assert before["events"] and not before["hasMore"]
     with server(base):
-        assert len(api("state")["devices"]) == 2
+        # Use the original cookie, stored credentials, and event cursor on the
+        # replacement listener. A release upgrade can occur between these calls.
+        assert {d["id"] for d in api("state")["devices"]} == device_ids
+        history = api("events?limit=150")
+        assert history["events"][:len(before["events"])] == before["events"]
         for local in homes:
             run(runner, "sync", env=local)
-        assert len(api("state")["devices"]) == 2
+        assert {d["id"] for d in api("state")["devices"]} == device_ids
+        if initial_server is not None:
+            exercise_interfaces(project)
+            print("The upgraded listener accepted the original session, both registered runners and the chosen MCP bridge.")
         history = api("events?limit=150")
         assert history["events"] and not history["hasMore"]
         dump = tmp / "backup.dump"
@@ -147,6 +160,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mcp-bridge", type=Path, default=BIN / "bugsnitch-mcp", help="Bugsnitch STDIO bridge executable, including an extracted plugin binary")
     parser.add_argument("--runner", type=Path, default=BIN / "bugsnitch", help="Runner executable to exercise, including a previous release")
+    parser.add_argument("--initial-server", type=Path, help="Previous server executable with its matching siblings; restart and restore use the current package")
     args = parser.parse_args()
     if not os.getenv("PGHOST"):
         raise SystemExit("Set PGHOST, PGPORT and PGUSER for a disposable PostgreSQL instance with CREATEDB.")
@@ -155,4 +169,5 @@ if __name__ == "__main__":
             run("createdb", database)
             cleanup.callback(run, "dropdb", database)
         with tempfile.TemporaryDirectory() as tmp:
-            check(Path(tmp), args.mcp_bridge.resolve(), args.runner.resolve())
+            check(Path(tmp), args.mcp_bridge.resolve(), args.runner.resolve(),
+                  args.initial_server.resolve() if args.initial_server else None)

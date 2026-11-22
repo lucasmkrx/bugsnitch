@@ -23,12 +23,18 @@ def files(crate_name, target=None):
         pkg = packages[key]
         if pkg["source"]:
             root = Path(pkg["manifest_path"]).parent
-            notices = sorted(p for p in root.iterdir() if p.is_file() and
-                             p.name.upper().startswith(("LICENSE", "NOTICE", "COPYING", "UNICODE-LICENSE")))
+            # Some crates include separate notices for bundled native code.
+            notices = {p for p in root.rglob("*") if p.is_file() and
+                       p.name.upper().startswith(("LICENSE", "NOTICE", "COPYING", "UNICODE-LICENSE"))}
+            if pkg.get("license_file"):
+                declared = root / pkg["license_file"]
+                if not declared.is_file() or not declared.resolve().is_relative_to(root.resolve()):
+                    raise ValueError(f"Invalid declared license for {pkg['name']}")
+                notices.add(declared)
             if not notices:
                 raise ValueError(f"Missing distribution license for {pkg['name']}")
-            for notice in notices:
-                yield notice, f"{pkg['name']}-{pkg['version']}/{notice.name}"
+            for notice in sorted(notices):
+                yield notice, f"{pkg['name']}-{pkg['version']}/{notice.relative_to(root)}"
         for dep in nodes[key]["deps"]:
             if any(kind["kind"] is None for kind in dep["dep_kinds"]):
                 pending.append(dep["pkg"])
@@ -38,7 +44,9 @@ def files(crate_name, target=None):
 
 if __name__ == "__main__":
     crate, output = sys.argv[1:]
-    for path, name in files(crate):
+    host = subprocess.check_output(["rustc", "-vV"], text=True).splitlines()
+    target = next(line.removeprefix("host: ") for line in host if line.startswith("host: "))
+    for path, name in files(crate, target):
         destination = Path(output) / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(path, destination)

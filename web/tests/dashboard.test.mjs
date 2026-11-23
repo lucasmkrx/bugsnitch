@@ -531,12 +531,12 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
             machine: "Test Mac",
             repository: project.repository,
             issueNumber: 1,
-            phase: "review",
+            phase: "wrap_up",
             state: "completed",
             updatedAt: state.updatedAt,
             baseSha: base,
             candidateSha: sha,
-            connection: "connected",
+            connection: "disconnected",
             version: 3,
             sharedDiff: {
               digest: "c".repeat(64),
@@ -546,8 +546,30 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
             },
           },
         ];
-        await page.goto(url + "/#/work?project=p1&id=a1");
+        await page.goto(url + "/#/work?project=p1");
         await page.reload();
+        await page
+          .getByRole("textbox", { name: "Search issues and attempts" })
+          .fill("Local candidate ready");
+        const row = page.getByRole("link", { name: /Local candidate ready/ });
+        assert.ok((await row.innerText()).includes(project.repository + " #1"));
+        await row.click();
+        const issueLink = page
+          .getByRole("heading", { name: project.repository + " #1" })
+          .getByRole("link");
+        assert.equal(
+          await issueLink.getAttribute("href"),
+          `https://github.com/${project.repository}/issues/1`,
+        );
+        await page
+          .locator(".panel-head")
+          .filter({ has: issueLink })
+          .getByText("Local candidate ready", { exact: true })
+          .waitFor();
+        assert.equal(
+          await page.getByText("Completed", { exact: true }).count(),
+          0,
+        );
         await page.getByRole("button", { name: "Load shared diff" }).waitFor();
         assert.equal(artifactReads, 0);
         await page.getByRole("button", { name: "Load shared diff" }).click();

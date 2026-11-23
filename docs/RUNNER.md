@@ -93,6 +93,8 @@ Use `local-show` and `git worktree list --porcelain` on the original computer af
 
 ## Verification
 
+For an implementation trial, report where the issue, implementation and review came from alongside the candidate's validator result. [Generate a trial report and compare the stock and timer runs](TRIALS.md)
+
 After the [focused test setup](../README.md#verification-and-operations), `go test -v ./internal/runner ./internal/agent` runs a real temporary Git repository and SQLite journal with labeled test doubles for GitHub issue reads and model outputs. The regression check fails on the broken baseline, passes on the committed candidate, and independently supplied review output is recorded against that candidate. Tests exercise admission subject binding, owner feedback, duplicate starts, recreation after a worktree side effect, dirty-worktree preservation, pending stop acknowledgment, command replay, credential exclusion, provider failure classes, commit-before-ack recovery, retention of ignored files during cleanup, bounded explicit retries and migration from the single-attempt journal. This fixture is evidence of the runner workflow. [Live integration status](CODEX.md)
 
 ## Draft a plan from a local brief

@@ -285,8 +285,8 @@ export function DraftPR({
           </form>
         ) : (
           <p>
-            A completed attempt, matching independent review and permission to
-            open a draft PR are required.
+            A locally validated candidate, matching independent review and
+            permission to open a draft PR are required.
           </p>
         )}
         {previous.map((d) => (

@@ -8,23 +8,24 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func checkGroupIsGone(pid int, err error) bool {
+func stopCheckGroup(pid int) error {
+	err := syscall.Kill(-pid, syscall.SIGKILL)
 	// Darwin may report EPERM when the entire group consists of zombies.
 	// A live member still needs to be treated as a failed termination.
 	if !errors.Is(err, syscall.EPERM) {
-		return false
+		return err
 	}
-	group, err := unix.SysctlKinfoProcSlice("kern.proc.pgrp", pid)
-	if err != nil {
-		return false
+	group, listErr := unix.SysctlKinfoProcSlice("kern.proc.pgrp", pid)
+	if listErr != nil {
+		return listErr
 	}
 	const zombie = 5 // Darwin <sys/proc.h> SZOMB
 	for _, process := range group {
 		if process.Proc.P_stat != zombie {
-			return false
+			return err
 		}
 	}
-	return true
+	return nil
 }
 
 func observeCheckExit(pid int) error {

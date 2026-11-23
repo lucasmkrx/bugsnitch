@@ -237,7 +237,7 @@ fn main() -> ExitCode {
     match args.as_slice() {
         [arg] if arg == "--version" => {
             println!(
-                "bugsnitch-runner-journal {} protocol={PROTOCOL} sqlite={} execution={} controls=1 attempts=1",
+                "bugsnitch-runner-journal {} protocol={PROTOCOL} sqlite={} capacity=1 execution={} controls=1 attempts=1",
                 env!("CARGO_PKG_VERSION"),
                 rusqlite::version(),
                 u8::from(cfg!(any(target_os = "macos", target_os = "linux"))),

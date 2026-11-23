@@ -154,7 +154,7 @@ type checkpoint struct {
 	ID      string   `json:"id"`
 	Version int      `json:"version"`
 	Data    *Attempt `json:"data"`
-	Claim   bool     `json:"claim"`
+	Claim   bool     `json:"claim_with_limit"`
 }
 
 func journalAttempt(action string, args any) ([]byte, error) {
@@ -208,7 +208,7 @@ func (a *Attempt) persist(claim bool) error {
 	}
 	if string(b) != "1" {
 		if claim {
-			return errors.New("local workspace ticket capacity reserved or attempt revision changed")
+			return errors.New("local ticket capacity reserved or attempt revision changed")
 		}
 		return errors.New("attempt changed in another process")
 	}

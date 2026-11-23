@@ -37,7 +37,7 @@ func failureCode(err error) string {
 		return "provider_rate_limited"
 	case errors.Is(err, agent.Provider):
 		return "provider_unavailable"
-	case errors.Is(err, errModelCapacity):
+	case errors.Is(err, errModelCapacity), errors.Is(err, ErrHostedTurnCapacity):
 		return "local_capacity"
 	default:
 		return "task_failed"

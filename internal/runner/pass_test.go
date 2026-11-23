@@ -62,6 +62,37 @@ func TestLocalPassPersistsQuestionAndStopsForReview(t *testing.T) {
 	}
 }
 
+func TestQueuedWorkerReleasesPermitAndStopsOnLostAuthority(t *testing.T) {
+	t.Setenv("BUGSNITCH_HOME", t.TempDir())
+	if _, err := SetLocalLimits(0, 1); err != nil {
+		t.Fatal(err)
+	}
+	previousStart, previousCheck := BeforeTurn, CheckWorker
+	t.Cleanup(func() { BeforeTurn, CheckWorker = previousStart, previousCheck })
+	starts := 0
+	BeforeTurn = func(Summary) error {
+		starts++
+		return ErrHostedTurnCapacity
+	}
+	CheckWorker = func(_ context.Context, _ Summary, inTurn bool) (time.Duration, error) {
+		if inTurn {
+			t.Fatal("queued worker reported that its turn had started")
+		}
+		release, err := acquireModel("another worker")
+		if err != nil {
+			t.Fatalf("queued worker held the only local permit: %v", err)
+		}
+		if err := release(); err != nil {
+			t.Fatal(err)
+		}
+		return 0, ErrAuthorityStale
+	}
+	a := &Attempt{LocalRunScope: &protocol.RunScope{Device: "original"}}
+	if _, err := reserveWorkerTurn(t.Context(), a); !errors.Is(err, ErrAuthorityStale) || starts != 1 {
+		t.Fatalf("turn reservations after authority changed: starts=%d err=%v", starts, err)
+	}
+}
+
 func TestSensitiveEditsRequireOwnerFeedback(t *testing.T) {
 	for _, path := range []string{"service/auth/guard.go", "lib/auth.go", "db/migrations/005.sql", ".github/workflows/release.yml", "deploy/main.tf", ".env.local"} {
 		if !protectedChange(path) {

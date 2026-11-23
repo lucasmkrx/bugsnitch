@@ -48,7 +48,10 @@ func codexProtocolFixture(args []string) int {
 		var req struct {
 			ID     *int
 			Method string
-			Params struct{ Cwd, DeveloperInstructions string }
+			Params struct {
+				Cwd, DeveloperInstructions string
+				Input                      []struct{ Text string }
+			}
 		}
 		if json.Unmarshal(in.Bytes(), &req) != nil {
 			return 1
@@ -76,13 +79,30 @@ func codexProtocolFixture(args []string) int {
 				answer = "Fixture manager reply."
 			}
 			if strings.Contains(req.Params.DeveloperInstructions, "complete UTF-8 replacement") {
-				answer = `{"summary":"Updated example","edits":[{"path":"label.txt","content":"fixed\n"}]}`
+				answer = ""
 			}
 			if strings.Contains(req.Params.DeveloperInstructions, "Independently inspect") {
 				answer = `{"summary":"Fixture review checked the candidate","findings":[]}`
 			}
 			out = object{"thread": object{"id": tid}, "cwd": req.Params.Cwd, "sandbox": object{"type": "readOnly"}, "model": "fixture", "modelProvider": "openai", "approvalPolicy": "never"}
 		case "turn/start":
+			if answer == "" {
+				var task struct {
+					Issue runner.Issue
+					Files map[string]string
+				}
+				if len(req.Params.Input) != 1 || json.Unmarshal([]byte(req.Params.Input[0].Text), &task) != nil {
+					return 1
+				}
+				path := "label.txt"
+				if task.Issue.Repository == "fixture/batch" {
+					path = fmt.Sprintf("label-%d.txt", task.Issue.Number)
+				}
+				if _, approved := task.Files[path]; !approved {
+					return 1
+				}
+				answer = fmt.Sprintf(`{"summary":"Updated example","edits":[{"path":%q,"content":"fixed\n"}]}`, path)
+			}
 			out = object{"turn": object{"id": turn}}
 		default:
 			return 1

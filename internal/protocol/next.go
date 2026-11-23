@@ -2,8 +2,9 @@
 package protocol
 
 type NextRequest struct {
-	Protocol int    `json:"protocol"`
-	Project  string `json:"projectId"`
+	Protocol    int    `json:"protocol"`
+	Project     string `json:"projectId"`
+	WaitForTurn bool   `json:"waitForTurn,omitempty"`
 }
 
 // IssueSelection is the versioned document accepted by the local-start CLI.

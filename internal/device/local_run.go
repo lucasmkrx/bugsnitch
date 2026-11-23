@@ -7,23 +7,69 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
+	"strconv"
+
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 	"github.com/lucasmkrx/bugsnitch/internal/runner"
-	"io"
 )
+
+func capacityFlag(dst *int) func(string) error {
+	return func(raw string) error {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > runner.MaxLocalCapacity {
+			return fmt.Errorf("use an integer from 1 to %d", runner.MaxLocalCapacity)
+		}
+		*dst = n
+		return nil
+	}
+}
+
+// LocalLimits reads or changes the runner's persistent capacity without enrollment.
+func LocalLimits(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("local-limits", flag.ContinueOnError)
+	var tickets, turns int
+	fs.Func("tickets", "maximum concurrent implementation tickets on this runner", capacityFlag(&tickets))
+	fs.Func("turns", "maximum simultaneous model turns on this runner", capacityFlag(&turns))
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("use local-limits [--tickets 1..32] [--turns 1..32]")
+	}
+	limits, err := runner.SetLocalLimits(tickets, turns)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(out).Encode(limits)
+}
 
 // LocalRun is reached only by a foreground owner command. All model work remains
 // on this device and ordinary worktree/admission/turn checks still run.
 func LocalRun(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("local-run", flag.ContinueOnError)
+	var limit, parallel int
 	pr := fs.String("project", "", "assigned project ID")
-	limit := fs.Int("limit", 2, "maximum new tickets in this invocation (1–16)")
-	parallel := fs.Int("parallel", 2, "maximum concurrent local attempts (1–2)")
+	fs.Func("limit", "maximum new tickets in this invocation (defaults to this runner's ticket limit)", capacityFlag(&limit))
+	fs.Func("parallel", "maximum concurrent attempts (defaults to this runner's ticket limit)", capacityFlag(&parallel))
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *pr == "" || fs.NArg() != 0 || *limit < 1 || *limit > 16 || *parallel < 1 || *parallel > 2 {
-		return errors.New("use local-run --project PROJECT_ID [--limit 1..16] [--parallel 1|2]")
+	if *pr == "" || fs.NArg() != 0 {
+		return errors.New("use local-run --project PROJECT_ID [--limit 1..32] [--parallel 1..32]")
+	}
+	limits, err := runner.SetLocalLimits(0, 0)
+	if err != nil {
+		return err
+	}
+	if limit == 0 {
+		limit = limits.Tickets
+	}
+	if parallel == 0 {
+		parallel = limits.Tickets
+	}
+	if parallel > limits.Tickets {
+		return fmt.Errorf("--parallel exceeds this runner's ticket limit of %d; use local-limits --tickets to change it", limits.Tickets)
 	}
 	p, err := selectProject(*pr)
 	if err != nil {
@@ -43,7 +89,7 @@ func LocalRun(ctx context.Context, args []string, out io.Writer) error {
 		issue   int
 		err     error
 	}
-	outcomes := make(chan result, *parallel)
+	outcomes := make(chan result, parallel)
 	var failures []error
 	var active, launched int
 	run, stop := context.WithCancel(ctx)
@@ -69,13 +115,17 @@ func LocalRun(ctx context.Context, args []string, out io.Writer) error {
 	}
 	var original *protocol.RunScope
 	seen := make(map[int]bool)
-	for launched < *limit && run.Err() == nil {
-		if active == *parallel {
+	for launched < limit && run.Err() == nil {
+		if active == parallel {
 			finish()
 			continue
 		}
-		rec, err := p.recommend(run)
+		rec, err := p.recommend(run, parallel > 1)
 		if err != nil {
+			if active > 0 && errors.Is(err, runner.ErrTicketCapacity) {
+				finish()
+				continue
+			}
 			failures = append(failures, err)
 			break
 		}

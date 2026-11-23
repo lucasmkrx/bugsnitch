@@ -110,7 +110,7 @@ func TestWorkerLeaseLossQuiescesValidatorAndRetainsWork(t *testing.T) {
 }
 
 func TestWorkerReasonCodesAreBounded(t *testing.T) {
-	for err, want := range map[error]string{agent.SignIn: "sign_in_required", agent.Allowance: "allowance_exhausted", agent.UnavailableModel: "model_unavailable", agent.RateLimit: "provider_rate_limited", agent.Provider: "provider_unavailable", ErrDeviceUnauthorized: "device_unauthorized", ErrAuthorityUnreachable: "authority_unreachable", ErrAuthorityStale: "authority_stale", ErrControlPending: "control_pending", errModelCapacity: "local_capacity", errors.New("SYNTHETIC_SECRET"): "task_failed"} {
+	for err, want := range map[error]string{agent.SignIn: "sign_in_required", agent.Allowance: "allowance_exhausted", agent.UnavailableModel: "model_unavailable", agent.RateLimit: "provider_rate_limited", agent.Provider: "provider_unavailable", ErrDeviceUnauthorized: "device_unauthorized", ErrAuthorityUnreachable: "authority_unreachable", ErrAuthorityStale: "authority_stale", ErrControlPending: "control_pending", errModelCapacity: "local_capacity", ErrHostedTurnCapacity: "local_capacity", errors.New("SYNTHETIC_SECRET"): "task_failed"} {
 		if got := failureCode(errors.Join(err, context.Canceled)); got != want || !protocol.ValidReason(got) {
 			t.Fatal(got, want)
 		}

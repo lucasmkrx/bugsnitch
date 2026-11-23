@@ -98,3 +98,41 @@ func (s *Server) limits(call *domainCall) error {
 	}
 	return call.reply(200, object{"tickets": b.Tickets, "turns": b.Turns, "version": b.Version + 1})
 }
+
+func (s *Server) deviceLimits(call *domainCall) error {
+	var b struct{ Turns, Version int }
+	if err := call.decode(&b); err != nil {
+		return err
+	}
+	if b.Turns < 1 || b.Turns > 32 || b.Version < 1 {
+		return bad("Use a model turn limit from 1 to 32 and the current workspace limits version")
+	}
+	ctx := call.ctx
+	err := transaction(ctx, s.DB, func(tx *sql.Tx) error {
+		// Model admission locks the device before the workspace. Keep that
+		// order when changing the limit during an active run.
+		var device string
+		err := tx.QueryRowContext(ctx, `UPDATE devices SET turn_limit=$1
+			WHERE workspace_id=$2 AND id=$3 AND NOT revoked RETURNING id`,
+			b.Turns, call.Workspace, call.ID).Scan(&device)
+		if err != nil {
+			return err
+		}
+		var version int
+		err = tx.QueryRowContext(ctx, `UPDATE workspaces SET limits_version=limits_version+1
+			WHERE id=$1 AND limits_version=$2 RETURNING limits_version`,
+			call.Workspace, b.Version).Scan(&version)
+		if err == sql.ErrNoRows {
+			return conflict("Limits changed; refresh current settings")
+		}
+		if err != nil {
+			return err
+		}
+		ctx = audit.WithDetails(ctx, audit.Details{Reason: "Device model turn limit updated", SubjectVersion: int64(version)})
+		return event(ctx, tx, call.Workspace, "", "device.limits_changed", device)
+	})
+	if err != nil {
+		return err
+	}
+	return call.reply(200, object{"turns": b.Turns, "version": b.Version + 1})
+}

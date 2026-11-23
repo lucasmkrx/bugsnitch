@@ -58,6 +58,8 @@ fn compact_projection(document: String) -> Result<Box<serde_json::value::RawValu
 pub struct Error {
     pub(crate) status: u16,
     pub(crate) message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<&'static str>,
 }
 
 impl Error {
@@ -65,6 +67,7 @@ impl Error {
         Self {
             status,
             message: message.into(),
+            code: None,
         }
     }
     pub fn bad(message: &str) -> Self {
@@ -81,6 +84,12 @@ impl Error {
     }
     pub fn conflict(message: &str) -> Self {
         Self::new(409, message)
+    }
+    pub fn model_turn_capacity() -> Self {
+        Self {
+            code: Some("model_turn_capacity"),
+            ..Self::conflict("Model-turn capacity is reserved")
+        }
     }
     pub fn internal() -> Self {
         Self::new(500, "Coordination operation failed")

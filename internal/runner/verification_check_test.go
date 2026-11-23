@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -123,4 +124,56 @@ func TestVerificationCheckRejectsInvalidReceipts(t *testing.T) {
 			t.Fatalf("timeout error = %v", err)
 		}
 	})
+}
+
+func TestVerificationCheckStopsShellDescendants(t *testing.T) {
+	t.Run("no descendants", func(t *testing.T) {
+		if err := runCheckGroup(t.Context(), exec.Command("/usr/bin/true")); err != nil {
+			t.Fatal(err)
+		}
+	})
+	for _, mode := range []string{"cancel", "launcher-exits"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			dir := t.TempDir()
+			ready, leaked := filepath.Join(dir, "ready"), filepath.Join(dir, "leaked")
+			// The child inherits the process group and stdout like a typical
+			// shell-launched test tool. Record any work it does after return.
+			const script = `
+(echo ready > "$1"; sleep 1; echo leaked > "$2") &
+while [ ! -f "$1" ]; do sleep 0.01; done
+if [ "$3" = cancel ]; then wait; fi
+printf '%s' "$4"
+`
+			done := make(chan error, 1)
+			go func() {
+				_, err := runVerificationCheck(ctx, []string{"/bin/sh", "-c", script, "fixture", ready, leaked, mode, checkFixtureOutput}, Issue{}, "staging", "build-123")
+				done <- err
+			}()
+			for {
+				if _, err := os.Stat(ready); err == nil {
+					break
+				}
+				select {
+				case err := <-done:
+					t.Fatalf("launcher exited before its child started: %v", err)
+				case <-ctx.Done():
+					t.Fatal("shell child never started")
+				case <-time.After(10 * time.Millisecond):
+				}
+			}
+			if mode == "cancel" {
+				cancel()
+			}
+			err := <-done
+			if mode == "cancel" && !errors.Is(err, context.Canceled) || mode == "launcher-exits" && err != nil {
+				t.Fatalf("unexpected check result: %v", err)
+			}
+			time.Sleep(1100 * time.Millisecond)
+			if _, err := os.Stat(leaked); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("shell descendant outlived its check: %v", err)
+			}
+		})
+	}
 }

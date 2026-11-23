@@ -41,6 +41,8 @@ const usage = `Usage: bugsnitch COMMAND [OPTIONS]
   turn-reconcile         Reconcile a local general model permit
   project-add            Register the checkout, approved files and validator
   local-start            Start work on one owner-selected GitHub issue
+  local-verify           Verify issue criteria on an identified build or deployment
+  local-verification     Inspect a saved verification receipt
   local-continue         Approve a plan or request a bounded correction
   local-show             Inspect the complete local stage evidence
   local-integrate-check  Validate a reviewed candidate with a selected target
@@ -131,6 +133,21 @@ func run(ctx context.Context, args []string) error {
 			return fmt.Errorf("the runner requires its matching native helper, Git and Codex %s", agent.Version)
 		}
 		return nil
+	case "local-verify":
+		return localVerify(ctx, args[1:])
+	case "local-verification":
+		id := fs.String("id", "", "verification receipt ID")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *id == "" || fs.NArg() != 0 {
+			return errors.New("use local-verification --id RECEIPT_ID")
+		}
+		receipt, err := runner.GetVerification(*id)
+		if err != nil {
+			return err
+		}
+		return printJSON(receipt)
 	case "models", "usage":
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()

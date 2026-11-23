@@ -43,9 +43,27 @@ func (i Issue) verify() error {
 var verifyIssue = readGitHubIssue
 
 func readGitHubIssue(ctx context.Context, i Issue) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("https://api.github.com/repos/%s/issues/%d", i.Repository, i.Number), nil)
+	record, err := fetchGitHubIssue(ctx, i.Repository, i.Number)
 	if err != nil {
+		var status *github.APIError
+		if errors.As(err, &status) {
+			return fmt.Errorf("GitHub issue verification returned HTTP %d", status.Status)
+		}
 		return err
+	}
+	return record.matches(i)
+}
+
+type githubIssueRecord struct {
+	github.Issue
+	URL string `json:"html_url"`
+}
+
+func fetchGitHubIssue(ctx context.Context, repository string, number int) (githubIssueRecord, error) {
+	var record githubIssueRecord
+	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("https://api.github.com/repos/%s/issues/%d", repository, number), nil)
+	if err != nil {
+		return record, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", github.APIVersion)
@@ -55,19 +73,19 @@ func readGitHubIssue(ctx context.Context, i Issue) error {
 	client := http.Client{Timeout: 20 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
 	resp, err := client.Do(req)
 	if err != nil {
-		return errors.New("GitHub issue verification unavailable")
+		return record, errors.New("GitHub issue verification unavailable")
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("GitHub issue verification returned HTTP %d", resp.StatusCode)
-	}
-	var record struct {
-		github.Issue
-		URL string `json:"html_url"`
+		return record, &github.APIError{Status: resp.StatusCode}
 	}
 	if err = json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&record); err != nil {
-		return errors.New("invalid issue response")
+		return record, errors.New("invalid issue response")
 	}
+	return record, nil
+}
+
+func (record githubIssueRecord) matches(i Issue) error {
 	if len(record.PullRequest) > 0 || record.State != "open" || record.Number != int64(i.Number) || record.Title != i.Title || record.UpdatedAt != i.UpdatedAt || !strings.EqualFold(record.URL, i.URL) || (i.GitHubID > 0 && (record.ID != i.GitHubID || record.RequirementsDigest() != i.RequirementsDigest)) {
 		return errors.New("GitHub issue changed or is ineligible; review its current revision")
 	}

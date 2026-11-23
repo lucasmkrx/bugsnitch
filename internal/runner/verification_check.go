@@ -37,7 +37,7 @@ func runVerificationCheck(ctx context.Context, argv []string, issue Issue, envir
 	defer os.RemoveAll(dir)
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = dir
 	cmd.Env = []string{"HOME=" + dir, "TMPDIR=" + dir, "PATH=/usr/bin:/bin", "LC_ALL=C"}
 	cmd.Stdin = bytes.NewReader(append(input, '\n'))
@@ -45,7 +45,7 @@ func runVerificationCheck(ctx context.Context, argv []string, issue Issue, envir
 	// Only expose Write so io.Copy cannot bypass the cap via bytes.Buffer.ReadFrom.
 	cmd.Stdout = struct{ io.Writer }{&output}
 	cmd.WaitDelay = 2 * time.Second
-	err = cmd.Run()
+	err = runCheckGroup(ctx, cmd)
 	if ctx.Err() != nil {
 		return nil, fmt.Errorf("verification check interrupted: %w", ctx.Err())
 	}

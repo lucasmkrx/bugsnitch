@@ -1,4 +1,4 @@
-bugsnitch.com {
-    encode zstd gzip
-    reverse_proxy 127.0.0.1:8787
+{$BUGSNITCH_PUBLIC_HOST:bugsnitch.com} {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:{$BUGSNITCH_HOST_PORT:8787}
 }

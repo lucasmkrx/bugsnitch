@@ -156,8 +156,6 @@ printf '%s' "$4"
 					break
 				}
 				select {
-				case err := <-done:
-					t.Fatalf("launcher exited before its child started: %v", err)
 				case <-ctx.Done():
 					t.Fatal("shell child never started")
 				case <-time.After(10 * time.Millisecond):

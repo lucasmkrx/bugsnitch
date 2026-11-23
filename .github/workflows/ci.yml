@@ -39,18 +39,35 @@ jobs:
       - run: npm --prefix web run test:browser
       - run: node --test examples/checkout/telemetry.test.mjs
       - run: make checkout-acceptance
-      - name: Start the packaged hosted stack
+      - name: Verify two isolated hosted pilot instances
         env:
           POSTGRES_PASSWORD: ephemeral-ci-db
           BUGSNITCH_OWNER_TOKEN: ephemeral-ci-only-owner-token-000000000000
+          BUGSNITCH_SECOND_OWNER_TOKEN: ephemeral-ci-second-owner-token-000000000000
         run: |
-          docker compose -f deploy/compose.yml up --build --detach
-          trap 'docker compose -f deploy/compose.yml down --volumes' EXIT
-          if ! curl --fail --silent --show-error --retry 20 --retry-delay 2 --retry-all-errors --max-time 3 --retry-max-time 50 http://localhost:8787/readyz; then
-            docker compose -f deploy/compose.yml ps --all
-            docker compose -f deploy/compose.yml logs --tail 20 server
-            exit 1
-          fi
+          first() {
+            docker compose --project-name bugsnitch-ci-first -f deploy/compose.yml "$@"
+          }
+          second() {
+            POSTGRES_PASSWORD=ephemeral-ci-second-db BUGSNITCH_OWNER_TOKEN="$BUGSNITCH_SECOND_OWNER_TOKEN" \
+              BUGSNITCH_HOST_PORT=8788 BUGSNITCH_ORIGIN=http://localhost:8788 \
+              docker compose --project-name bugsnitch-ci-second -f deploy/compose.yml "$@"
+          }
+          cleanup() {
+            first down --volumes
+            second down --volumes
+          }
+          trap cleanup EXIT
+          first up --build --detach
+          second up --build --detach
+          for port in 8787 8788; do
+            if ! curl --fail --silent --show-error --retry 20 --retry-delay 2 --retry-all-errors --max-time 3 --retry-max-time 50 "http://localhost:$port/readyz"; then
+              first logs --tail 20 server
+              second logs --tail 20 server
+              exit 1
+            fi
+          done
+          python3 scripts/smoke-pilot.py http://localhost:8787 http://localhost:8788
   macos-runner:
     strategy:
       fail-fast: false

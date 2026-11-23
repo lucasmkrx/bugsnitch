@@ -15,7 +15,10 @@ pub(super) enum Operation {
         id: String,
         version: i64,
         data: Box<RawValue>,
-        claim: bool,
+        // Older clients send "claim". New runners use the new field name
+        // so an older helper cannot silently apply its fixed ticket limit.
+        #[serde(alias = "claim")]
+        claim_with_limit: bool,
     },
     SyncAuthority {
         device: String,
@@ -62,15 +65,15 @@ pub(super) fn execute(db: &Connection, operation: Operation) -> Result<Vec<u8>, 
             id,
             version,
             data,
-            claim,
+            claim_with_limit,
         } => {
             // Both the ordinary checkpoint and a capacity claim compare the
             // previously observed revision inside one atomic SQLite update.
-            let sql = if claim {
-                "UPDATE journal_attempts AS target SET version=version+1,data=?1
+            let sql = if claim_with_limit {
+                "UPDATE journal_attempts SET version=version+1,data=?1
                  WHERE id=?2 AND version=?3 AND json_extract(data,'$.state')='waiting' AND json_extract(?1,'$.state')='running'
-                 AND (SELECT count(*) FROM journal_attempts AS active WHERE active.workspace=target.workspace
-                      AND json_extract(active.data,'$.state')='running')<2"
+                 AND (SELECT count(*) FROM journal_attempts WHERE json_extract(data,'$.state')='running')
+                     < (SELECT ticket_limit FROM runner_capacity WHERE id=1)"
             } else {
                 "UPDATE journal_attempts SET version=version+1,data=?1 WHERE id=?2 AND version=?3"
             };
@@ -100,4 +103,58 @@ pub(super) fn sync_authority(
          FROM profile WHERE id=1 AND json_extract(data,'$.Enrollment.deviceId')=?1 AND json_extract(data,'$.Enrollment.workspaceId')=?2",
     )?;
     first_json(&mut statement, [device, workspace])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn claims_share_the_configured_capacity_across_workspaces() {
+        let mut db = Connection::open_in_memory().unwrap();
+        crate::schema::prepare(&mut db, true).unwrap();
+        for (issue, workspace) in ["one", "two", "one", "two", "one"].iter().enumerate() {
+            db.execute(
+                "INSERT INTO journal_attempts VALUES(?1,?2,'owner/repo',?3,1,'{\"state\":\"waiting\"}',1)",
+                params![issue.to_string(), workspace, issue as i64],
+            )
+            .unwrap();
+        }
+        let claim = |issue: usize| {
+            execute(
+                &db,
+                Operation::Save {
+                    id: issue.to_string(),
+                    version: 1,
+                    data: RawValue::from_string(r#"{"state":"running"}"#.to_owned()).unwrap(),
+                    claim_with_limit: true,
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(claim(0), b"1");
+        assert_eq!(claim(1), b"1");
+        assert_eq!(claim(2), b"0");
+        db.execute("UPDATE runner_capacity SET ticket_limit=4 WHERE id=1", [])
+            .unwrap();
+        assert_eq!(claim(2), b"1");
+        assert_eq!(claim(3), b"1");
+        assert_eq!(claim(4), b"0");
+
+        // Lowering the limit neither interrupts active attempts nor prevents
+        // an ordinary checkpoint from releasing capacity.
+        db.execute("UPDATE runner_capacity SET ticket_limit=1 WHERE id=1", [])
+            .unwrap();
+        for issue in 0..4 {
+            assert_eq!(claim(4), b"0");
+            let done = Operation::Save {
+                id: issue.to_string(),
+                version: 2,
+                data: RawValue::from_string(r#"{"state":"completed"}"#.to_owned()).unwrap(),
+                claim_with_limit: false,
+            };
+            assert_eq!(execute(&db, done).unwrap(), b"1");
+        }
+        assert_eq!(claim(4), b"1");
+    }
 }

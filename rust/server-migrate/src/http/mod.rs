@@ -37,8 +37,22 @@ use url::Url;
 
 pub type Shared = Arc<AppState>;
 pub type WebResult<T> = Result<T, WebError>;
+#[derive(Debug, serde::Serialize)]
+pub struct ErrorBody {
+    error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    code: Option<String>,
+}
+impl From<&str> for ErrorBody {
+    fn from(message: &str) -> Self {
+        Self {
+            error: message.into(),
+            code: None,
+        }
+    }
+}
 #[derive(Debug)]
-pub struct WebError(pub StatusCode, pub String);
+pub struct WebError(pub StatusCode, pub ErrorBody);
 impl WebError {
     fn internal() -> Self {
         Self(StatusCode::INTERNAL_SERVER_ERROR, "Request failed".into())
@@ -46,7 +60,7 @@ impl WebError {
 }
 impl IntoResponse for WebError {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({"error":self.1}))).into_response()
+        (self.0, Json(self.1)).into_response()
     }
 }
 pub struct ApiJson<T>(pub T);

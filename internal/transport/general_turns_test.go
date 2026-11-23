@@ -8,6 +8,63 @@ import (
 	"testing"
 )
 
+func TestOwnerSetsDeviceTurnCapacity(t *testing.T) {
+	s := fixture(t)
+	owner := login(t, s)
+	token, device, report := runningDevice(t, owner)
+	deviceLimits := "devices/" + device + "/limits"
+	workspace := owner.post(t, "limits", object{"tickets": 4, "turns": 4, "version": 1}, 200)
+	turn := func(op turns.Operation, want int) {
+		t.Helper()
+		if status, result := owner.req(t, "POST", "/api/v1/device/model-permit", op, token); status != want {
+			t.Fatalf("permit returned %d, want %d: %v", status, want, result)
+		}
+	}
+	permit := func() turns.Operation {
+		return turns.Operation{Protocol: 1, ID: random(16), Workspace: "personal", Device: device, Role: "planner", Version: 1}
+	}
+	first, second, third, fourth := permit(), permit(), permit(), permit()
+	turn(first, 200)
+	turn(second, 200)
+	turn(third, 409) // The device still defaults to two when its workspace allows four.
+	start := protocol.Admission{Protocol: 1, ProjectID: report.ProjectID, AttemptID: report.ID, IssueNumber: report.IssueNumber, BaseSHA: report.BaseSHA, Operation: "turn_start", Sequence: 2}
+	if status, body := owner.req(t, "POST", "/api/v1/device/admission", start, token); status != 409 || body["code"] != "model_turn_capacity" || body["error"] != "Model-turn capacity is reserved" {
+		t.Fatalf("unexpected worker capacity response: %d %v", status, body)
+	}
+	owner.post(t, deviceLimits, object{"turns": 33, "version": workspace["version"]}, 400)
+	raised := owner.post(t, deviceLimits, object{"turns": 4, "version": workspace["version"]}, 200)
+	owner.post(t, deviceLimits, object{"turns": 1, "version": workspace["version"]}, 409)
+	turn(third, 200)
+	turn(fourth, 200)
+	turn(permit(), 409)
+	status, snapshot := owner.req(t, "GET", "/api/v1/state", nil, "")
+	if status != 200 || snapshot["devices"].([]any)[0].(object)["turnLimit"] != float64(4) || snapshot["limits"].(object)["version"] != raised["version"] {
+		t.Fatal("expected the device capacity and its matching version in the workspace snapshot")
+	}
+
+	limited := owner.post(t, "limits", object{"tickets": 4, "turns": 3, "version": raised["version"]}, 200)
+	fourth.Version = 2
+	turn(fourth, 200)
+	turn(permit(), 409) // Workspace limit is now lower than the device's four turns.
+	lowered := owner.post(t, deviceLimits, object{"turns": 1, "version": limited["version"]}, 200)
+	second.Version, third.Version = 2, 2
+	turn(second, 200)
+	turn(third, 200)
+	turn(first, 200) // Existing turns can replay and finish after a reduction.
+	turn(permit(), 409)
+	first.Version = 2
+	turn(first, 200)
+	turn(permit(), 200)
+
+	if _, err := s.DB.Exec(`INSERT INTO workspaces(id,account_id,name) VALUES('foreign','owner','Other');
+		INSERT INTO devices(id,workspace_id,name,platform) VALUES('other-device','foreign','Other','darwin/arm64')`); err != nil {
+		t.Fatal(err)
+	}
+	owner.post(t, "devices/other-device/limits", object{"turns": 5, "version": lowered["version"]}, 404)
+	owner.post(t, "devices/"+device+"/revoke", object{}, 200)
+	owner.post(t, deviceLimits, object{"turns": 5, "version": lowered["version"]}, 404)
+}
+
 func TestGeneralAndWorkerTurnsShareOneBudget(t *testing.T) {
 	s := fixture(t)
 	owner := login(t, s)

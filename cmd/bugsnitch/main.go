@@ -30,6 +30,7 @@ const usage = `Usage: bugsnitch COMMAND [OPTIONS]
   proof                  Run a read-only ChatGPT authorization check
   pair, rotate, unpair, status    Manage local device enrollment
   local-run              Execute a bounded batch of approved issues locally
+  local-limits           Show or set this runner's ticket and model-turn limits
   next --project ID      Print the next verified issue selection
   register               Map an assigned project to a local checkout
   sync [--watch]         Publish bounded local attempt metadata
@@ -85,6 +86,8 @@ func run(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "local-run":
 		return device.LocalRun(ctx, args[1:], os.Stdout)
+	case "local-limits":
+		return device.LocalLimits(args[1:], os.Stdout)
 	case "share-diff":
 		return device.Share(args[1:])
 	case "next", "pair", "rotate", "unpair", "register", "sync", "status":
@@ -101,7 +104,7 @@ func run(ctx context.Context, args []string) error {
 			output, err = exec.CommandContext(ctx, helper, "--version").Output()
 			if err == nil {
 				version := strings.TrimSpace(string(output))
-				if strings.HasPrefix(version, "bugsnitch-runner-journal ") && strings.Contains(version, " protocol=1 sqlite=") && strings.HasSuffix(version, " execution=1 controls=1 attempts=1") {
+				if strings.HasPrefix(version, "bugsnitch-runner-journal ") && strings.Contains(version, " protocol=1 sqlite=") && strings.HasSuffix(version, " capacity=1 execution=1 controls=1 attempts=1") {
 					fmt.Println(version)
 				} else {
 					err = errors.New("native runner protocol mismatch")

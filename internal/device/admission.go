@@ -109,6 +109,9 @@ func notify(a runner.Summary, op string) error {
 					return e
 				}
 			}
+			if errors.Is(err, runner.ErrHostedTurnCapacity) {
+				return err
+			}
 			switch status {
 			case 401, 403:
 				return errors.Join(runner.ErrDeviceUnauthorized, err)

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
@@ -26,7 +27,7 @@ func next(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	rec, err := selector.recommend(context.Background())
+	rec, err := selector.recommend(context.Background(), false)
 	if err != nil {
 		return err
 	}
@@ -41,6 +42,7 @@ func next(args []string, out io.Writer) error {
 type selectionProject struct {
 	enrolled       profile
 	id, repo, path string
+	legacyNext     bool
 }
 
 func selectProject(projectID string) (selectionProject, error) {
@@ -70,9 +72,20 @@ func selectProject(projectID string) (selectionProject, error) {
 	return selected, nil
 }
 
-func (p selectionProject) recommend(ctx context.Context) (protocol.Recommendation, error) {
+func (p *selectionProject) recommend(ctx context.Context, waitForTurn bool) (protocol.Recommendation, error) {
 	var rec protocol.Recommendation
-	if err := send(ctx, p.enrolled, "next", protocol.NextRequest{Protocol: protocol.Version, Project: p.id}, &rec); err != nil {
+	req := protocol.NextRequest{Protocol: protocol.Version, Project: p.id, WaitForTurn: waitForTurn && !p.legacyNext}
+	err := send(ctx, p.enrolled, "next", req, &rec)
+	if req.WaitForTurn && errors.Is(err, statusError(http.StatusBadRequest)) {
+		// Older coordinators reject unknown fields. Selection has no side
+		// effects, so retry once with the original request format.
+		req.WaitForTurn = false
+		err = send(ctx, p.enrolled, "next", req, &rec)
+		if err == nil {
+			p.legacyNext = true
+		}
+	}
+	if err != nil {
 		return rec, err
 	}
 	if rec.Selection == nil {
@@ -84,6 +97,6 @@ func (p selectionProject) recommend(ctx context.Context) (protocol.Recommendatio
 	if !strings.EqualFold(p.repo, rec.Selection.Repository) {
 		return rec, errors.New("recommendation repository differs from enrolled project")
 	}
-	err := runner.VerifySelection(ctx, p.enrolled.Enrollment.Workspace, p.path, runner.Issue(*rec.Selection))
+	err = runner.VerifySelection(ctx, p.enrolled.Enrollment.Workspace, p.path, runner.Issue(*rec.Selection), waitForTurn)
 	return rec, err
 }

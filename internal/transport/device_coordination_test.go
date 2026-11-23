@@ -157,6 +157,48 @@ func TestDeviceSyncRollsBackReportsAndReconnectWhenAckIsDenied(t *testing.T) {
 	}
 }
 
+// A stopped local worker can lose the start acknowledgement on either side
+// of the hosted commit. Both histories must converge, even while paused.
+func TestAbandonUncertainTurn(t *testing.T) {
+	for _, start := range []string{"committed", "in_transit"} {
+		t.Run(start, func(t *testing.T) {
+			s := fixture(t)
+			owner := login(t, s)
+			token, _, report := runningDevice(t, owner)
+			a := protocol.Admission{Protocol: 1, ProjectID: report.ProjectID, AttemptID: report.ID, IssueNumber: report.IssueNumber, BaseSHA: report.BaseSHA}
+			send := func(op string, seq int64, want int) {
+				t.Helper()
+				a.Operation, a.Sequence = op, seq
+				got, body := owner.req(t, "POST", "/api/v1/device/admission", a, token)
+				if got != want {
+					t.Fatalf("%s at %d returned %d %v, want %d", op, seq, got, body, want)
+				}
+			}
+			send("turn_abandon", 2, 409)
+			if start == "committed" {
+				send("turn_start", 2, 200)
+			}
+			if _, err := s.DB.Exec("UPDATE projects SET paused=true WHERE id=$1", report.ProjectID); err != nil {
+				t.Fatal(err)
+			}
+			send("turn_abandon", 4, 409)
+			send("turn_abandon", 3, 200)
+			send("turn_abandon", 3, 200)
+			if _, err := s.DB.Exec("UPDATE projects SET paused=false WHERE id=$1", report.ProjectID); err != nil {
+				t.Fatal(err)
+			}
+			send("turn_start", 2, 409)
+			var active, owned, inTurn bool
+			if err := s.DB.QueryRow("SELECT active,owns_issue,in_turn FROM admission WHERE workspace_id='personal' AND attempt_id=$1", a.AttemptID).Scan(&active, &owned, &inTurn); err != nil || !active || !owned || inTurn {
+				t.Fatalf("after reconciliation: active=%v owned=%v inTurn=%v err=%v", active, owned, inTurn, err)
+			}
+			a.State = "cancelled"
+			send("finish", 4, 200)
+			send("turn_abandon", 6, 409)
+		})
+	}
+}
+
 func runningDevice(t *testing.T, owner system) (token, device string, report protocol.Attempt) {
 	t.Helper()
 	project := owner.post(t, "projects", object{"name": "App", "repository": "example/app"}, 201)["id"].(string)

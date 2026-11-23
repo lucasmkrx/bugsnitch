@@ -15,6 +15,7 @@ var revision = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
 type Receipt struct {
 	CommandID        string    `json:"commandId"`
+	DeploymentID     string    `json:"deploymentId,omitempty"`
 	Version          int64     `json:"version"`
 	Kind             string    `json:"kind"`
 	Candidate        string    `json:"candidate"`
@@ -30,6 +31,9 @@ type Receipt struct {
 }
 
 func (r Receipt) valid() bool {
+	if r.DeploymentID != "" && (r.Kind != "validation" || !requestKey.MatchString(r.DeploymentID)) {
+		return false
+	}
 	if !requestKey.MatchString(r.CommandID) || r.Version <= 0 || !revision.MatchString(r.Candidate) || len(r.Evidence) > 2048 || r.Evidence == "" || r.At.IsZero() || r.At.After(time.Now().UTC().Add(time.Second)) {
 		return false
 	}
@@ -77,20 +81,30 @@ func (s Store) RecordReceipt(ctx context.Context, w, p, id string, r Receipt) er
 	if cur != r.Version {
 		return ErrConflict
 	}
+	var deployment sql.NullString
 	if r.Kind == "validation" {
-		// Bind to one concrete deployment, including its timestamp. A redeployment of the same
-		// artifact requires fresh positive evidence after that deployment.
-		var ok bool
-		err = tx.QueryRowContext(ctx, `SELECT coalesce((SELECT build=$4 AND candidate=$5 FROM incident_evidence WHERE workspace_id=$1 AND project_id=$2 AND incident_id=$3 AND environment=$6 AND kind='deployment' AND effective_at<=$7 ORDER BY effective_at DESC,received_at DESC LIMIT 1),false)`, w, p, id, r.Build, r.Candidate, r.Environment, r.At).Scan(&ok)
+		// The incident lock serializes receipt writes. Resolve the deployment
+		// as of the observation, then retain that identity for future verdicts.
+		var sameArtifact, repeatedArtifact bool
+		err = tx.QueryRowContext(ctx, `SELECT command_key,build=$4 AND candidate=$5,
+			count(*) FILTER (WHERE build=$4 AND candidate=$5) OVER () > 1 FROM incident_evidence
+			WHERE workspace_id=$1 AND project_id=$2 AND incident_id=$3 AND environment=$6 AND kind='deployment' AND effective_at<=$7
+			ORDER BY effective_at DESC,received_at DESC,command_key DESC LIMIT 1`, w, p, id, r.Build, r.Candidate, r.Environment, r.At).Scan(&deployment, &sameArtifact, &repeatedArtifact)
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrConflict
+		}
 		if err != nil {
 			return err
 		}
-		if !ok {
+		// A delayed observation from a previous deployment of identical
+		// bytes must not verify its successor based on timestamps alone.
+		needsID := repeatedArtifact || r.DeploymentID != ""
+		if !sameArtifact || needsID && r.DeploymentID != deployment.String {
 			return ErrConflict
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO incident_evidence(workspace_id,project_id,incident_id,command_key,payload_hash,kind,candidate,environment,build,evidence,effective_at,positive,coverage,exposures,monitor_seconds,minimum_exposures)
-	VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, w, p, id, r.CommandID, hash, r.Kind, r.Candidate, r.Environment, r.Build, r.Evidence, r.At, r.Positive, r.Coverage, r.Exposures, r.WindowSeconds, r.MinimumExposures)
+	_, err = tx.ExecContext(ctx, `INSERT INTO incident_evidence(workspace_id,project_id,incident_id,command_key,payload_hash,kind,candidate,environment,build,evidence,effective_at,positive,coverage,exposures,monitor_seconds,minimum_exposures,deployment_key)
+	VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, w, p, id, r.CommandID, hash, r.Kind, r.Candidate, r.Environment, r.Build, r.Evidence, r.At, r.Positive, r.Coverage, r.Exposures, r.WindowSeconds, r.MinimumExposures, deployment)
 	if err != nil {
 		return err
 	}
@@ -150,10 +164,11 @@ func evaluate(v Verdict, now time.Time, recurrence, unknown bool) Verdict {
 	}
 	return set("Verified in environment", "Positive evidence applies to the current deployment.")
 }
-func loadReceipt(ctx context.Context, tx *sql.Tx, w, p, id, kind, env string, since time.Time) (*Receipt, error) {
+func loadReceipt(ctx context.Context, tx *sql.Tx, w, p, id, kind, env, deployment string) (*Receipt, error) {
 	var r Receipt
-	err := tx.QueryRowContext(ctx, `SELECT command_key,kind,candidate,environment,build,evidence,effective_at,positive,coverage,exposures,monitor_seconds,minimum_exposures FROM incident_evidence
-	WHERE workspace_id=$1 AND project_id=$2 AND incident_id=$3 AND kind=$4 AND environment=$5 AND effective_at>=$6 ORDER BY effective_at DESC,received_at DESC,command_key DESC LIMIT 1`, w, p, id, kind, env, since).Scan(&r.CommandID, &r.Kind, &r.Candidate, &r.Environment, &r.Build, &r.Evidence, &r.At, &r.Positive, &r.Coverage, &r.Exposures, &r.WindowSeconds, &r.MinimumExposures)
+	err := tx.QueryRowContext(ctx, `SELECT command_key,kind,candidate,environment,build,evidence,effective_at,positive,coverage,exposures,monitor_seconds,minimum_exposures,coalesce(deployment_key,'') FROM incident_evidence
+	WHERE workspace_id=$1 AND project_id=$2 AND incident_id=$3 AND kind=$4 AND environment=$5 AND ($6='' OR deployment_key=$6)
+	ORDER BY effective_at DESC,received_at DESC,command_key DESC LIMIT 1`, w, p, id, kind, env, deployment).Scan(&r.CommandID, &r.Kind, &r.Candidate, &r.Environment, &r.Build, &r.Evidence, &r.At, &r.Positive, &r.Coverage, &r.Exposures, &r.WindowSeconds, &r.MinimumExposures, &r.DeploymentID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -173,19 +188,16 @@ func (s Store) Verdict(ctx context.Context, w, p, id, env string) (Verdict, erro
 	if err = tx.QueryRowContext(ctx, `SELECT group_key,source FROM incidents WHERE workspace_id=$1 AND project_id=$2 AND id=$3`, w, p, id).Scan(&group, &source); err != nil {
 		return v, err
 	}
-	if v.Fix, err = loadReceipt(ctx, tx, w, p, id, "fix", "", time.Time{}); err != nil {
+	if v.Fix, err = loadReceipt(ctx, tx, w, p, id, "fix", "", ""); err != nil {
 		return v, err
 	}
-	if v.Deployment, err = loadReceipt(ctx, tx, w, p, id, "deployment", env, time.Time{}); err != nil {
+	if v.Deployment, err = loadReceipt(ctx, tx, w, p, id, "deployment", env, ""); err != nil {
 		return v, err
 	}
 	var recurrence, unknown bool
 	if d := v.Deployment; d != nil {
-		if v.Validation, err = loadReceipt(ctx, tx, w, p, id, "validation", env, d.At); err != nil {
+		if v.Validation, err = loadReceipt(ctx, tx, w, p, id, "validation", env, d.CommandID); err != nil {
 			return v, err
-		}
-		if a := v.Validation; a != nil && (a.Candidate != d.Candidate || a.Build != d.Build) {
-			v.Validation = nil
 		}
 		err = tx.QueryRowContext(ctx, `SELECT coalesce(bool_or(environment=$5 AND release=$6),false),
 		coalesce(bool_or((environment='' OR release='') AND (environment='' OR environment=$5) AND (release='' OR release=$6)),false)

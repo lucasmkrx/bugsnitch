@@ -44,7 +44,9 @@ The authenticated owner may attest check results and deployments using `POST /ap
 | --- | --- |
 | fix | The candidate is the exact revision that passed the applicable check. |
 | deployment | environment and build, optionally windowSeconds and minimumExposures |
-| validation | environment, build and positive, optionally coverage and exposures |
+| validation | environment, build and positive, optionally deploymentId, coverage and exposures |
+
+Each validation is bound to the deployment in effect at the observation time. Supply that deployment’s `commandId` as `deploymentId`. An older client can omit the ID when the artifact identifies a single deployment in that environment. Redeploying the same artifact requires both a fresh validation and its explicit deployment ID. The verdict returns the bound ID with the validation. After upgrading, older validations with an ambiguous deployment history also require a fresh observation.
 
 Read `GET /api/v1/projects/{project}/incidents/{id}/verification?environment=production` for the verdict and its supporting receipts. A verified verdict requires a validated fix, a current deployment of that exact revision, and a successful observation of the affected behavior on that build. Monitoring policies additionally require an attestation of functioning application instrumentation, enough observed exposures, and an observation covering the end of the configured window. A newer rollback changes the current verdict. A recurrence on an older identified build is distinct from contradictory evidence on the fixed build. Missing release or environment can make verification inconclusive. This version accepts owner attestations. CI-provider receipt adapters, source-map lookups, and ancestry proofs for descendant builds still need implementation.
 

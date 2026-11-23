@@ -39,7 +39,7 @@ func TestTurnStartClassifiesCapacityConflict(t *testing.T) {
 			http.DefaultTransport = requestRoute(func(*http.Request) (*http.Response, error) {
 				return &http.Response{StatusCode: 409, Body: io.NopCloser(strings.NewReader(tc.body))}, nil
 			})
-			err := TurnStart(a)
+			err := TurnStart(t.Context(), a)
 			if !errors.Is(err, statusError(409)) || errors.Is(err, runner.ErrHostedTurnCapacity) != tc.capacity || errors.Is(err, runner.ErrAuthorityStale) == tc.capacity {
 				t.Fatalf("unexpected admission classification: %v", err)
 			}

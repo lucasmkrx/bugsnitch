@@ -224,6 +224,11 @@ func (s Store) create(ctx context.Context, j job, repo issueWriter) error {
 		}
 		issue, e := repo.Create(ctx, title, content)
 		if e != nil {
+			var api *github.APIError
+			if errors.As(e, &api) && (api.Status == 429 || api.Status == 403) {
+				j.status = "queued"
+				return deferJob(ctx, tx, j, "GitHub denied or rate-limited issue creation", e)
+			}
 			j.status = "reconciling"
 			return deferJob(ctx, tx, j, "Checking for an accepted GitHub write", e)
 		}

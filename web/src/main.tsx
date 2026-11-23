@@ -83,7 +83,9 @@ function App() {
     setFeedback("");
     try {
       await work();
-      await refresh();
+      // The server has acknowledged the action. A stale snapshot has its own
+      // error and retry control, and must not make the form repeat the write.
+      await refresh({ afterWrite: true }).catch(() => {});
       if (done) setFeedback(done);
       return true;
     } catch (e) {

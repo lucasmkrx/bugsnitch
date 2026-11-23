@@ -80,7 +80,7 @@ func TestNextPrintsStartDocumentOnlyAfterCurrentCanonicalRead(t *testing.T) {
 		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(b))}, nil
 	})
 	var out bytes.Buffer
-	if err = next([]string{"--project", "project"}, &out); err != nil {
+	if err = next(t.Context(), []string{"--project", "project"}, &out); err != nil {
 		t.Fatal(err)
 	}
 	var actual runner.Issue
@@ -121,12 +121,12 @@ func TestNextPrintsStartDocumentOnlyAfterCurrentCanonicalRead(t *testing.T) {
 	})
 	out.Reset()
 	source.Body = "Changed while timestamp stayed the same"
-	if err = next([]string{"--project", "project"}, &out); err == nil || out.Len() > 0 {
+	if err = next(t.Context(), []string{"--project", "project"}, &out); err == nil || out.Len() > 0 {
 		t.Fatal("stale body emitted a usable ticket", err)
 	}
 	source.Body = "Private evidence"
 	source.ID = 99
-	if err = next([]string{"--project", "project"}, &out); err == nil || out.Len() > 0 {
+	if err = next(t.Context(), []string{"--project", "project"}, &out); err == nil || out.Len() > 0 {
 		t.Fatal("changed canonical identity was accepted", err)
 	}
 	attempts, err := runner.Summaries()

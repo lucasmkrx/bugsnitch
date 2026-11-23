@@ -2,6 +2,14 @@
 
 The rebuild started on `rebuild/bugsnitch-v2` from clean main at `833637906ffc7d7de633b0de64e58c0636cd3bfd` in lucasmkrx/bugsnitch. The previous application was a TypeScript VS Code extension. Its history, MPL-2.0 license, trademarks and brand assets are preserved. [Implementation PR](https://github.com/lucasmkrx/bugsnitch/pull/24)
 
+## Standalone single-owner acceptance · November 23, 2026
+
+`make checkout-acceptance` starts its own PostgreSQL instance, runs the packaged service and local runner, and serves the bundled checkout on loopback. In the standalone run, Chromium reproduced the $5 charge at the free-shipping threshold. Two distinct SDK events and a replay produced one incident and one fixture issue. The runner used scripted model responses, applied the repair in a temporary Git worktree and ran the unchanged Node validator. Chromium confirmed free shipping on the served candidate. Redeploying identical bytes returned the incident to **Verification inconclusive** until a second browser check passed. An injected recurrence on the current build returned the incident to **Needs triage**. The previous live-model exercise is recorded below. [Reproduce the exercise](../examples/checkout/README.md)
+
+PostgreSQL upgrade tests covered fresh and older databases, including deployment validations with ambiguous histories. The packaged service tests covered device pairing, browser and MCP access, restart, backup restoration and revocation. Both macOS runner archives were built. The Apple Silicon archive opened an empty profile and installed its LaunchAgent configuration into a temporary home.
+
+The current build is unreleased. Live provider delivery, public TLS, hosted OAuth, and physical device interruption remain acceptance work. The existing GitHub CodeQL runs also have two open limitations. Result uploads were rejected for this private personal repository, and the pinned extractor reported partial Rust coverage. [GitHub scan run](https://github.com/lucasmkrx/bugsnitch/actions/runs/45249400205/job/137954707962) · [Code scanning eligibility](https://docs.github.com/en/code-security/concepts/code-scanning/code-scanning)
+
 ## Rust performance work
 
 Baseline `f7733a3` (PR #33). This release moves frequent runner journal operations, dashboard reads, MCP lists and background job selection to Rust. The application keeps Go for CLI and model orchestration, small single-record MCP reads, application changes and provider-job consumers. The browser remains React and TypeScript. [Decision and boundaries](decisions/0008-performance-driven-rust.md)
@@ -125,7 +133,7 @@ The local race-enabled PostgreSQL suite passed, including forecast invalidation,
 |17 · Phone, stale and offline|web/tests/dashboard.test.mjs exercises both requested viewports, keyboard focus, reconnect, fresh subject reads, and a lost approval acknowledgment.|
 |18 · Clean setup and persistence|scripts/dev, scripts/smoke.py and web/tests/service-smoke.mjs exercise real processes, database, owner authentication, pairing, restart, restoration and browser navigation.|
 
-## Resume from this checkpoint
+## External acceptance
 
 1. Select a disposable repository with Issues enabled. Install the GitHub App there, configure its client ID, private key file and webhook secret, and bind the verified installation/repository IDs to the project. Never use the implementation PR as a disposable merge test. [Provider guide](PROVIDERS.md)
 2. Select one canonical test issue, approve the local project files and validation command, run the local issue workflow, publish its dedicated branch explicitly and request a draft. Inspect checks and combined evidence. [Runner guide](RUNNER.md) · [Integration gates](INTEGRATION_QUEUE.md)

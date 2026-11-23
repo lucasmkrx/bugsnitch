@@ -335,3 +335,46 @@ func TestLegacyJournalMigrationRetainsControl(t *testing.T) {
 		t.Fatal(ack, err)
 	}
 }
+
+func TestGitLiteralPathsAndOutputLimit(t *testing.T) {
+	dir, _ := fixture(t)
+	const selected = "café[1].txt"
+	lookalike := "café1.txt"
+	for _, name := range []string{selected, lookalike} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := git(dir, "add", "--", selected, lookalike); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git(dir, "commit", "-m", "fixture names"); err != nil {
+		t.Fatal(err)
+	}
+	a := Attempt{Worktree: dir, Project: Project{Config: Config{Files: []string{selected}}}}
+	got, err := a.contextFiles()
+	if err != nil || got[selected] != selected {
+		t.Fatalf("context: %v %v", got, err)
+	}
+	for _, name := range []string{selected, lookalike} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("changed"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := git(dir, "add", "--", selected); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git(dir, "commit", "-m", "only the literal file"); err != nil {
+		t.Fatal(err)
+	}
+	names, err := changedPaths(dir, "HEAD~", "HEAD")
+	if err != nil || len(names) != 1 || names[0] != selected {
+		t.Fatalf("changed names: %q %v", names, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, selected), []byte(strings.Repeat("x", 512<<10)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git(dir, "diff", "--", selected); err == nil || !strings.Contains(err.Error(), "artifact limit") {
+		t.Fatalf("large diff: %v", err)
+	}
+}

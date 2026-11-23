@@ -12,6 +12,51 @@ import (
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 )
 
+func TestActiveWorkerRechecksPrerequisiteGeneration(t *testing.T) {
+	s := fixture(t)
+	owner := login(t, s)
+	project := owner.post(t, "projects", object{"name": "Dependencies", "repository": "fixture/dependencies"}, 201)["id"].(string)
+	code := owner.post(t, "pairings", object{"name": "Test runner", "projectIds": []string{project}}, 201)["code"].(string)
+	token := random(32)
+	device := owner.post(t, "device/pair", protocol.Pair{Protocol: 1, Code: code, Credential: token, Platform: "darwin/arm64"}, 200)["deviceId"].(string)
+	exec := func(q string, args ...any) {
+		t.Helper()
+		if _, err := s.DB.Exec(q, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec("INSERT INTO github_mappings(workspace_id,project_id,installation_id,repository_id) VALUES('personal',$1,1,2)", project)
+	exec(`INSERT INTO planned_issue_state(workspace_id,project_id,number,github_id,installation_id,repository_id,source_state,availability,checked_at)
+		VALUES('personal',$1,1,101,1,2,'closed','current',now()),('personal',$1,2,102,1,2,'open','current',now())`, project)
+	dep := domain.Ticket{Number: 1, Title: "Dependency", Criteria: []string{"Completed"}, Verification: "Run checks", EstimateHours: 1}
+	ticket := dep
+	ticket.Number, ticket.Dependencies = 2, []int{1}
+	plan := domain.Plan{Title: "Related work", Milestone: "Release", Tickets: []domain.Ticket{dep, ticket}}
+	id := owner.post(t, "plans", object{"projectId": project, "version": 1, "plan": plan}, 201)["id"].(string)
+	owner.post(t, "plans/"+id+"/approve", object{"version": 2}, 200)
+	owner.post(t, "plans/"+id+"/evidence", object{"number": 1, "revision": strings.Repeat("b", 40), "summary": "Verified integration"}, 201)
+	req := func(route string, request any, want int) {
+		t.Helper()
+		if code, response := owner.req(t, "POST", "/api/v1/device/"+route, request, token); code != want {
+			t.Fatalf("%s returned %d %v, want %d", route, code, response, want)
+		}
+	}
+	a := protocol.Admission{Protocol: 1, ProjectID: project, IssueNumber: 2, AttemptID: "dependent_worker", BaseSHA: strings.Repeat("a", 40), CriteriaHash: domain.CriteriaHash(ticket.Criteria), Sequence: 1, Operation: "admit"}
+	req("admission", a, 200)
+	a.Sequence, a.Operation = 2, "turn_start"
+	req("admission", a, 200)
+	lease := protocol.WorkerLease{Protocol: 1, Workspace: "personal", Project: project, Device: device, Attempt: a.AttemptID, Base: a.BaseSHA, Issue: 2, Sequence: 2, SubjectVersion: 1, Turn: true}
+	req("worker-lease", lease, 200)
+	exec("UPDATE planned_issue_state SET generation=generation+1 WHERE project_id=$1 AND number=1", project)
+	req("worker-lease", lease, 409)
+	a.Sequence, a.Operation = 3, "turn_end"
+	req("admission", a, 200)
+	a.Sequence, a.Operation = 4, "turn_start"
+	req("admission", a, 409)
+	a.Operation, a.State = "finish", "cancelled"
+	req("admission", a, 200)
+}
+
 // A persisted admission from before the Rust cutover can resume on its
 // original device with the criteria digest already in the local journal.
 func TestNativeClaimsResumeStoredWaitingAttempt(t *testing.T) {

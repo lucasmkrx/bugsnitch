@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/lucasmkrx/bugsnitch/internal/testgithub"
 	"net/http"
 	"strings"
 	"sync"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
+	"github.com/lucasmkrx/bugsnitch/internal/testgithub"
 )
 
 // CheckoutFixture connects production handlers and outbox processing to two
@@ -140,7 +140,10 @@ func (f *CheckoutFixture) Observe(r Receipt, want string) {
 	t.Helper()
 	inc := one(t, f.s)
 	if r.Kind != "" {
-		r.At, r.Version, r.CommandID = time.Now().UTC(), inc.Version, "checkout-"+r.Kind
+		r.At, r.Version = time.Now().UTC(), inc.Version
+		if r.CommandID == "" {
+			r.CommandID = "checkout-" + r.Kind
+		}
 		if err := f.s.RecordReceipt(context.Background(), "personal", "p", inc.ID, r); err != nil {
 			t.Fatal(err)
 		}

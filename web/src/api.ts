@@ -115,12 +115,12 @@ export interface Activity {
 export interface PlanTicket {
   number: number;
   title: string;
-  criteria: string[];
+  criteria: string[] | null;
   verification: string;
   priority: number;
   estimateHours: number;
-  dependencies: number[];
-  resources: string[];
+  dependencies: number[] | null;
+  resources: string[] | null;
 }
 export interface PlanDoc {
   title: string;
@@ -128,7 +128,7 @@ export interface PlanDoc {
   target?: string;
   forecast?: string;
   assumptions: string;
-  tickets: PlanTicket[];
+  tickets: PlanTicket[] | null;
 }
 export interface ProgressForecast {
   status: "unknown" | "projected" | "complete";

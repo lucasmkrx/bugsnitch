@@ -17,7 +17,6 @@ from smoke import BIN, port
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "rust/server-migrate/tests"))
 from database import Fixture
-from urllib.parse import urlencode, urlunsplit
 
 
 def wait_for(check, description):
@@ -36,7 +35,7 @@ def run(schema, db):
         key = secrets.token_hex(32)
         env = {"TMPDIR": tmp, "BUGSNITCH_ORIGIN": origin, "BUGSNITCH_LISTEN": address,
                "BUGSNITCH_OWNER_TOKEN": key, "PATH": os.environ["PATH"],
-               "DATABASE_URL": urlunsplit(db.url._replace(query=urlencode({**db.params, "search_path": schema})))}
+               "DATABASE_URL": db.dsn(schema)}
         # Copy the executable so the OS resolves siblings from this empty directory.
         isolated = Path(tmp) / "bugsnitch-server"
         shutil.copy2(BIN / isolated.name, isolated)

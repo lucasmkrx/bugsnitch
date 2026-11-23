@@ -969,7 +969,7 @@ export function Views({
                   ],
                 ]}
               />
-              {p.document.tickets.map((t) => (
+              {p.document.tickets?.map((t) => (
                 <details key={t.number}>
                   <summary>
                     #{t.number} · {t.title}
@@ -978,11 +978,15 @@ export function Views({
                     pairs={[
                       [
                         "Acceptance criteria",
-                        <ul>
-                          {t.criteria.map((c, i) => (
-                            <li key={i}>{c}</li>
-                          ))}
-                        </ul>,
+                        t.criteria?.length ? (
+                          <ul>
+                            {t.criteria.map((c, i) => (
+                              <li key={i}>{c}</li>
+                            ))}
+                          </ul>
+                        ) : (
+                          "No criteria recorded"
+                        ),
                       ],
                       ["Verification", t.verification],
                       ["Estimate", t.estimateHours + " hours"],

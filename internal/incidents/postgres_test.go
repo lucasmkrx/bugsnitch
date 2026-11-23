@@ -340,6 +340,39 @@ func TestPostgresReceiptsAndRecurrence(t *testing.T) {
 	expect("Coverage unknown")
 	put("validation", "v2", fix, t0.Add(131*time.Minute), &yes, &yes)
 	expect("Verified in environment")
+	current := func() Verdict {
+		t.Helper()
+		v, err := s.Verdict(ctx, "personal", "p", one(t, s).ID, "production")
+		if err != nil || v.Deployment == nil {
+			t.Fatalf("missing deployment: %+v %v", v, err)
+		}
+		return v
+	}
+	original := current()
+	if original.Validation.DeploymentID != original.Deployment.CommandID {
+		t.Fatal("validation did not retain the original deployment ID")
+	}
+	// Backfilled receipts and coarse timestamp precision can put two deploys
+	// of an identical artifact at the same effective time.
+	put("deployment", "v2", fix, t0.Add(time.Hour), nil, nil)
+	expect("Verification inconclusive")
+	redeployed := current()
+	inc := one(t, s)
+	validation := Receipt{CommandID: "explicit-validation", DeploymentID: original.Deployment.CommandID, Version: inc.Version,
+		Kind: "validation", Environment: "production", Build: "v2", Candidate: fix, At: t0.Add(135 * time.Minute),
+		Evidence: "Checked the production checkout", Positive: &yes, Coverage: &yes}
+	if err := s.RecordReceipt(ctx, "personal", "p", inc.ID, validation); !errors.Is(err, ErrConflict) {
+		t.Fatalf("validation bound to superseded deployment: %v", err)
+	}
+	validation.DeploymentID = ""
+	if err := s.RecordReceipt(ctx, "personal", "p", inc.ID, validation); !errors.Is(err, ErrConflict) {
+		t.Fatalf("unbound validation credited to a repeated deployment: %v", err)
+	}
+	validation.DeploymentID = redeployed.Deployment.CommandID
+	if err := s.RecordReceipt(ctx, "personal", "p", inc.ID, validation); err != nil {
+		t.Fatal(err)
+	}
+	expect("Verified in environment")
 	add("223456789abcdef0123456789abcdef0", "v1", t0.Add(3*time.Hour))
 	expect("Verified in environment")
 	add("323456789abcdef0123456789abcdef0", "v2", t0.Add(3*time.Hour))

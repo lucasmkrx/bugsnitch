@@ -16,25 +16,25 @@ import (
 )
 
 type capped struct {
-	bytes.Buffer
+	buffer   bytes.Buffer
 	max      int
 	overflow bool
 }
 
 func (b *capped) Write(data []byte) (int, error) {
 	n := len(data)
-	space := b.max - b.Len()
+	space := b.max - b.buffer.Len()
 	if len(data) > space {
 		data = data[:space]
 		b.overflow = true
 	}
-	_, err := b.Buffer.Write(data)
+	_, err := b.buffer.Write(data)
 	return n, err
 }
 func git(dir string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "git", append([]string{"-c", "core.hooksPath=" + os.DevNull, "-c", "commit.gpgsign=false", "-c", "user.name=Bugsnitch", "-c", "user.email=runner@bugsnitch.invalid", "-C", dir}, args...)...)
+	cmd := exec.CommandContext(ctx, "git", append([]string{"--literal-pathspecs", "-c", "core.hooksPath=" + os.DevNull, "-c", "commit.gpgsign=false", "-c", "user.name=Bugsnitch", "-c", "user.email=runner@bugsnitch.invalid", "-C", dir}, args...)...)
 	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1", "GIT_TERMINAL_PROMPT=0", "GIT_LFS_SKIP_SMUDGE=1", "LC_ALL=C"}
 	var out capped
 	out.max = 512 << 10
@@ -45,8 +45,18 @@ func git(dir string, args ...string) (string, error) {
 	if out.overflow {
 		return "", errors.New("Git output exceeds artifact limit")
 	}
-	return strings.TrimSuffix(out.String(), "\n"), nil
+	return strings.TrimSuffix(out.buffer.String(), "\n"), nil
 }
+
+// changedPaths returns Git's literal names, including paths that porcelain quotes.
+func changedPaths(dir, base, head string) ([]string, error) {
+	names, err := git(dir, "diff", "--no-renames", "--name-only", "-z", base, head, "--")
+	if err != nil || names == "" {
+		return nil, err
+	}
+	return strings.Split(strings.TrimSuffix(names, "\x00"), "\x00"), nil
+}
+
 func canonical(path string) (string, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
@@ -139,8 +149,8 @@ func (a *Attempt) contextFiles() (map[string]string, error) {
 	files := map[string]string{}
 	total := 0
 	for _, p := range a.Project.Config.Files {
-		tracked, err := git(a.Worktree, "ls-files", "--error-unmatch", "--", p)
-		if err != nil || tracked != p {
+		tracked, err := git(a.Worktree, "ls-files", "-z", "--error-unmatch", "--", p)
+		if err != nil || tracked != p+"\x00" {
 			return nil, errors.New("approved source must be tracked in the recorded revision")
 		}
 		text, err := readFile(a.Worktree, p)

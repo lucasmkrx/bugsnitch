@@ -63,11 +63,10 @@ func RecoverCommit(id string) (Attempt, error) {
 	if err != nil || parents != head+" "+a.Intent.Parent {
 		return a, errors.New("candidate parent differs from the pre-commit record")
 	}
-	names, err := git(a.Worktree, "diff", "--name-only", "--no-renames", a.Intent.Parent, head, "--")
+	changed, err := changedPaths(a.Worktree, a.Intent.Parent, head)
 	if err != nil {
 		return a, err
 	}
-	changed := strings.Split(names, "\n")
 	if len(changed) != len(a.Intent.SHA256) {
 		return a, errors.New("candidate file set differs from the pre-commit record")
 	}

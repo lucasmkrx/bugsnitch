@@ -52,36 +52,32 @@ pub(super) fn approved(db: &Db<'_>, ws: &str, project: &str) -> Result<Option<Pl
 
 // Issues outside the publication system may be admitted manually. Published
 // issues must retain their plan-specific generation and recent authoritative read.
-pub(super) fn current_issue(
+pub(super) fn current_work(
     db: &Db<'_>,
     ws: &str,
     project: &str,
     plan: &str,
     number: i64,
-    allow_closed: bool,
-    lock: bool,
 ) -> Result<bool> {
-    let sql = "SELECT m.active AND z.availability='current' AND (z.source_state='open' OR $5 AND z.source_state='closed')
-        AND z.checked_at>now()-interval '20 minutes' AND EXISTS(SELECT FROM plan_issue_bindings b WHERE b.plan_id=$3 AND
-            (b.workspace_id,b.project_id,b.number,b.generation)=(z.workspace_id,z.project_id,z.number,z.generation))
-        FROM planned_issue_state z JOIN github_mappings m USING(workspace_id,project_id,installation_id,repository_id)
-        WHERE z.workspace_id=$1 AND z.project_id=$2 AND z.number=$4";
-    let sql = if lock {
-        format!("{sql} FOR SHARE OF z,m")
-    } else {
-        sql.into()
-    };
-    let row = db.optional(
-        &sql,
-        &[
-            ws,
-            project,
-            plan,
-            &number.to_string(),
-            &allow_closed.to_string(),
-        ],
-    )?;
-    row.map_or(Ok(true), |r| r.bool(0))
+    // A grant relies on both the running issue and its completed prerequisites.
+    // Check and lock all published issue revisions in one database round trip.
+    db.one(
+        "WITH required(number) AS (
+            SELECT $4::bigint UNION
+            SELECT unnest(t.dependencies) FROM plan_versions v
+            CROSS JOIN LATERAL jsonb_to_recordset(v.document->'tickets') AS t(number bigint, dependencies bigint[])
+            WHERE v.workspace_id=$1 AND v.project_id=$2 AND v.id=$3 AND t.number=$4
+        )
+        SELECT coalesce(bool_and(current_revision),true) FROM (
+            SELECT m.active AND z.availability='current' AND (z.source_state='open' OR z.number<>$4 AND z.source_state='closed')
+                AND z.checked_at IS NOT NULL AND z.checked_at>now()-interval '20 minutes' AND EXISTS(SELECT FROM plan_issue_bindings b WHERE b.plan_id=$3 AND
+                    (b.workspace_id,b.project_id,b.number,b.generation)=(z.workspace_id,z.project_id,z.number,z.generation)) AS current_revision
+            FROM required r JOIN planned_issue_state z USING(number)
+            JOIN github_mappings m USING(workspace_id,project_id,installation_id,repository_id)
+            WHERE z.workspace_id=$1 AND z.project_id=$2 ORDER BY z.number FOR SHARE OF z,m
+        ) locked",
+        &[ws, project, plan, &number.to_string()],
+    )?.bool(0)
 }
 
 // This SHA-256 input is the compact Go encoding/json format used by existing
@@ -104,15 +100,7 @@ pub(super) fn blocked(
     attempt: &str,
     expected_hash: Option<&str>,
 ) -> Result<Option<&'static str>> {
-    if !current_issue(
-        db,
-        ws,
-        project,
-        plan,
-        ticket.number,
-        false,
-        expected_hash.is_some(),
-    )? {
+    if !current_work(db, ws, project, plan, ticket.number)? {
         return Ok(Some(DRIFT));
     }
     if let Some(hash) = expected_hash {
@@ -128,9 +116,6 @@ pub(super) fn blocked(
         }
     }
     for dep in ticket.dependencies() {
-        if !current_issue(db, ws, project, plan, *dep, true, expected_hash.is_some())? {
-            return Ok(Some(DRIFT));
-        }
         if !db.one("SELECT EXISTS(SELECT FROM prerequisite_evidence WHERE workspace_id=$1 AND project_id=$2 AND plan_id=$3 AND issue_number=$4)",
             &[ws,project,plan,&dep.to_string()])?.bool(0)? {
             return Ok(Some("Waiting for prerequisite integration evidence"));

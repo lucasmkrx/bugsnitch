@@ -15,6 +15,7 @@ let current: Snapshot = {
   loading: true,
 };
 let sequence = 0;
+let pendingRead: number | undefined;
 const listeners = new Set<() => void>();
 function update(delta: Partial<Snapshot>) {
   current = { ...current, ...delta };
@@ -24,8 +25,9 @@ export function forget() {
   sequence++;
   update({ state: undefined, signedOut: true, error: "", loading: false });
 }
-export async function refresh(): Promise<State> {
+export async function refresh({ afterWrite = false } = {}): Promise<State> {
   const seq = ++sequence;
+  pendingRead = seq;
   try {
     const data = await readState();
     if (seq === sequence)
@@ -42,16 +44,21 @@ export async function refresh(): Promise<State> {
       if (e instanceof HttpError && e.status === 401) forget();
       else
         update({
-          error: messageOf(e),
+          error: afterWrite
+            ? "Your request succeeded, but the workspace could not be refreshed. " +
+              messageOf(e)
+            : messageOf(e),
           loading: false,
           online: navigator.onLine,
         });
     }
     throw e;
+  } finally {
+    if (pendingRead === seq) pendingRead = undefined;
   }
 }
 const reload = () => {
-  void refresh().catch(() => {});
+  if (pendingRead !== sequence) void refresh().catch(() => {});
 };
 export function startPolling() {
   const online = () => {

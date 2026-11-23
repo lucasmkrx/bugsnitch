@@ -2,7 +2,6 @@
 package transport
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -13,110 +12,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
-	"github.com/lucasmkrx/bugsnitch/internal/agent"
 	"github.com/lucasmkrx/bugsnitch/internal/device"
 	"github.com/lucasmkrx/bugsnitch/internal/domain"
 	"github.com/lucasmkrx/bugsnitch/internal/runner"
+	"github.com/lucasmkrx/bugsnitch/internal/testcodex"
 )
 
-// The test executable doubles as a deterministic local app-server peer only
-// when launched through this test's private symlink. No production adapter or
-// runtime selection flag can select this fixture.
-func TestMain(m *testing.M) {
-	if filepath.Base(os.Args[0]) == "codex" {
-		os.Exit(codexProtocolFixture(os.Args[1:]))
-	}
-	os.Exit(m.Run())
-}
-func codexProtocolFixture(args []string) int {
-	if len(args) == 1 && args[0] == "--version" {
-		fmt.Println("codex-cli " + agent.Version)
-		return 0
-	}
-	if len(args) == 0 || args[0] != "app-server" {
-		return 1
-	}
-	in := bufio.NewScanner(os.Stdin)
-	encoder := json.NewEncoder(os.Stdout)
-	tid := fmt.Sprintf("fixture-thread-%d", os.Getpid())
-	turn := "fixture-turn"
-	answer := "Plan to change the approved text file."
-	for in.Scan() {
-		var req struct {
-			ID     *int
-			Method string
-			Params struct {
-				Cwd, DeveloperInstructions string
-				Input                      []struct{ Text string }
-			}
-		}
-		if json.Unmarshal(in.Bytes(), &req) != nil {
-			return 1
-		}
-		if req.ID == nil {
-			continue
-		}
-		var out any = object{}
-		switch req.Method {
-		case "initialize":
-		case "account/read":
-			out = object{"account": object{"type": "chatgpt"}}
-		case "mcpServerStatus/list":
-			out = object{"data": []any{}}
-		case "model/list":
-			out = object{"data": []any{object{"id": "fixture", "model": "fixture", "isDefault": true}}}
-		case "thread/start":
-			if strings.Contains(req.Params.DeveloperInstructions, "Return disposition ready") {
-				answer = `{"summary":"Change the approved label and run the specified validation","disposition":"ready","question":""}`
-			}
-			if strings.Contains(req.Params.DeveloperInstructions, "overall project planner") {
-				answer = `{"title":"Fixture draft","milestone":"Ready","assumptions":"Test-only protocol data","target":"","forecast":"","tickets":[{"number":1,"title":"Check label","criteria":["Label visible"],"verification":"Run fixture","estimateHours":1,"priority":1,"dependencies":[],"resources":[]}]}`
-			}
-			if strings.Contains(req.Params.DeveloperInstructions, "project manager responding") {
-				answer = "Fixture manager reply."
-			}
-			if strings.Contains(req.Params.DeveloperInstructions, "complete UTF-8 replacement") {
-				answer = ""
-			}
-			if strings.Contains(req.Params.DeveloperInstructions, "Independently inspect") {
-				answer = `{"summary":"Fixture review checked the candidate","findings":[]}`
-			}
-			out = object{"thread": object{"id": tid}, "cwd": req.Params.Cwd, "sandbox": object{"type": "readOnly"}, "model": "fixture", "modelProvider": "openai", "approvalPolicy": "never"}
-		case "turn/start":
-			if answer == "" {
-				var task struct {
-					Issue runner.Issue
-					Files map[string]string
-				}
-				if len(req.Params.Input) != 1 || json.Unmarshal([]byte(req.Params.Input[0].Text), &task) != nil {
-					return 1
-				}
-				path := "label.txt"
-				if task.Issue.Repository == "fixture/batch" {
-					path = fmt.Sprintf("label-%d.txt", task.Issue.Number)
-				}
-				if _, approved := task.Files[path]; !approved {
-					return 1
-				}
-				answer = fmt.Sprintf(`{"summary":"Updated example","edits":[{"path":%q,"content":"fixed\n"}]}`, path)
-			}
-			out = object{"turn": object{"id": turn}}
-		default:
-			return 1
-		}
-		if encoder.Encode(object{"id": *req.ID, "result": out}) != nil {
-			return 1
-		}
-		if req.Method == "turn/start" {
-			encoder.Encode(object{"method": "item/completed", "params": object{"threadId": tid, "turnId": turn, "item": object{"type": "agentMessage", "text": answer, "phase": "final_answer"}}})
-			encoder.Encode(object{"method": "turn/completed", "params": object{"threadId": tid, "turn": object{"id": turn, "status": "completed"}}})
-		}
-	}
-	return 0
-}
+func TestMain(m *testing.M) { testcodex.Main(m) }
 
 type routedTransport func(*http.Request) (*http.Response, error)
 
@@ -178,15 +82,7 @@ func TestPairedWorkerAndDashboardEvidence(t *testing.T) {
 	if err = runner.AddProject("personal", repo, checkout, runner.Config{Files: []string{"label.txt"}, Validate: []string{"/usr/bin/grep", "-Fx", "fixed", "label.txt"}}); err != nil {
 		t.Fatal(err)
 	}
-	fixturePath := t.TempDir()
-	testBinary, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.Symlink(testBinary, filepath.Join(fixturePath, "codex")); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", fixturePath+string(os.PathListSeparator)+os.Getenv("PATH"))
+	testcodex.Install(t)
 	previousCheck := runner.CheckWorker
 	runner.CheckWorker = device.CheckWorker
 	defer func() { runner.CheckWorker = previousCheck }()

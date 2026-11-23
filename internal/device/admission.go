@@ -12,11 +12,20 @@ import (
 	"github.com/lucasmkrx/bugsnitch/internal/runner"
 )
 
-func TurnStart(a runner.Summary) error { return notify(a, "turn_start") }
-func TurnEnd(a runner.Summary) error   { return notify(a, "turn_end") }
+func TurnStart(ctx context.Context, a runner.Summary) error {
+	return notifyContext(ctx, a, "turn_start")
+}
+func TurnEnd(a runner.Summary) error { return notify(a, "turn_end") }
 
 // A successfully sent request may lose its response. Advance the local cursor only after its durable acknowledgment.
 func notify(a runner.Summary, op string) error {
+	return notifyContext(context.Background(), a, op)
+}
+
+func notifyContext(ctx context.Context, a runner.Summary, op string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	raw, err := journal("SELECT data FROM profile WHERE id=1;")
 	if err != nil {
 		return err
@@ -95,16 +104,21 @@ func notify(a runner.Summary, op string) error {
 				continue
 			}
 			row.Pending = string(b)
-		} else if err = json.Unmarshal([]byte(row.Pending), &req); err != nil {
-			return err
+		} else {
+			// Replay exactly the saved request. Fields omitted by a prior
+			// operation must not inherit values from the new request.
+			req = protocol.Admission{}
+			if err = json.Unmarshal([]byte(row.Pending), &req); err != nil {
+				return err
+			}
 		}
 		var ack struct{ Sequence int64 }
-		err = send(context.Background(), p, "admission", req, &ack)
+		err = send(ctx, p, "admission", req, &ack)
 		filter := " WHERE attempt=" + name + " AND pending=" + sqlValue(row.Pending)
 		if err != nil {
 			var status statusError
 			errors.As(err, &status)
-			if req.Operation != "turn_end" && req.Operation != "finish" && (status == 409 || status == 403 || status == 400) {
+			if (req.Operation == "turn_start" || req.Operation == "admit") && (status == 409 || status == 403 || status == 400) {
 				if _, e := journal("UPDATE authority SET pending=''" + filter + ";"); e != nil {
 					return e
 				}

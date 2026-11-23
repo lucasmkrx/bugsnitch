@@ -11,7 +11,8 @@ import subprocess
 import sys
 import time
 from contextlib import contextmanager
-from urllib.parse import parse_qsl, unquote, urlencode, urlsplit, urlunsplit
+from unittest.mock import patch
+from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
 
 LOCK = 628719844
 SOURCE = Path(__file__).resolve().parents[3] / "internal/storage/migrations"
@@ -74,11 +75,15 @@ class Fixture:
         finally:
             self.sql("DROP SCHEMA " + name + " CASCADE")
 
+    def dsn(self, schema, **overrides):
+        query = urlencode({**self.params, "search_path": schema, **overrides})
+        # A PostgreSQL URI keeps the // even when the host is supplied in the query.
+        return f"{self.url.scheme}://{self.url.netloc}{self.url.path}?{query}"
+
     def launch(self, schema, timeout=12000, url=None, *, coordinate=False):
         # Exercise the same search_path extension as the Go service; do not pass
         # PGOPTIONS to the executable or let it hide broken URL handling.
-        query = urlencode({**self.params, "search_path": schema, "application_name": self.tag + "_worker"})
-        dsn = url or urlunsplit(self.url._replace(query=query))
+        dsn = url or self.dsn(schema, application_name=self.tag + "_worker")
         env = {k: v for k, v in self.env.items() if not k.startswith("PG")}
         env.update(DATABASE_URL=dsn, BUGSNITCH_MIGRATION_TIMEOUT_MS=str(timeout))
         args = [self.binary, "--coordinate"] if coordinate else [self.binary]
@@ -177,6 +182,8 @@ def concurrent_start(db, schema):
 
 def main(binary):
     db = Fixture(binary)
+    with patch.dict(os.environ, BUGSNITCH_TEST_DATABASE_URL="postgresql:///fixture?host=%2Ftmp"):
+        assert Fixture(binary).dsn("example") == "postgresql:///fixture?host=%2Ftmp&search_path=example"
     migrations = sorted(SOURCE.glob("*.sql"))
     assert migrations and migrations[0].name == "001_core.sql"
     with db.schema("fresh") as schema:
@@ -213,6 +220,32 @@ def main(binary):
         db.sql("INSERT INTO events(workspace_id,kind,subject_id) VALUES ('personal','new','third')", schema)
         assert db.sql("SELECT position FROM events WHERE kind='new'", schema) == "3"
         assert db.sql("SELECT applied_at='2001-01-01 UTC'::timestamptz FROM bugsnitch_migrations WHERE name='001_core.sql'", schema) == "t"
+    with db.schema("deployments") as schema:
+        # Build the last schema that accepted validations without a deployment ID.
+        db.sql("CREATE TABLE bugsnitch_migrations (name text PRIMARY KEY, digest text NOT NULL,"
+               "applied_at timestamptz NOT NULL DEFAULT now())", schema)
+        for migration in migrations:
+            if migration.name >= "022_validation_deployment.sql":
+                break
+            digest = hashlib.sha256(migration.read_bytes()).hexdigest()
+            db.sql("BEGIN; " + migration.read_text() +
+                   f"INSERT INTO bugsnitch_migrations(name,digest) VALUES('{migration.name}','{digest}'); COMMIT;", schema)
+        db.sql("""INSERT INTO projects(id, workspace_id, name, repository) VALUES ('p','personal','Fixture','fixture/checkout');
+            INSERT INTO incidents(id,workspace_id,project_id,source,group_key,observed,expected,steps,first_seen,last_seen,occurrences)
+            VALUES ('incident','personal','p','manual','checkout','shipping total','','',now(),now(),1);
+            INSERT INTO incident_evidence(workspace_id,project_id,incident_id,command_key,payload_hash,kind,candidate,
+                environment,build,evidence,effective_at,received_at,positive)
+            SELECT 'personal','p','incident',key,'hash',kind,'revision','fixture','build','retained evidence',
+                '2001-01-01 UTC'::timestamptz + effective * interval '1 second',
+                '2001-01-01 UTC'::timestamptz + received * interval '1 second',kind='validation'
+            FROM (VALUES ('deploy-1','deployment',1,2), ('before','validation',0,0),
+                ('tie','validation',1,2), ('first','validation',3,3),
+                ('deploy-2','deployment',4,4), ('ambiguous','validation',5,5)) v(key,kind,effective,received)""", schema)
+        db.finish(db.launch(schema), success=True)
+        assert db.sql("""SELECT command_key,coalesce(deployment_key,'') FROM incident_evidence
+                      WHERE kind='validation' ORDER BY command_key""", schema).splitlines() == [
+            "ambiguous|", "before|", "first|deploy-1", "tie|"
+        ]
     invalid = f"postgresql://fixture:{MARKER}@127.0.0.1:invalidport/local"
     db.finish(db.launch("unused", url=invalid), success=False)
     print("Verified fresh and legacy ledgers, concurrent startups, lock timeout, checksums, rollback, versioned coordination frames and redacted errors.")

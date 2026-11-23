@@ -17,13 +17,17 @@ import (
 )
 
 type fakeIssues struct {
-	bodies []string
-	last   github.Issue
+	bodies    []string
+	last      github.Issue
+	rejection *github.APIError
 }
 
 func (*fakeIssues) Close() {}
 
 func (f *fakeIssues) Create(_ context.Context, title, body string) (github.Issue, error) {
+	if f.rejection != nil {
+		return github.Issue{}, f.rejection
+	}
 	f.bodies = append(f.bodies, body)
 	n := int64(len(f.bodies) + 40)
 	f.last = github.Issue{ID: n + 200, Number: n, State: "open", Title: title, Body: body}
@@ -92,6 +96,25 @@ func TestOrderedPublicationLostResponse(t *testing.T) {
 	}
 	fake := new(fakeIssues)
 	open := func(context.Context, int64, int64, string) (issueWriter, error) { return fake, nil }
+	for _, rejection := range []*github.APIError{{Status: 429, RetryAfter: 10 * time.Minute}, {Status: 403}} {
+		fake.rejection = rejection
+		var before time.Time
+		if err = db.QueryRow("SELECT now()").Scan(&before); err != nil {
+			t.Fatal(err)
+		}
+		if err = s.step(ctx, open); err != nil {
+			t.Fatal(err)
+		}
+		var deferred bool
+		earliest := before.Add(max(time.Minute, rejection.RetryAfter))
+		if err = db.QueryRow("SELECT status='queued' AND next_run>=$2 FROM planned_issues WHERE publication_id=$1 AND local_number=7", pub, earliest).Scan(&deferred); err != nil || !deferred {
+			t.Fatalf("HTTP %d did not schedule another creation after backoff: %v", rejection.Status, err)
+		}
+		if _, err = db.Exec("UPDATE planned_issues SET next_run=now()"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fake.rejection = nil
 	if err = s.step(ctx, open); err != nil {
 		t.Fatal(err)
 	}

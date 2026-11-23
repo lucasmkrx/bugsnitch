@@ -97,7 +97,8 @@ type Attempt struct {
 	Rounds                                                            int
 }
 
-var BeforeStart, AfterFinish, BeforeTurn, AfterTurn func(Summary) error
+var BeforeStart, AfterFinish, AfterTurn func(Summary) error
+var BeforeTurn func(context.Context, Summary) error
 var idPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 var repoPattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9.-]*/[a-zA-Z0-9_.-]+$`)
 var workspacePattern = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,99}$`)

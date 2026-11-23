@@ -2,7 +2,13 @@
 
 ## Unreleased rebuild
 
-The Go service, local runner and React dashboard replace the extension. See docs/PROGRESS.md for verified behavior and outstanding milestones. The entries below describe the earlier extension.
+The Rust and Go service, local runner and React dashboard replace the extension. The entries under numbered releases describe the earlier extension. [Verification ledger](docs/PROGRESS.md)
+
+- Each environment check now belongs to a specific deployment. Deploying the same revision again requires a fresh check. Migration 022 preserves historical evidence and binds validations with an unambiguous deployment history.
+- Workers recheck prerequisite revisions before taking or renewing authority. A timed-out model turn can release its reservation even when the grant acknowledgement was lost. Foreground sync and verification checks respond to process signals.
+- Local ticket admission handles concurrent capacity changes. The runner bounds Git output and reads tracked filenames literally, including non-ASCII characters.
+- Plan publication retries definite rate-limit rejections. The dashboard renders older plans, waits for slow reads and offers a read-only retry after a successful save.
+- `make checkout-acceptance` reproduces and repairs the bundled checkout, verifies two deployments in Chromium and exercises a recurrence using local fixtures.
 
 ## 0.3.0 — Preview
 

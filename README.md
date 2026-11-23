@@ -2,7 +2,7 @@
 
 Bugsnitch coordinates development across your GitHub projects and your own computers. The hosted service keeps project state in PostgreSQL. The public HTTP server, dashboard queries, device coordination, provider job selection, GitHub App client, webhooks and hosted MCP transport run in Rust. A private Go worker handles planning, decisions and background jobs. On the runner, Rust manages worktrees, SQLite and validation, and Go runs the CLI and model adapter. A macOS runner executes locally initiated work in a separate Git worktree, stores its evidence in SQLite, and reports bounded metadata to a React dashboard. An authenticated MCP server exposes the same workspace to compatible clients.
 
-This rebuild is in development. The [verification ledger](docs/PROGRESS.md) records which workflows have run, their limits, and the outstanding live tests.
+The rebuild is an unreleased single-owner application. Run `make checkout-acceptance` to exercise incident intake, a local repair and verification of the deployed result using Bugsnitch's bundled checkout. It runs on your machine without another repository or a provider account. [Checkout exercise](examples/checkout/README.md) · [Verification ledger](docs/PROGRESS.md)
 
 ## Start the dashboard
 

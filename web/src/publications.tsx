@@ -32,10 +32,10 @@ export function Publications({
           <div className="panel-body">
             <h3>GitHub issue publication</h3>
             <p>
-              {repository(p.projectId)} · {p.document.tickets.length} proposed
-              tickets
+              {repository(p.projectId)} · {p.document.tickets?.length ?? 0}{" "}
+              proposed tickets
             </p>
-            {p.document.tickets.map((t) => {
+            {p.document.tickets?.map((t) => {
               const issue = p.issues.find((i) => i.localNumber === t.number);
               return (
                 <details key={t.number}>
@@ -45,7 +45,7 @@ export function Publications({
                       ? "#" + issue.number
                       : human(issue?.status || "proposed")}
                   </summary>
-                  <p>{t.criteria.join(" · ")}</p>
+                  <p>{t.criteria?.join(" · ") || "No criteria recorded"}</p>
                   <p>{t.verification}</p>
                   {issue?.reason && <p>{issue.reason}</p>}
                   {issue?.number && (
@@ -85,12 +85,12 @@ export function Publications({
         >
           <p>
             This authorizes Bugsnitch to create{" "}
-            {selected.document.tickets.length} issues in{" "}
+            {selected.document.tickets?.length ?? 0} issues in{" "}
             {repository(selected.projectId)}. Review the generated plan
             separately before approving execution.
           </p>
           <ul>
-            {selected.document.tickets.map((t) => (
+            {selected.document.tickets?.map((t) => (
               <li key={t.number}>{t.title}</li>
             ))}
           </ul>

@@ -107,7 +107,7 @@ fn admit(db: &Db<'_>, token: &str, a: Admission) -> Result<Value> {
         || a.sequence < 1
         || !matches!(
             a.operation.as_str(),
-            "admit" | "finish" | "turn_start" | "turn_end"
+            "admit" | "finish" | "turn_start" | "turn_end" | "turn_abandon"
         )
     {
         return Err(Error::bad("Invalid admission request"));
@@ -174,7 +174,19 @@ fn admit(db: &Db<'_>, token: &str, a: Admission) -> Result<Value> {
             }
             return Ok(receipt);
         }
-        if seq.checked_add(1) != Some(a.sequence) {
+        if a.operation == "turn_abandon" {
+            // The original device has stopped locally. Its start may have
+            // committed, or may still be in transit. Fence *that* start in
+            // either case so a delayed request cannot acquire a turn.
+            let matches_start = if row.bool(7)? {
+                row.text(1)? == "turn_start" && seq.checked_add(1) == Some(a.sequence)
+            } else {
+                seq.checked_add(2) == Some(a.sequence)
+            };
+            if !row.bool(6)? || !matches_start {
+                return Err(Error::conflict("No matching turn start to abandon"));
+            }
+        } else if seq.checked_add(1) != Some(a.sequence) {
             return Err(Error::conflict(
                 "Stale operation sequence; reconcile the original machine",
             ));
@@ -215,7 +227,7 @@ fn admit(db: &Db<'_>, token: &str, a: Admission) -> Result<Value> {
                 resources = Some(serde_json::to_string(ticket.resources())?);
                 plan_id = plan.id;
             } else {
-                if !plan::current_issue(db, ws, &a.project_id, "", a.issue_number, false, true)? {
+                if !plan::current_work(db, ws, &a.project_id, "", a.issue_number)? {
                     return Err(Error::conflict(plan::DRIFT));
                 }
                 plan_id.clear();
@@ -244,7 +256,7 @@ fn admit(db: &Db<'_>, token: &str, a: Admission) -> Result<Value> {
             if a.scope.as_ref().is_some_and(|s| s.plan_id != plan_id) {
                 return Err(Error::conflict("Plan differs from the original admission"));
             }
-            if !plan::current_issue(db, ws, &a.project_id, &plan_id, a.issue_number, false, true)? {
+            if !plan::current_work(db, ws, &a.project_id, &plan_id, a.issue_number)? {
                 return Err(Error::conflict(plan::DRIFT));
             }
             if !active || in_turn {
@@ -255,8 +267,8 @@ fn admit(db: &Db<'_>, token: &str, a: Admission) -> Result<Value> {
             }
             in_turn = true;
         }
-        "turn_end" => {
-            if !in_turn {
+        "turn_end" | "turn_abandon" => {
+            if a.operation == "turn_end" && !in_turn {
                 return Err(Error::conflict("No matching active turn"));
             }
             in_turn = false;
@@ -414,15 +426,7 @@ fn lease(db: &Db<'_>, token: &str, a: Lease) -> Result<Value> {
     if !row.bool(3)? {
         return Err(Error::conflict("Worker authority suspended"));
     }
-    if !plan::current_issue(
-        db,
-        &a.workspace_id,
-        &a.project_id,
-        plan,
-        a.issue_number,
-        false,
-        true,
-    )? {
+    if !plan::current_work(db, &a.workspace_id, &a.project_id, plan, a.issue_number)? {
         return Err(Error::conflict(plan::DRIFT));
     }
     Ok(json!({"sequence":a.sequence,"validSeconds":15}))

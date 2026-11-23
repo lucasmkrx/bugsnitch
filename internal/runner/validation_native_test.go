@@ -98,15 +98,34 @@ func validationAttempt(t *testing.T) Attempt {
 
 func waitValidationFile(t *testing.T, path string) string {
 	t.Helper()
-	until := time.Now().Add(8 * time.Second)
-	for time.Now().Before(until) {
-		if b, err := os.ReadFile(path); err == nil && len(b) != 0 {
-			return strings.TrimSpace(string(b))
-		}
-		time.Sleep(10 * time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 8*time.Second)
+	defer cancel()
+	value, err := validationHandshake(ctx, path, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Fatal("validator handshake timed out")
-	return ""
+	return value
+}
+
+func validationHandshake(ctx context.Context, path string, exited <-chan struct{}) (string, error) {
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		data, err := os.ReadFile(path)
+		if err == nil && len(data) != 0 {
+			return strings.TrimSpace(string(data)), nil
+		}
+		if err != nil && !os.IsNotExist(err) {
+			return "", err
+		}
+		select {
+		case <-ctx.Done():
+			return "", ctx.Err()
+		case <-exited:
+			return "", errors.New("worker exited before its validator handshake")
+		case <-tick.C:
+		}
+	}
 }
 
 func TestValidationSupervisesDescendants(t *testing.T) {
@@ -242,7 +261,7 @@ func TestSupervisorLossPreservesPendingStop(t *testing.T) {
 		}
 		return agent.Result{Text: `{"summary":"Updated fixture","edits":[{"path":"example.txt","content":"fixed\n"}]}`}, nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	a, err := Start(ctx, "personal", issue.Repository, issue)
 	if err != nil {
@@ -250,11 +269,30 @@ func TestSupervisorLossPreservesPendingStop(t *testing.T) {
 	}
 	var released bool
 	AfterFinish = func(Summary) error { released = true; return nil }
-	done := make(chan error, 1)
-	go func() { _, err := Continue(ctx, a.ID, ""); done <- err }()
+	done := make(chan struct{})
+	var executionErr error
+	go func() {
+		defer close(done)
+		_, executionErr = Continue(ctx, a.ID, "")
+	}()
 	release := func() { _ = os.WriteFile(filepath.Join(signals, "release"), nil, 0600) }
-	defer release()
-	pid, err := strconv.Atoi(waitValidationFile(t, filepath.Join(signals, "supervisor")))
+	defer func() {
+		// Keep the fixture journal and the runner hooks installed until the
+		// invocation has also exited on a failed handshake/assertion.
+		release()
+		cancel()
+		<-done
+	}()
+	ready, err := validationHandshake(ctx, filepath.Join(signals, "supervisor"), done)
+	if err != nil {
+		select {
+		case <-done:
+			t.Fatalf("validator handshake: %v; worker: %v", err, executionErr)
+		default:
+			t.Fatal(err)
+		}
+	}
+	pid, err := strconv.Atoi(ready)
 	if err != nil || pid <= 1 {
 		t.Fatal("fixture did not identify its own supervisor")
 	}
@@ -277,8 +315,9 @@ func TestSupervisorLossPreservesPendingStop(t *testing.T) {
 	}
 	frozen = false
 	release()
-	if err := <-done; !errors.Is(err, errValidationUnconfirmed) {
-		t.Fatal("unconfirmed supervisor outcome was lost", err)
+	<-done
+	if !errors.Is(executionErr, errValidationUnconfirmed) {
+		t.Fatal("unconfirmed supervisor outcome was lost", executionErr)
 	}
 	current, err := Get(a.ID)
 	if err != nil || current.State != "running" || current.Phase != "validate" || released {

@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -63,8 +62,8 @@ func verificationIssue(ctx context.Context, selected Issue) (Issue, error) {
 			cmd := exec.CommandContext(read, gh, "api", "--hostname", "github.com", "--method", "GET", path)
 			cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1")
 			output := &capped{max: 1 << 20}
-			cmd.Stdout = struct{ io.Writer }{output}
-			if cmd.Run() != nil || output.overflow || json.Unmarshal(output.Bytes(), &record) != nil {
+			cmd.Stdout = output
+			if cmd.Run() != nil || output.overflow || json.Unmarshal(output.buffer.Bytes(), &record) != nil {
 				return Issue{}, errors.New("unable to read the selected GitHub issue with gh")
 			}
 			err = nil

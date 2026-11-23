@@ -24,6 +24,7 @@ import (
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 	"github.com/lucasmkrx/bugsnitch/internal/runner"
+	"github.com/lucasmkrx/bugsnitch/internal/testcodex"
 )
 
 func TestLocalRunTwoAttemptsAndFencedConflict(t *testing.T) {
@@ -183,15 +184,7 @@ func exerciseParallelLocalRun(t *testing.T, parallel, localTurns, deviceTurns in
 	if err = runner.AddProject("personal", repo, dir, runner.Config{Files: files, Validate: append([]string{"/usr/bin/grep", "-Fxq", "fixed"}, files...)}); err != nil {
 		t.Fatal(err)
 	}
-	executable, err := os.Executable()
-	if err != nil {
-		t.Fatal(err)
-	}
-	bin := t.TempDir()
-	if err = os.Symlink(executable, filepath.Join(bin, "codex")); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	testcodex.Install(t)
 	start, finish, tstart, tend, lease := runner.BeforeStart, runner.AfterFinish, runner.BeforeTurn, runner.AfterTurn, runner.CheckWorker
 	t.Cleanup(func() {
 		runner.BeforeStart, runner.AfterFinish, runner.BeforeTurn, runner.AfterTurn, runner.CheckWorker = start, finish, tstart, tend, lease

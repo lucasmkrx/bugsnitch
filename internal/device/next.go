@@ -14,7 +14,7 @@ import (
 	"github.com/lucasmkrx/bugsnitch/internal/runner"
 )
 
-func next(args []string, out io.Writer) error {
+func next(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("next", flag.ContinueOnError)
 	pr := fs.String("project", "", "assigned project ID")
 	if err := fs.Parse(args); err != nil {
@@ -27,7 +27,7 @@ func next(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	rec, err := selector.recommend(context.Background(), false)
+	rec, err := selector.recommend(ctx, false)
 	if err != nil {
 		return err
 	}

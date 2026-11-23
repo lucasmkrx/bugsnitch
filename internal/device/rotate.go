@@ -10,7 +10,7 @@ import (
 	"fmt"
 )
 
-func rotate() error {
+func rotate(ctx context.Context) error {
 	p, err := getProfile()
 	if err != nil {
 		return err
@@ -34,7 +34,7 @@ func rotate() error {
 		}
 	}
 	var ack struct{ DeviceID string }
-	err = send(context.Background(), p, "rotate", map[string]any{"protocol": 1, "credential": p.NextCredential}, &ack)
+	err = send(ctx, p, "rotate", map[string]any{"protocol": 1, "credential": p.NextCredential}, &ack)
 	if err != nil {
 		return err
 	}

@@ -43,15 +43,24 @@ func SetLocalLimits(tickets, turns int) (LocalLimits, error) {
 // capacity denial. Other failures (including uncertain acknowledgments) must
 // follow the ordinary recovery path without starting another turn.
 func reserveWorkerTurn(ctx context.Context, a *Attempt) (func() error, error) {
-	deadline := time.Now().Add(time.Duration(a.Project.Config.forStage(a.Phase).TimeoutSeconds) * time.Second)
+	wait, cancel := context.WithTimeoutCause(ctx, time.Duration(a.Project.Config.forStage(a.Phase).TimeoutSeconds)*time.Second, errModelCapacity)
+	defer cancel()
 	for {
-		if err := ctx.Err(); err != nil {
+		if err := context.Cause(wait); err != nil {
 			return nil, err
 		}
 		release, err := acquireModel(a.ID)
 		if err == nil {
-			err = hook(BeforeTurn, a)
+			err = context.Cause(wait)
+			if err == nil && BeforeTurn != nil {
+				err = BeforeTurn(wait, admissionSubject(a))
+			}
 			if err == nil {
+				if expired := context.Cause(wait); expired != nil {
+					// An acknowledgment can cross the deadline. Release this
+					// known grant without ever invoking the model.
+					return nil, errors.Join(expired, hook(AfterTurn, a), release())
+				}
 				return release, nil
 			}
 			if releaseErr := release(); releaseErr != nil {
@@ -61,21 +70,15 @@ func reserveWorkerTurn(ctx context.Context, a *Attempt) (func() error, error) {
 		if a.LocalRunScope == nil || (!errors.Is(err, errModelCapacity) && !errors.Is(err, ErrHostedTurnCapacity)) {
 			return nil, err
 		}
-		if time.Until(deadline) <= 0 {
-			return nil, err
-		}
-		if _, err := lease(ctx, subject(a), false); err != nil {
+		if _, err := lease(wait, subject(a), false); err != nil {
 			return nil, err
 		}
 		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(min(time.Second, time.Until(deadline))):
+		case <-wait.Done():
+			return nil, context.Cause(wait)
+		case <-time.After(time.Second):
 		}
-		if !time.Now().Before(deadline) {
-			return nil, err
-		}
-		if err := boundary(ctx, a.ID); err != nil {
+		if err := boundary(wait, a.ID); err != nil {
 			return nil, err
 		}
 	}

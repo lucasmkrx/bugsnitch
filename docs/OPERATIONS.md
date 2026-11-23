@@ -26,6 +26,8 @@ Follow the [macOS build instructions](../README.md#verification-and-operations) 
 
 ## Update, backup and restore
 
+Upgrade the hosted service before updating runners. The current service accepts older runners. A current runner recovering an unacknowledged turn start needs a service that understands `turn_abandon`. It keeps the recovery request in its journal until the service acknowledges it. For an older runner’s waiting attempt that lost a local ticket slot before admission, inspect the attempt and use `local-continue` on its original device when capacity is available.
+
 1. Stop new dispatch, reconcile active local work and record the deployed software revision. Take a PostgreSQL custom-format backup with `pg_dump -Fc --no-owner -f bugsnitch.dump "$DATABASE_URL"`. Protect the dump as sensitive workspace data.
 2. Restore into an empty, isolated database with `pg_restore --exit-on-error --no-owner --dbname="$RESTORE_DATABASE_URL" bugsnitch.dump`. Disable provider credentials while verifying the restored system, to avoid running two writers for the same installation.
 3. Start the new service against the isolated database. Install all four executables from `make server` together with the platform libpq runtime, or use the packaged container. At startup the domain worker runs the matching PostgreSQL migrator with a bounded deadline. Migrations run transactionally under a PostgreSQL advisory lock. Digest mismatches abort startup. Check /readyz, scoped records, device revocation and integration intents before switching traffic. Roll back using a compatible service binary and the saved database. Reconcile provider side effects that occurred since the backup.

@@ -39,6 +39,7 @@ Use the public HTTPS service origin on another computer. Each project checkout n
 - Use `bugsnitch next --project PROJECT_ID` to inspect the next eligible issue from the approved plan. Start a bounded local pass with `bugsnitch local-run --project PROJECT_ID --limit 2 --parallel 2`. Each worker validates its own candidate and collects separate review evidence. Owner questions pause the affected work. Enrolled computers share ticket and model-turn limits. Initial limits are two active tickets per workspace and two model turns per workspace and per device.
 - Record deployment and validation evidence for the specific incident, environment and build. PR readiness, merging and deployment have separate evidence requirements.
 - Use the local MCP bridge or an OAuth-configured hosted MCP connection to read project and decision state, record reports and answer current decisions. Dashboard messages persist with their inference availability status.
+- For an issue whose code has already deployed, use `bugsnitch local-verify` to record a passed, failed or pending result with evidence for each criterion. It records the build and environment without creating a commit. [Verification walkthrough](docs/RUNNER.md#verify-an-issue-on-an-existing-deployment)
 
 ## Verification and operations
 

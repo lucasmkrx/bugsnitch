@@ -83,6 +83,35 @@ A worker that requests an owner choice saves the question in `local-show --id AT
 
 The terminal emits one JSON record per observed admission or outcome. A waiting or cancelled outcome includes the reason. A failed admission or execution causes a nonzero exit after already admitted work settles. A service or GitHub read failure stops further selection. If an existing worker frees capacity, the same invocation can request another new ticket within its original limit. An interrupt cancels the foreground workers. No timer or server command starts another invocation. Successful output identifies local candidates; publication, merge and deployment retain their separate approval paths.
 
+## Verify an issue on an existing deployment
+
+Use `local-verify` when the code is already deployed and the issue needs observations. The command reads the open GitHub issue and records its identity, requirements digest, reviewed checklist, environment, build revision and one result per criterion in the local journal. It works from outside a checkout. Private issues can use `BUGSNITCH_GITHUB_READ_TOKEN` or the signed-in GitHub CLI. The verification run uses no model turn and creates no branch, commit or PR.
+
+Write the reviewed criteria as a JSON array of strings. In this example, `criteria.json` contains `["A second team member can reopen the saved note"]`. For a manual walkthrough, write the observations to a file.
+
+```json
+[
+  {
+    "criterion": "A second team member can reopen the saved note",
+    "result": "pending",
+    "evidence": "The staging build responded. The second test account still needs to sign in."
+  }
+]
+```
+
+```sh
+bin/bugsnitch local-verify --repository OWNER/REPO --number ISSUE_NUMBER \
+  --criteria criteria.json --environment staging --revision "$DEPLOYED_REVISION" \
+  --observer "Walkthrough operator" --observations observations.json
+bin/bugsnitch local-verification --id RECEIPT_ID
+```
+
+Use an immutable deployment name, image digest or commit actually serving the tested environment. Each passed or failed row needs a concrete observation and a tested revision. Each pending row needs a reason. If every row is pending and the build is unknown, omit `--revision`. A failed row makes the overall result failed. Otherwise any pending row keeps it pending. The CLI prints the receipt for all three outcomes. Scripts that gate a release must inspect its `result` field. An invalid submission or unavailable issue returns a command error.
+
+For an automated check, replace `--observations` with `-- /absolute/path/to/check` followed by its arguments. Bugsnitch sends the canonical issue, environment and revision as JSON on standard input. The trusted check inspects the target, then writes one JSON object with the observed `environment`, `revision` and `observations` array. It exits zero when it produced a valid report, even if an assertion failed. An unexpected exit, a target mismatch or an incomplete checklist cannot produce a passing receipt. The check runs in a temporary working directory with a private home. Pass any dedicated test configuration by file path and exclude credentials from observations.
+
+Receipts distinguish a check launched by Bugsnitch (`runner-check`), manual observations (`operator`), and output imported from a named external check (`--source check --observer NAME --observations -`). A receipt stays on the runner until the operator shares it. Issue closure is a separate action.
+
 ## Recovery and retention
 
 The SQLite journal keeps attempt identity, base and candidate revisions, approved files, versioned issue selection, worktree association and local artifacts. Duplicate starts for an existing issue return the existing ID. Use `local-retry --id ATTEMPT_ID --issue /private/path/current-issue.json --reason "Concrete reason"` for a failed or cancelled attempt when the problem has been addressed. Each explicit retry gets a separate ID, base, branch, worktree and evidence. The three-attempt budget includes the initial attempt. Repeating a prior retry returns the latest ID and does not start another worker. Concurrent continuations use an optimistic version check and per-attempt OS lock. Each stage acquires the required admission through the paired service. A model permit is released after the local app-server process exits.

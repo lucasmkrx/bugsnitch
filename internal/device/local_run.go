@@ -100,9 +100,7 @@ func LocalRun(ctx context.Context, args []string, out io.Writer) error {
 			stop()
 		}
 	}
-	finish := func() {
-		result := <-outcomes
-		active--
+	record := func(result result) {
 		a := result.attempt
 		u := update{Event: "outcome", Issue: result.issue, Attempt: a.ID, Phase: a.Phase, State: a.State}
 		if result.err != nil {
@@ -112,6 +110,10 @@ func LocalRun(ctx context.Context, args []string, out io.Writer) error {
 			u.Reason = a.Message
 		}
 		emit(u)
+	}
+	finish := func() {
+		record(<-outcomes)
+		active--
 	}
 	var original *protocol.RunScope
 	seen := make(map[int]bool)
@@ -155,21 +157,33 @@ func LocalRun(ctx context.Context, args []string, out io.Writer) error {
 			failures = append(failures, errors.New("service repeated an already selected issue; inspect the original attempt"))
 			break
 		}
+		start := make(chan result, 1)
+		go func() {
+			admitted := false
+			a, err := runner.StartPass(run, p.enrolled.Enrollment.Workspace, issue, *scope, func(s runner.Summary) {
+				admitted = true
+				start <- result{attempt: runner.Attempt{Summary: s}, issue: issue.Number}
+			})
+			outcome := result{a, issue.Number, err}
+			if admitted {
+				outcomes <- outcome
+			} else {
+				start <- outcome
+			}
+		}()
+		first := <-start
+		if first.err != nil {
+			if active > 0 && errors.Is(first.err, runner.ErrTicketCapacity) {
+				finish()
+				continue
+			}
+			record(first)
+			break
+		}
+		s := first.attempt
 		seen[issue.Number] = true
 		active++
 		launched++
-		admitted := make(chan runner.Summary, 1)
-		go func() {
-			// One notification per work item. A pre-admission failure closes
-			// this channel without authorizing the next recommendation.
-			a, e := runner.StartPass(run, p.enrolled.Enrollment.Workspace, issue, *scope, func(s runner.Summary) { admitted <- s })
-			close(admitted)
-			outcomes <- result{a, issue.Number, e}
-		}()
-		s, ok := <-admitted
-		if !ok {
-			break
-		}
 		emit(update{Event: "admitted", Issue: issue.Number, Attempt: s.ID, Phase: s.Phase, State: s.State})
 	}
 	for active > 0 {

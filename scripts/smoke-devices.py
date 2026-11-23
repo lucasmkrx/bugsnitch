@@ -9,7 +9,6 @@ from pathlib import Path
 import secrets
 import sys
 from urllib.error import HTTPError
-from urllib.parse import urlencode, urlunsplit
 from urllib.request import build_opener, HTTPCookieProcessor, Request
 
 from smoke import port, server
@@ -25,7 +24,7 @@ def check(db, schema):
     origin = "http://" + address
     env = {k: os.environ[k] for k in ("HOME", "PATH", "SSL_CERT_FILE", "SSL_CERT_DIR") if k in os.environ}
     env.update(BUGSNITCH_LISTEN=address, BUGSNITCH_ORIGIN=origin, BUGSNITCH_OWNER_TOKEN=owner_secret,
-               DATABASE_URL=urlunsplit(db.url._replace(query=urlencode({**db.params, "search_path": schema}))))
+               DATABASE_URL=db.dsn(schema))
     browser = build_opener(HTTPCookieProcessor(CookieJar()))
     machine = build_opener()
     marker = "SYNTHETIC_DEVICE_SECRET"

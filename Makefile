@@ -1,7 +1,8 @@
-.PHONY: dev build test server runner helpers journal migrator provider macos macos-amd64 macos-arm64 plugin
+.PHONY: dev build test checkout-acceptance server runner helpers journal migrator provider macos macos-amd64 macos-arm64 plugin
 
 CARGO_TARGET_DIR ?= target
 GO_TEST_FLAGS ?=
+TEST_HELPERS = BUGSNITCH_TEST_SERVER="$(CURDIR)/bin/bugsnitch-server" BUGSNITCH_JOURNAL_HELPER="$(CURDIR)/bin/bugsnitch-runner-journal" BUGSNITCH_MIGRATOR="$(CURDIR)/bin/bugsnitch-server-migrate" BUGSNITCH_PROVIDER="$(CURDIR)/bin/bugsnitch-provider"
 
 dev:
 	./scripts/dev
@@ -37,7 +38,13 @@ provider:
 
 test: journal server
 	cargo test --locked --workspace --target-dir "$(CARGO_TARGET_DIR)"
-	BUGSNITCH_TEST_SERVER="$(CURDIR)/bin/bugsnitch-server" BUGSNITCH_JOURNAL_HELPER="$(CURDIR)/bin/bugsnitch-runner-journal" BUGSNITCH_MIGRATOR="$(CURDIR)/bin/bugsnitch-server-migrate" BUGSNITCH_PROVIDER="$(CURDIR)/bin/bugsnitch-provider" go test $(GO_TEST_FLAGS) ./...
+	$(TEST_HELPERS) go test $(GO_TEST_FLAGS) ./...
+
+checkout-acceptance: journal server
+	npm --prefix web ci
+	npm --prefix examples/checkout ci
+	npm --prefix examples/checkout run build:sdk
+	$(TEST_HELPERS) sh scripts/checkout-acceptance
 
 macos: macos-arm64 macos-amd64
 

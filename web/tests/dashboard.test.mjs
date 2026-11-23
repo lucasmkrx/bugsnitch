@@ -112,6 +112,134 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
       : { channel: "chrome", headless: true },
   );
   t.after(() => browser.close());
+  await t.test(
+    "slow workspace reads survive the next polling interval",
+    async (t) => {
+      const page = await browser.newPage();
+      t.after(() => page.close());
+      await page.clock.install();
+      let reads = 0;
+      const started = Promise.withResolvers();
+      const release = Promise.withResolvers();
+      await page.route("**/api/v1/state", async (route) => {
+        const state = fixture();
+        const read = ++reads;
+        if (read === 1) {
+          started.resolve();
+          await release.promise;
+        }
+        state.projects[0].name = "Workspace read " + read;
+        await route.fulfill({ json: state });
+      });
+      await page.goto(url);
+      await started.promise;
+      await page.clock.fastForward(13000);
+      release.resolve();
+      await page.getByRole("link", { name: /^Workspace read 1 / }).waitFor();
+      assert.equal(reads, 1);
+      await page.clock.fastForward(13000);
+      await page.getByRole("link", { name: /^Workspace read 2 / }).waitFor();
+    },
+  );
+  await t.test(
+    "legacy plans render and an acknowledged plan save is not retried",
+    async (t) => {
+      const page = await browser.newPage();
+      t.after(() => page.close());
+      const state = fixture();
+      const legacy = {
+        id: "legacy",
+        projectId: "p1",
+        title: "Legacy plan",
+        version: 1,
+        status: "approved",
+        executionOrder: [1],
+        document: {
+          milestone: "First release",
+          tickets: [{ number: 1, title: "Legacy ticket", criteria: null }],
+        },
+      };
+      state.plans = [
+        legacy,
+        {
+          ...legacy,
+          id: "empty",
+          title: "Plan without tickets",
+          document: { tickets: null },
+        },
+      ];
+      let rejectWrite = true,
+        failRead = false,
+        writes = 0;
+      await page.route("**/api/v1/state", (route) =>
+        failRead
+          ? route.fulfill({
+              status: 503,
+              json: { error: "Snapshot unavailable" },
+            })
+          : route.fulfill({ json: state }),
+      );
+      await page.route("**/api/v1/plans", (route) => {
+        writes++;
+        if (rejectWrite)
+          return route.fulfill({
+            status: 409,
+            json: { error: "Project changed" },
+          });
+        const { plan } = route.request().postDataJSON();
+        state.projects[0].version++;
+        state.plans.push({
+          ...legacy,
+          id: "new",
+          title: plan.title,
+          document: plan,
+          status: "proposed",
+        });
+        failRead = true;
+        return route.fulfill({ status: 201, json: { id: "new" } });
+      });
+      await page.goto(url + "/#/plans?project=p1");
+      await page
+        .getByRole("heading", { name: "Plan without tickets" })
+        .waitFor();
+      await page.getByText("#1 · Legacy ticket").click();
+      await page.getByText("No criteria recorded").waitFor();
+      await page.getByRole("button", { name: "Draft plan" }).click();
+      const editor = page.getByRole("dialog");
+      await editor
+        .getByLabel("Deliverable", { exact: true })
+        .fill("Saved version");
+      await editor.getByLabel("Milestone", { exact: true }).fill("Release");
+      await editor.getByLabel("GitHub issue number").fill("7");
+      await editor.getByLabel("Ticket title").fill("Show acceptance criteria");
+      await editor
+        .getByLabel(/Acceptance criteria/)
+        .fill("Criteria are readable.");
+      await editor.getByLabel("Verification method").fill("Browser test");
+      await editor.getByRole("button", { name: "Save draft" }).click();
+      await editor
+        .getByRole("alert")
+        .filter({ hasText: "Project changed" })
+        .waitFor();
+      assert.equal(writes, 1);
+      rejectWrite = false;
+      await editor.getByRole("button", { name: "Save draft" }).click();
+      await editor.waitFor({ state: "hidden" });
+      await page
+        .getByText(
+          /Your request succeeded, but the workspace could not be refreshed/,
+        )
+        .waitFor();
+      assert.equal(
+        await page.getByRole("button", { name: "Draft plan" }).isDisabled(),
+        true,
+      );
+      failRead = false;
+      await page.getByRole("button", { name: "Refresh", exact: true }).click();
+      await page.getByRole("heading", { name: "Saved version" }).waitFor();
+      assert.equal(writes, 2);
+    },
+  );
   for (const viewport of [
     { width: 1440, height: 900 },
     { width: 360, height: 800 },

@@ -51,7 +51,7 @@ func nativeOperation(ctx context.Context, mode string, request, response any) er
 		Value   json.RawMessage `json:"value"`
 		Error   string          `json:"error"`
 	}
-	if err = json.Unmarshal(output.Bytes(), &reply); err != nil || reply.Version != 1 {
+	if err = json.Unmarshal(output.buffer.Bytes(), &reply); err != nil || reply.Version != 1 {
 		return errors.New("incompatible native runner response")
 	}
 	if reply.Error != "" {

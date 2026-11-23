@@ -12,7 +12,9 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/lucasmkrx/bugsnitch/internal/agent"
@@ -91,7 +93,7 @@ func run(ctx context.Context, args []string) error {
 	case "share-diff":
 		return device.Share(args[1:])
 	case "next", "pair", "rotate", "unpair", "register", "sync", "status":
-		return device.RunCLI(args)
+		return device.RunCLIContext(ctx, args)
 	case "doctor":
 		fmt.Printf("Platform %s/%s\n", runtime.GOOS, runtime.GOARCH)
 		if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
@@ -369,7 +371,12 @@ func main() {
 	runner.BindGeneral, runner.SubmitGeneral = device.BindGeneral, device.SubmitGeneral
 	runner.BeforeStart, runner.AfterFinish = device.Admit, device.Finish
 	runner.BeforeTurn, runner.AfterTurn = device.TurnStart, device.TurnEnd
-	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+	signals := []os.Signal{os.Interrupt}
+	// These commands own long-running work and must finish cleanup on SIGTERM.
+	if len(os.Args) > 1 && (os.Args[1] == "sync" || os.Args[1] == "local-verify" && slices.Contains(os.Args[2:], "--")) {
+		signals = append(signals, syscall.SIGTERM)
+	}
+	ctx, cancel := signal.NotifyContext(context.Background(), signals...)
 	defer cancel()
 	if err := run(ctx, os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -38,6 +38,7 @@ jobs:
           python3 scripts/smoke.py
       - run: npm --prefix web run test:browser
       - run: node --test examples/checkout/telemetry.test.mjs
+      - run: make checkout-acceptance
       - name: Start the packaged hosted stack
         env:
           POSTGRES_PASSWORD: ephemeral-ci-db

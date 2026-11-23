@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strconv"
 
+	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 	"github.com/lucasmkrx/bugsnitch/internal/runner"
 )
 
@@ -49,11 +50,30 @@ func completeEnding(id string) error {
 		return runner.ErrDeviceUnauthorized
 	}
 	if rec.Pending != "" {
-		var op struct{ Operation string }
+		var op protocol.Admission
 		if err = json.Unmarshal([]byte(rec.Pending), &op); err != nil {
 			return err
 		}
-		if op.Operation != "turn_end" && op.Operation != "finish" {
+		switch op.Operation {
+		case "turn_start":
+			// Finish records quiescence under the owning attempt lock. The
+			// start may have committed remotely. Fence its exact sequence
+			// without requesting another model grant, even after a restart.
+			op.Operation = "turn_abandon"
+			op.Sequence++
+			body, err := json.Marshal(op)
+			if err != nil {
+				return err
+			}
+			n, err := journal("UPDATE authority SET pending=" + sqlValue(string(body)) + " WHERE attempt=" + key + " AND device=" + sqlValue(rec.Device) + " AND pending=" + sqlValue(rec.Pending) + "; SELECT changes();")
+			if err != nil {
+				return err
+			}
+			if n != "1" {
+				return errors.New("worker admission changed while reconciling its ending")
+			}
+		case "turn_abandon", "turn_end", "finish":
+		default:
 			return errors.New("unconfirmed worker start requires reconciliation on the original computer")
 		}
 	}

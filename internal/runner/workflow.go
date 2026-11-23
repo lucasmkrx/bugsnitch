@@ -72,11 +72,30 @@ func create(ctx context.Context, w, r string, i Issue, previous, reason string, 
 	if previous != "" {
 		generation = "SELECT generation+1 FROM journal_attempts WHERE id=" + literal(previous) + " AND id=(" + latest + ") AND generation<3 AND json_extract(data,'$.state') IN ('failed','cancelled')"
 	}
-	b, err := query(fmt.Sprintf("BEGIN IMMEDIATE; INSERT OR IGNORE INTO journal_attempts SELECT %s,%s,%s,%d,1,%s,generation FROM (SELECT (%s) AS generation) WHERE generation IS NOT NULL; %s; COMMIT;", literal(id), literal(w), literal(p.Repository), i.Number, packed(&a), generation, latest))
+	// Batch selection is advisory. Publish a fresh running attempt and take its
+	// ticket in one write so a lost race cannot leave a never-admitted row.
+	capacityCondition := ""
+	if admitted != nil {
+		unlock, err := attemptLock(id)
+		if err != nil {
+			return Attempt{}, err
+		}
+		defer unlock()
+		if err := verifyIssue(ctx, i); err != nil {
+			return Attempt{}, err
+		}
+		a.State = "running"
+		a.Version = 2
+		capacityCondition = " AND (SELECT count(*) FROM journal_attempts WHERE json_extract(data,'$.state')='running') < (SELECT ticket_limit FROM runner_capacity WHERE id=1)"
+	}
+	b, err := query(fmt.Sprintf("BEGIN IMMEDIATE; INSERT OR IGNORE INTO journal_attempts SELECT %s,%s,%s,%d,%d,%s,generation FROM (SELECT (%s) AS generation) WHERE generation IS NOT NULL%s; %s; COMMIT;", literal(id), literal(w), literal(p.Repository), i.Number, a.Version, packed(&a), generation, capacityCondition, latest))
 	if err != nil {
 		return a, err
 	}
 	if prior := strings.TrimSpace(string(b)); prior != id {
+		if prior == "" && admitted != nil {
+			return Attempt{}, ErrTicketCapacity
+		}
 		existing, e := Get(prior)
 		if e != nil {
 			return a, e
@@ -86,7 +105,10 @@ func create(ctx context.Context, w, r string, i Issue, previous, reason string, 
 		}
 		return existing, errors.New("this issue already has a local attempt; inspect its recorded state")
 	}
-	return advance(ctx, &a, "", admitted)
+	if admitted != nil {
+		return runClaimed(ctx, &a, admitted)
+	}
+	return advance(ctx, &a, "")
 }
 func Continue(ctx context.Context, id, feedback string) (Attempt, error) {
 	a, err := Get(id)
@@ -102,17 +124,20 @@ func Continue(ctx context.Context, id, feedback string) (Attempt, error) {
 	if a.OwnerQuestion != "" && a.OwnerAnswer == "" && strings.TrimSpace(feedback) == "" {
 		return a, errors.New("answer the recorded owner question with --feedback before continuing")
 	}
-	return advance(ctx, &a, feedback, nil)
+	return advance(ctx, &a, feedback)
 }
 func hook(f func(Summary) error, a *Attempt) error {
 	if f == nil {
 		return nil
 	}
+	return f(admissionSubject(a))
+}
+func admissionSubject(a *Attempt) Summary {
 	s := subject(a)
 	s.CriteriaHash = domain.CriteriaHash(a.Issue.Criteria)
-	return f(s)
+	return s
 }
-func advance(ctx context.Context, a *Attempt, feedback string, admitted func(Summary)) (Attempt, error) {
+func advance(ctx context.Context, a *Attempt, feedback string) (Attempt, error) {
 	unlock, err := attemptLock(a.ID)
 	if err != nil {
 		return *a, err
@@ -136,6 +161,10 @@ func advance(ctx context.Context, a *Attempt, feedback string, admitted func(Sum
 		}
 		return current, err
 	}
+	return runClaimed(ctx, a, nil)
+}
+
+func runClaimed(ctx context.Context, a *Attempt, admitted func(Summary)) (Attempt, error) {
 	if err := hook(BeforeStart, a); err != nil {
 		a.State = "waiting"
 		a.Message = "Execution admission unavailable"
@@ -154,7 +183,7 @@ func advance(ctx context.Context, a *Attempt, feedback string, admitted func(Sum
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go watchControls(runCtx, a.ID, cancel, done)
-	err = steps(runCtx, a, admitted != nil)
+	err := steps(runCtx, a, admitted != nil)
 	cancel()
 	<-done
 	if errors.Is(err, errValidationUnconfirmed) {
@@ -424,11 +453,13 @@ func steps(ctx context.Context, a *Attempt, ordinaryPass bool) error {
 	if err != nil {
 		return err
 	}
-	delta, err := git(a.Worktree, "diff", "--name-only", a.BaseSHA, a.CandidateSHA, "--")
+	paths, err = changedPaths(a.Worktree, a.BaseSHA, a.CandidateSHA)
 	if err != nil {
 		return err
 	}
-	paths = strings.Split(delta, "\n")
+	if len(paths) == 0 {
+		return errors.New("candidate has no changes from the base")
+	}
 	for _, p := range paths {
 		if !slices.Contains(a.Project.Config.Files, p) {
 			return errors.New("candidate includes an unapproved file")

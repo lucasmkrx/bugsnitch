@@ -141,7 +141,7 @@ func validURL(raw string) bool {
 	u, err := url.Parse(raw)
 	return err == nil && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && u.Path == "" && (u.Scheme == "https" || u.Scheme == "http" && (u.Hostname() == "localhost" || net.ParseIP(u.Hostname()).IsLoopback()))
 }
-func pair(args []string) error {
+func pair(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("pair", flag.ContinueOnError)
 	origin := fs.String("server", "", "Bugsnitch service origin")
 	code := fs.String("code", "", "one-time code")
@@ -166,7 +166,7 @@ func pair(args []string) error {
 	} else if (*origin != "" && *origin != p.Server) || (*code != "" && *code != p.Code) {
 		return errors.New("another pairing is pending; unpair before replacing it")
 	}
-	err = send(context.Background(), p, "pair", protocol.Pair{Protocol: 1, Code: p.Code, Credential: p.Credential, Platform: runtime.GOOS + "/" + runtime.GOARCH}, &p.Enrollment)
+	err = send(ctx, p, "pair", protocol.Pair{Protocol: 1, Code: p.Code, Credential: p.Credential, Platform: runtime.GOOS + "/" + runtime.GOARCH}, &p.Enrollment)
 	if err != nil {
 		return err
 	}
@@ -180,7 +180,7 @@ func pair(args []string) error {
 	}
 	return nil
 }
-func register(args []string) error {
+func register(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("register", flag.ContinueOnError)
 	project := fs.String("project", "", "assigned project id")
 	path := fs.String("path", "", "local Git root")
@@ -208,11 +208,11 @@ func register(args []string) error {
 	if err != nil {
 		return err
 	}
-	top, err := exec.Command("git", "-C", root, "rev-parse", "--show-toplevel").Output()
+	top, err := exec.CommandContext(ctx, "git", "-C", root, "rev-parse", "--show-toplevel").Output()
 	if err != nil || strings.TrimSpace(string(top)) != root {
 		return errors.New("select the canonical Git checkout root")
 	}
-	remote, err := exec.Command("git", "-C", root, "remote", "get-url", "origin").Output()
+	remote, err := exec.CommandContext(ctx, "git", "-C", root, "remote", "get-url", "origin").Output()
 	if err != nil {
 		return errors.New("checkout has no origin")
 	}
@@ -327,16 +327,18 @@ func syncOnce(ctx context.Context) error {
 	}
 	return completionErr
 }
-func RunCLI(args []string) error {
+func RunCLI(args []string) error { return RunCLIContext(context.Background(), args) }
+
+func RunCLIContext(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "next":
-		return next(args[1:], os.Stdout)
+		return next(ctx, args[1:], os.Stdout)
 	case "rotate":
-		return rotate()
+		return rotate(ctx)
 	case "pair":
-		return pair(args[1:])
+		return pair(ctx, args[1:])
 	case "register":
-		return register(args[1:])
+		return register(ctx, args[1:])
 	case "unpair":
 		_, err := journal("BEGIN IMMEDIATE;DELETE FROM mappings;DELETE FROM profile;COMMIT;")
 		if err == nil {
@@ -356,20 +358,27 @@ func RunCLI(args []string) error {
 		return nil
 	case "sync":
 		if len(args) == 1 {
-			return syncOnce(context.Background())
+			return syncOnce(ctx)
 		}
 		if len(args) != 2 || args[1] != "--watch" {
 			return errors.New("use sync [--watch]")
 		}
 		delay := 5 * time.Second
 		for {
-			if err := syncOnce(context.Background()); err != nil {
+			if err := syncOnce(ctx); err != nil {
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
 				fmt.Fprintln(os.Stderr, err)
 				delay = min(delay*2, time.Minute)
 			} else {
 				delay = 25 * time.Second
 			}
-			time.Sleep(delay)
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(delay):
+			}
 		}
 	}
 	return errors.New("unknown device command")

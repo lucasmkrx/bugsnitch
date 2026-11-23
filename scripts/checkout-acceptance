@@ -1,0 +1,33 @@
+#!/bin/sh
+# SPDX-License-Identifier: MPL-2.0
+# Run the checkout fixture with a disposable PostgreSQL cluster by default.
+set -eu
+cd "$(dirname "$0")/.."
+if [ -z "${BUGSNITCH_TEST_DATABASE_URL:-}" ]; then
+    pgbin=${PGBIN:-}
+    if [ -z "$pgbin" ]; then pgbin=$(pg_config --bindir); fi
+    [ -x "$pgbin/initdb" ] && [ -x "$pgbin/pg_ctl" ] || {
+        echo "Set PGBIN to the PostgreSQL bin directory." >&2
+        exit 1
+    }
+    umask 077
+    # A short absolute path fits PostgreSQL's Unix socket limit on macOS.
+    cluster=$(mktemp -d /tmp/bugsnitch-checkout.XXXXXXXX)
+    cleanup() {
+        if [ -s "$cluster/data/postmaster.pid" ]; then
+            "$pgbin/pg_ctl" -w -D "$cluster/data" -m fast stop >/dev/null || {
+                echo "PostgreSQL did not stop. The fixture is in $cluster." >&2
+                exit 1
+            }
+        fi
+        rm -rf "$cluster"
+    }
+    trap cleanup EXIT
+    trap 'exit 1' HUP INT TERM
+    unset PGHOSTADDR PGSERVICE PGSERVICEFILE PGOPTIONS
+    "$pgbin/initdb" --no-locale --encoding=UTF8 -A trust -U bugsnitch_test -D "$cluster/data" >/dev/null
+    "$pgbin/pg_ctl" -w -D "$cluster/data" -l "$cluster/postgres.log" \
+        -o "-c listen_addresses='' -k $cluster -p 54939" start >/dev/null
+    export BUGSNITCH_TEST_DATABASE_URL="postgresql:///postgres?host=$cluster&port=54939&user=bugsnitch_test&sslmode=disable"
+fi
+BUGSNITCH_TEST_CHECKOUT=1 go test -count=1 -v -timeout 5m -run '^TestCheckoutAcceptance$' ./internal/incidents

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-// Used by TestLiveCheckoutIncidentRepair against its ephemeral loopback site.
+// Probes the checkout acceptance tests’ ephemeral loopback deployments.
 import assert from "node:assert/strict";
 import { chromium } from "playwright-core";
 
@@ -27,6 +27,8 @@ try {
   });
   await page.goto(origin);
   await page.getByText("Sentry reporting enabled for this test project.").waitFor();
+  const activeRelease = await page.evaluate(async () => (await import("/config.mjs")).release);
+  assert.equal(activeRelease, release);
   await page.getByRole("button", { name: "Calculate shipping" }).click();
   const expected = behavior === "fixed" ? "Free shipping applied." : "A $5.00 shipping fee was added.";
   await page.getByText(expected, { exact: true }).waitFor();

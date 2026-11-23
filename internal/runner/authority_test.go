@@ -67,7 +67,9 @@ func TestWorkerLeaseLossQuiescesValidatorAndRetainsWork(t *testing.T) {
 				return 0, ErrAuthorityUnreachable
 			}
 		}
-		return 120 * time.Millisecond, nil
+		// Use the actual lease window so CPU contention during Git and
+		// validator startup cannot revoke the grant before the fixture runs.
+		return protocol.WorkerLeaseSeconds * time.Second, nil
 	}
 	modelTurn = func(_ context.Context, a *Attempt, _, _ string, _ any) (agent.Result, error) {
 		switch a.Phase {
@@ -80,7 +82,7 @@ func TestWorkerLeaseLossQuiescesValidatorAndRetainsWork(t *testing.T) {
 			return agent.Result{}, nil
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	defer cancel()
 	a, err := Start(ctx, "personal", issue.Repository, issue)
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/lucasmkrx/bugsnitch/internal/incidents"
 	"github.com/lucasmkrx/bugsnitch/internal/runner"
+	"github.com/lucasmkrx/bugsnitch/internal/testcodex"
 )
 
 const checkoutSource = "../../examples/checkout"
@@ -58,13 +59,19 @@ func write(t *testing.T, path string, b []byte) {
 	}
 }
 
-// deployCheckout materializes only committed site assets, pins a local SDK
-// bundle and assigns a unique loopback origin and build configuration.
-func deployCheckout(t *testing.T, repo, sha, release string) (string, string) {
+type checkoutSite struct{ dir, origin string }
+
+func newCheckoutSite(t *testing.T) checkoutSite {
 	t.Helper()
-	site := t.TempDir()
-	server := httptest.NewServer(http.FileServer(http.Dir(site)))
+	dir := t.TempDir()
+	server := httptest.NewServer(http.FileServer(http.Dir(dir)))
 	t.Cleanup(server.Close)
+	return checkoutSite{dir, server.URL}
+}
+
+// deploy materializes the committed site and pinned SDK at a stable loopback origin.
+func (site checkoutSite) deploy(t *testing.T, repo, sha, release string) string {
+	t.Helper()
 	sum := sha256.New()
 	for _, name := range append(append([]string{}, siteFiles...), "sentry-sdk.mjs") {
 		var asset []byte
@@ -73,7 +80,7 @@ func deployCheckout(t *testing.T, repo, sha, release string) (string, string) {
 			asset = read(t, filepath.Join(checkoutSource, name))
 		case "config.mjs":
 			source := string(checkoutGit(t, repo, "show", sha+":"+name))
-			dsn := strings.Replace(server.URL, "://", "://public@", 1) + "/21"
+			dsn := strings.Replace(site.origin, "://", "://public@", 1) + "/21"
 			withDSN := strings.Replace(source, `export const dsn = ""`, "export const dsn = "+fmt.Sprintf("%q", dsn), 1)
 			if withDSN == source {
 				t.Fatal("checkout fixture requires a blank DSN")
@@ -82,10 +89,10 @@ func deployCheckout(t *testing.T, repo, sha, release string) (string, string) {
 		default:
 			asset = checkoutGit(t, repo, "show", sha+":"+name)
 		}
-		write(t, filepath.Join(site, name), asset)
+		write(t, filepath.Join(site.dir, name), asset)
 		fmt.Fprintf(sum, "%s %x\n", name, sha256.Sum256(asset))
 	}
-	return server.URL, fmt.Sprintf("%x", sum.Sum(nil))
+	return fmt.Sprintf("%x", sum.Sum(nil))
 }
 
 func browser(t *testing.T, origin, behavior, release string) map[string]any {
@@ -107,12 +114,27 @@ func browser(t *testing.T, origin, behavior, release string) map[string]any {
 	return events[0]
 }
 
+func TestMain(m *testing.M) { testcodex.Main(m) }
+
+// TestCheckoutAcceptance uses the production runner with scripted Codex responses.
+func TestCheckoutAcceptance(t *testing.T) {
+	if os.Getenv("BUGSNITCH_TEST_CHECKOUT") != "1" {
+		t.Skip("run make checkout-acceptance to build the helpers and checkout SDK")
+	}
+	testcodex.Install(t)
+	checkoutIncidentRepair(t)
+}
+
 // TestLiveCheckoutIncidentRepair spends local ChatGPT allowance on a checked-in
 // disposable fixture. GitHub, Sentry's backend and its signature are fixtures.
 func TestLiveCheckoutIncidentRepair(t *testing.T) {
 	if os.Getenv("BUGSNITCH_TEST_LIVE_CHECKOUT") != "1" {
 		t.Skip("opt in to a real local Codex repair with BUGSNITCH_TEST_LIVE_CHECKOUT=1")
 	}
+	checkoutIncidentRepair(t)
+}
+
+func checkoutIncidentRepair(t *testing.T) {
 	if os.Getenv("BUGSNITCH_TEST_DATABASE_URL") == "" {
 		t.Fatal("provide a disposable BUGSNITCH_TEST_DATABASE_URL")
 	}
@@ -148,10 +170,11 @@ func TestLiveCheckoutIncidentRepair(t *testing.T) {
 
 	fixture := incidents.NewCheckoutFixture(t)
 	const oldBuild = "checkout-v1"
-	oldOrigin, _ := deployCheckout(t, repo, base, oldBuild)
-	first := browser(t, oldOrigin, "broken", oldBuild)
+	oldSite := newCheckoutSite(t)
+	oldSite.deploy(t, repo, base, oldBuild)
+	first := browser(t, oldSite.origin, "broken", oldBuild)
 	fixture.Deliver(first, true, 1)
-	fixture.Deliver(browser(t, oldOrigin, "broken", oldBuild), false, 2)
+	fixture.Deliver(browser(t, oldSite.origin, "broken", oldBuild), false, 2)
 	issue := runner.Issue(fixture.Promote())
 	// The advertised offer and reproducer supply this owner-selected scope.
 	issue.Criteria = []string{"Orders of exactly 5000 cents ship free. Preserve the $5 fee at 4999 cents and free shipping at 5001 cents.", "Keep the shippingCents API and current invalid-input behavior. The unchanged node verify.mjs must pass."}
@@ -191,16 +214,22 @@ func TestLiveCheckoutIncidentRepair(t *testing.T) {
 	if !validated || review == "" || implement == "" || implement == review {
 		t.Fatalf("missing validation or independent review on %s", a.CandidateSHA)
 	}
-	t.Logf("Local attempt %s: baseline %s failed; candidate %s passed node verify.mjs and independent model review", a.ID, base, a.CandidateSHA)
-	fixture.Observe(incidents.Receipt{Kind: "fix", Candidate: a.CandidateSHA, Evidence: "Real runner validation and independent review, attempt " + a.ID}, "Awaiting deployment")
+	t.Logf("Local attempt %s: baseline %s failed; candidate %s passed node verify.mjs and independent review turn", a.ID, base, a.CandidateSHA)
+	fixture.Observe(incidents.Receipt{Kind: "fix", Candidate: a.CandidateSHA, Evidence: "Runner validation and independent review turn, attempt " + a.ID}, "Awaiting deployment")
 	build := "checkout-" + a.CandidateSHA[:12]
-	origin, hash := deployCheckout(t, a.Worktree, a.CandidateSHA, build)
+	site := newCheckoutSite(t)
+	hash := site.deploy(t, a.Worktree, a.CandidateSHA, build)
 	const environment = "bugsnitch-fixture"
-	fixture.Observe(incidents.Receipt{Kind: "deployment", Environment: environment, Build: build, Candidate: a.CandidateSHA, Evidence: "Loopback static deployment manifest SHA-256 " + hash}, "Verification inconclusive")
-	browser(t, origin, "fixed", build)
 	yes := true
-	fixture.Observe(incidents.Receipt{Kind: "validation", Environment: environment, Build: build, Candidate: a.CandidateSHA, Positive: &yes, Evidence: "Chromium clicked Calculate shipping on the served build. The checkout displayed Free shipping applied. Manifest SHA-256 " + hash}, "Verified in environment")
-	oldReport := browser(t, oldOrigin, "broken", oldBuild)
+	for i, deploymentID := range []string{"checkout-deploy-1", "checkout-deploy-2"} {
+		if i == 1 && site.deploy(t, a.Worktree, a.CandidateSHA, build) != hash {
+			t.Fatal("redeployed candidate has a different asset manifest")
+		}
+		fixture.Observe(incidents.Receipt{CommandID: deploymentID, Kind: "deployment", Environment: environment, Build: build, Candidate: a.CandidateSHA, Evidence: "Loopback static deployment manifest SHA-256 " + hash}, "Verification inconclusive")
+		browser(t, site.origin, "fixed", build)
+		fixture.Observe(incidents.Receipt{CommandID: deploymentID + "-validate", DeploymentID: deploymentID, Kind: "validation", Environment: environment, Build: build, Candidate: a.CandidateSHA, Positive: &yes, Evidence: "Chromium clicked Calculate shipping on the served build. The checkout displayed Free shipping applied. Manifest SHA-256 " + hash}, "Verified in environment")
+	}
+	oldReport := browser(t, oldSite.origin, "broken", oldBuild)
 	fixture.Deliver(oldReport, false, 3)
 	fixture.Observe(incidents.Receipt{}, "Verified in environment")
 	// Inject a contradictory report against the fixed build to exercise

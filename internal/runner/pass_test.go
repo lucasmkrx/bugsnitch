@@ -24,7 +24,7 @@ func TestLocalPassPersistsQuestionAndStopsForReview(t *testing.T) {
 		}
 		return nil
 	}
-	BeforeStart, AfterFinish, BeforeTurn, AfterTurn = ok, ok, ok, ok
+	BeforeStart, AfterFinish, BeforeTurn, AfterTurn = ok, ok, func(_ context.Context, s Summary) error { return ok(s) }, ok
 	CheckWorker = func(_ context.Context, s Summary, _ bool) (time.Duration, error) { return time.Minute, ok(s) }
 	var runs []string
 	modelTurn = func(_ context.Context, a *Attempt, _, payload string, _ any) (agent.Result, error) {
@@ -70,7 +70,7 @@ func TestQueuedWorkerReleasesPermitAndStopsOnLostAuthority(t *testing.T) {
 	previousStart, previousCheck := BeforeTurn, CheckWorker
 	t.Cleanup(func() { BeforeTurn, CheckWorker = previousStart, previousCheck })
 	starts := 0
-	BeforeTurn = func(Summary) error {
+	BeforeTurn = func(context.Context, Summary) error {
 		starts++
 		return ErrHostedTurnCapacity
 	}
@@ -115,7 +115,7 @@ func TestConcurrentPassesKeepDistinctWorktreesAndEvidence(t *testing.T) {
 	before, end, lease := BeforeTurn, AfterTurn, CheckWorker
 	t.Cleanup(func() { BeforeTurn = before; AfterTurn = end; CheckWorker = lease })
 	allow := func(Summary) error { return nil }
-	BeforeStart, AfterFinish, BeforeTurn, AfterTurn = allow, allow, allow, allow
+	BeforeStart, AfterFinish, BeforeTurn, AfterTurn = allow, allow, func(_ context.Context, s Summary) error { return allow(s) }, allow
 	CheckWorker = func(context.Context, Summary, bool) (time.Duration, error) { return time.Minute, nil }
 	scope := protocol.RunScope{Device: "fixture", Project: "selected", Plan: "approved", Policy: 2}
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
@@ -175,5 +175,60 @@ func TestConcurrentPassesKeepDistinctWorktreesAndEvidence(t *testing.T) {
 		if a.State != "completed" || len(a.Artifacts) != 4 || a.Artifacts[2].ExitCode == nil || *a.Artifacts[2].ExitCode != 0 || a.Artifacts[1].Thread == a.Artifacts[3].Thread {
 			t.Fatal(a.Summary)
 		}
+	}
+}
+
+func TestBatchCapacityLossLeavesIssueSelectable(t *testing.T) {
+	_, issue := fixture(t)
+	if _, err := SetLocalLimits(1, 1); err != nil {
+		t.Fatal(err)
+	}
+	previousStart, previousEnd, previousLease := BeforeTurn, AfterTurn, CheckWorker
+	t.Cleanup(func() { BeforeTurn, AfterTurn, CheckWorker = previousStart, previousEnd, previousLease })
+	allow := func(Summary) error { return nil }
+	BeforeStart, AfterFinish, AfterTurn = allow, allow, allow
+	BeforeTurn = func(context.Context, Summary) error { return nil }
+	CheckWorker = func(context.Context, Summary, bool) (time.Duration, error) { return time.Minute, nil }
+	issue.GitHubID, issue.RequirementsDigest = 42, strings.Repeat("a", 64)
+	scope := protocol.RunScope{Device: "fixture", Project: "selected", Plan: "approved", Policy: 1}
+	// A different workspace took the last slot after the advisory read.
+	if _, err := query(`INSERT INTO journal_attempts VALUES('occupied','other','other/repo',1,1,'{"state":"running"}',1)`); err != nil {
+		t.Fatal(err)
+	}
+	if a, err := StartPass(t.Context(), "personal", issue, scope, func(Summary) { t.Fatal("unexpected admission") }); !errors.Is(err, ErrTicketCapacity) || a.ID != "" {
+		t.Fatalf("capacity result: %+v %v", a, err)
+	}
+	if _, err := query(`UPDATE journal_attempts SET data='{"state":"completed"}' WHERE id='occupied'`); err != nil {
+		t.Fatal(err)
+	}
+	modelTurn = func(context.Context, *Attempt, string, string, any) (agent.Result, error) {
+		return agent.Result{Text: `{"summary":"Confirm scope","disposition":"needs_owner","question":"Use the proposed label?"}`}, nil
+	}
+	starts := 0
+	if a, err := StartPass(t.Context(), "personal", issue, scope, func(Summary) { starts++ }); err != nil || a.State != "waiting" || starts != 1 {
+		t.Fatalf("fresh admission after capacity returned: %+v %v", a, err)
+	}
+}
+
+func TestLateHostedGrantIsEndedBeforeModelWork(t *testing.T) {
+	t.Setenv("BUGSNITCH_HOME", t.TempDir())
+	if _, err := SetLocalLimits(0, 1); err != nil {
+		t.Fatal(err)
+	}
+	previousStart, previousEnd := BeforeTurn, AfterTurn
+	t.Cleanup(func() { BeforeTurn, AfterTurn = previousStart, previousEnd })
+	BeforeTurn = func(ctx context.Context, _ Summary) error { <-ctx.Done(); return nil }
+	ended := 0
+	AfterTurn = func(Summary) error { ended++; return nil }
+	a := &Attempt{LocalRunScope: &protocol.RunScope{}, Project: Project{Config: Config{Stages: map[string]StageSettings{"plan": {TimeoutSeconds: 1}}}}, Summary: Summary{Phase: "plan"}}
+	if release, err := reserveWorkerTurn(t.Context(), a); release != nil || !errors.Is(err, errModelCapacity) || ended != 1 {
+		t.Fatalf("expired grant returned: released=%v ended=%d err=%v", release != nil, ended, err)
+	}
+	release, err := acquireModel("next-worker")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := release(); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -42,8 +42,7 @@ func runVerificationCheck(ctx context.Context, argv []string, issue Issue, envir
 	cmd.Env = []string{"HOME=" + dir, "TMPDIR=" + dir, "PATH=/usr/bin:/bin", "LC_ALL=C"}
 	cmd.Stdin = bytes.NewReader(append(input, '\n'))
 	output := capped{max: 256 << 10}
-	// Only expose Write so io.Copy cannot bypass the cap via bytes.Buffer.ReadFrom.
-	cmd.Stdout = struct{ io.Writer }{&output}
+	cmd.Stdout = &output
 	cmd.WaitDelay = 2 * time.Second
 	err = runCheckGroup(ctx, cmd)
 	if ctx.Err() != nil {
@@ -64,9 +63,9 @@ func runVerificationCheck(ctx context.Context, argv []string, issue Issue, envir
 		Revision     string                 `json:"revision"`
 		Observations []CriterionObservation `json:"observations"`
 	}
-	decoder := json.NewDecoder(bytes.NewReader(output.Bytes()))
+	decoder := json.NewDecoder(bytes.NewReader(output.buffer.Bytes()))
 	decoder.DisallowUnknownFields()
-	if !utf8.Valid(output.Bytes()) || decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF || result.Observations == nil {
+	if !utf8.Valid(output.buffer.Bytes()) || decoder.Decode(&result) != nil || decoder.Decode(&struct{}{}) != io.EOF || result.Observations == nil {
 		return nil, errors.New("verification check must return one JSON object containing its environment, revision and observations")
 	}
 	if result.Environment != environment || result.Revision != revision {

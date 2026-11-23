@@ -219,12 +219,9 @@ func turn(ctx context.Context, a *Attempt, directive string, payload any, schema
 	if err != nil {
 		return empty, err
 	}
-	release, err := acquireModel(a.ID)
+	release, err := reserveWorkerTurn(ctx, a)
 	if err != nil {
 		return empty, err
-	}
-	if err = hook(BeforeTurn, a); err != nil {
-		return empty, errors.Join(err, release())
 	}
 	var result agent.Result
 	runErr := authorizedStage(ctx, a, true, func(live context.Context) error {

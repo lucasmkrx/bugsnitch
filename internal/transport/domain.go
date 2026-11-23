@@ -103,6 +103,7 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 	op := map[string]func(*domainCall) error{
 		"project.create": s.createProject,
 		"project.policy": s.policy, "project.retention": s.retention, "workspace.limits": s.limits,
+		"device.limits":    s.deviceLimits,
 		"project.dispatch": s.dispatch, "decision.answer": s.answer, "message.create": s.message,
 		"plan.propose": s.proposePlan, "plan.approve": s.approvePlan, "plan.evidence": s.attestPrerequisite,
 		"publication.propose": s.publication, "publication.approve": s.publish,

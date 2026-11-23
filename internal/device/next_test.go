@@ -4,6 +4,8 @@ package device
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"flag"
 	"io"
 	"net/http"
 	"os"
@@ -13,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/lucasmkrx/bugsnitch/internal/github"
+	"github.com/lucasmkrx/bugsnitch/internal/journalbridge"
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 	"github.com/lucasmkrx/bugsnitch/internal/runner"
 )
@@ -90,6 +93,32 @@ func TestNextPrintsStartDocumentOnlyAfterCurrentCanonicalRead(t *testing.T) {
 	if len(calls) != 2 {
 		t.Fatal(calls)
 	}
+	parentCtx := t.Context()
+	t.Run("parallel batch can select while all local turns are occupied", func(t *testing.T) {
+		if _, err := runner.SetLocalLimits(2, 1); err != nil {
+			t.Fatal(err)
+		}
+		file := filepath.Join(os.Getenv("BUGSNITCH_HOME"), "runner.sqlite")
+		if _, err := journalbridge.Query(t.Context(), file, "INSERT INTO model_permits VALUES('other-turn','planner','now');"); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if _, err := journalbridge.Query(parentCtx, file, "DELETE FROM model_permits WHERE id='other-turn';"); err != nil {
+				t.Error(err)
+			}
+		})
+		sel, err := selectProject("project")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := sel.recommend(t.Context(), false); err == nil {
+			t.Fatal("ordinary recommendation ignored occupied model turn")
+		}
+		got, err := sel.recommend(t.Context(), true)
+		if err != nil || got.Selection == nil || got.Selection.Number != selection.Number {
+			t.Fatalf("parallel selection with occupied turn: %#v, %v", got, err)
+		}
+	})
 	out.Reset()
 	source.Body = "Changed while timestamp stayed the same"
 	if err = next([]string{"--project", "project"}, &out); err == nil || out.Len() > 0 {
@@ -104,4 +133,69 @@ func TestNextPrintsStartDocumentOnlyAfterCurrentCanonicalRead(t *testing.T) {
 	if err != nil || len(attempts) != 0 {
 		t.Fatal("selection dispatched execution", attempts, err)
 	}
+}
+
+func TestParallelSelectionNegotiatesLegacyRequestOnce(t *testing.T) {
+	p := selectionProject{id: "project", enrolled: profile{Server: "http://localhost:8787"}}
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	var calls []bool
+	http.DefaultTransport = requestRoute(func(r *http.Request) (*http.Response, error) {
+		var request map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/api/v1/device/next" || request["projectId"] != p.id {
+			t.Fatal("unexpected selection request", r.URL, request)
+		}
+		wait, extended := request["waitForTurn"]
+		calls = append(calls, extended)
+		if extended {
+			if wait != true {
+				t.Fatal("unexpected waitForTurn value", wait)
+			}
+			return &http.Response{StatusCode: 400, Body: io.NopCloser(strings.NewReader(`{"error":"Invalid coordination payload"}`))}, nil
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(`{"reason":"All workspace or device model-turn slots are reserved"}`))}, nil
+	})
+	for range 2 {
+		rec, err := p.recommend(t.Context(), true)
+		if err != nil || rec.Selection != nil || rec.Reason == "" {
+			t.Fatalf("legacy capacity response: %#v, %v", rec, err)
+		}
+	}
+	if len(calls) != 3 || !calls[0] || calls[1] || calls[2] {
+		t.Fatal("expected one extended probe and two legacy reads; got", calls)
+	}
+}
+
+func TestLocalRunHelpBeforeOpeningJournal(t *testing.T) {
+	t.Setenv("BUGSNITCH_HOME", "invalid-relative-path")
+	if err := LocalRun(t.Context(), []string{"--help"}, io.Discard); !errors.Is(err, flag.ErrHelp) {
+		t.Fatalf("help tried to open a runner journal: %v", err)
+	}
+}
+
+func TestLocalLimitsPersistIndependentUpdates(t *testing.T) {
+	t.Setenv("BUGSNITCH_HOME", t.TempDir())
+	check := func(args []string, tickets, turns int) {
+		t.Helper()
+		var out bytes.Buffer
+		if err := LocalLimits(args, &out); err != nil {
+			t.Fatal(err)
+		}
+		var got runner.LocalLimits
+		if err := json.Unmarshal(out.Bytes(), &got); err != nil || got.Tickets != tickets || got.Turns != turns {
+			t.Fatalf("local-limits %v returned %s; want tickets %d, turns %d", args, out.String(), tickets, turns)
+		}
+	}
+	check(nil, 2, 2)
+	check([]string{"--tickets", "4"}, 4, 2)
+	check([]string{"--turns", "1"}, 4, 1)
+	for _, args := range [][]string{{"--tickets", "0"}, {"--turns", "33"}, {"--tickets", "3", "extra"}} {
+		if err := LocalLimits(args, io.Discard); err == nil {
+			t.Fatalf("accepted invalid arguments %v", args)
+		}
+	}
+	check(nil, 4, 1)
 }

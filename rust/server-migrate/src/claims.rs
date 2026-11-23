@@ -251,7 +251,7 @@ fn admit(db: &Db<'_>, token: &str, a: Admission) -> Result<Value> {
                 return Err(Error::conflict("Model turn unavailable for this attempt"));
             }
             if !capacity(db, ws, dev, limits.i64(1)?, actor.i64(2)?)? {
-                return Err(Error::conflict("Model-turn capacity is reserved"));
+                return Err(Error::model_turn_capacity());
             }
             in_turn = true;
         }

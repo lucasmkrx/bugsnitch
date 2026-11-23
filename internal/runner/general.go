@@ -110,7 +110,7 @@ func generalModel(ctx context.Context, ws, repo, role, id, instructions, prompt,
 		return empty, errors.New("invalid model permit identity")
 	}
 	// Persist both local ownership and remote identity before any external RPC.
-	q := "BEGIN IMMEDIATE; " + modelSlots + generalTable + "INSERT INTO model_permits SELECT " + literal(id) + "," + literal(role) + "," + literal(now()) + " WHERE (SELECT count(*) FROM model_permits)<2; INSERT INTO general_sessions SELECT " + literal(id) + "," + packed(op) + ",'acquiring'," + literal(now()) + " WHERE EXISTS(SELECT 1 FROM model_permits WHERE id=" + literal(id) + "); SELECT changes(); COMMIT;"
+	q := "BEGIN IMMEDIATE; " + modelSlots + generalTable + "INSERT INTO model_permits SELECT " + literal(id) + "," + literal(role) + "," + literal(now()) + " WHERE " + modelSlotAvailable + "; INSERT INTO general_sessions SELECT " + literal(id) + "," + packed(op) + ",'acquiring'," + literal(now()) + " WHERE EXISTS(SELECT 1 FROM model_permits WHERE id=" + literal(id) + "); SELECT changes(); COMMIT;"
 	b, err := query(q)
 	if err != nil {
 		return empty, err

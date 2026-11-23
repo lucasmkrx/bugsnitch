@@ -180,6 +180,12 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
             state.projects[0].retentionDays = 7;
             return route.fulfill({ json: { days: 7 } });
           }
+          if (path.endsWith("/devices/desktop/limits")) {
+            assert.deepEqual(req.postDataJSON(), { turns: 4, version: 1 });
+            state.devices[0].turnLimit = 4;
+            state.limits.version++;
+            return route.fulfill({ json: { turns: 4, version: 2 } });
+          }
           if (path.endsWith("/workspace/dispatch")) {
             const body = req.postDataJSON();
             assert.equal(body.version, state.workspace.dispatchVersion);
@@ -361,7 +367,35 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
         await page.getByText("0123456789abcdef", { exact: true }).waitFor();
         await page.getByRole("button", { name: "Done", exact: true }).click();
         await noOverflow();
+        state.devices = [
+          {
+            id: "desktop",
+            name: "Local Mac",
+            platform: "darwin/arm64",
+            projects: ["p1"],
+            revoked: false,
+          },
+        ];
         await page.goto(url + "/#/settings?project=p1");
+        await page.reload();
+        await page
+          .getByRole("heading", { name: "Workspace capacity" })
+          .waitFor();
+        assert.equal(
+          await page.getByRole("button", { name: "Save device limit" }).count(),
+          0,
+        );
+        state.devices[0].turnLimit = 2;
+        await page.reload();
+        await page.getByLabel("Local Mac simultaneous model turns").fill("4");
+        await page.getByRole("button", { name: "Save device limit" }).click();
+        await page.getByText("Device limit updated.").waitFor();
+        assert.equal(
+          await page
+            .getByLabel("Local Mac simultaneous model turns")
+            .inputValue(),
+          "4",
+        );
         await page.getByRole("button", { name: "Edit project policy" }).click();
         await page
           .getByLabel("Autonomy preset")

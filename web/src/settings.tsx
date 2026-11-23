@@ -333,6 +333,42 @@ export function Settings({
             </div>
             <button disabled={locked}>Save limits</button>
           </form>
+          {state.devices
+            .filter(
+              (device) => !device.revoked && device.turnLimit !== undefined,
+            )
+            .map((device) => (
+              <form
+                key={device.id + ":" + limits.version}
+                className="panel-body"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  const turns = Number(
+                    new FormData(e.currentTarget).get("turns"),
+                  );
+                  void run(
+                    () =>
+                      post("devices/" + enc(device.id) + "/limits", {
+                        turns,
+                        version: limits.version,
+                      }),
+                    "Device limit updated.",
+                  );
+                }}
+              >
+                <Field title={device.name + " simultaneous model turns"}>
+                  <input
+                    required
+                    type="number"
+                    min={1}
+                    max={32}
+                    name="turns"
+                    defaultValue={device.turnLimit}
+                  />
+                </Field>
+                <button disabled={locked}>Save device limit</button>
+              </form>
+            ))}
         </Panel>
       )}
     </>

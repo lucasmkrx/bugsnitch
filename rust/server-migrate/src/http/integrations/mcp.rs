@@ -210,14 +210,14 @@ impl ServerHandler for Tools {
                         .map_err(|_| ErrorData::internal_error("Invalid list response", None))?;
                     CallToolResult::success(vec![ContentBlock::text(text.to_owned())])
                 }
-                Err(e) => CallToolResult::error(vec![ContentBlock::text(e.1)]),
+                Err(e) => CallToolResult::error(vec![ContentBlock::text(e.1.error)]),
             }
             .into());
         }
         let result = self.state.domain(&operation, actor, input).await;
         let result = match result {
             Ok(value) => CallToolResult::structured(value),
-            Err(e) => CallToolResult::error(vec![ContentBlock::text(e.1)]),
+            Err(e) => CallToolResult::error(vec![ContentBlock::text(e.1.error)]),
         };
         Ok(result.into())
     }

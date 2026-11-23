@@ -39,8 +39,8 @@ func runCheckGroup(ctx context.Context, cmd *exec.Cmd) error {
 	case <-ctx.Done():
 	}
 	// Also stop any ordinary descendants left by a launcher that has exited.
-	stopErr := syscall.Kill(-pid, syscall.SIGKILL)
-	if errors.Is(stopErr, syscall.ESRCH) || checkGroupIsGone(pid, stopErr) {
+	stopErr := stopCheckGroup(pid)
+	if errors.Is(stopErr, syscall.ESRCH) {
 		stopErr = nil
 	} else if stopErr != nil {
 		_ = cmd.Process.Kill()

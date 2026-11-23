@@ -56,10 +56,13 @@ const terminalStates = new Set([
   "ready",
   "ready_for_pr",
 ]);
+function attemptStateLabel(state: string) {
+  return state === "completed" ? "Local candidate ready" : human(state);
+}
 function executionLabel(a: { state: string; connection: string }) {
   return a.connection === "disconnected" && !terminalStates.has(a.state)
     ? "State unknown"
-    : human(a.state);
+    : attemptStateLabel(a.state);
 }
 function Row({
   icon,
@@ -473,13 +476,19 @@ export function Views({
         <>
           {back("work")}
           <Panel
-            title={a.repository + " #" + a.issueNumber}
+            title={
+              <a
+                href={`https://github.com/${a.repository}/issues/${a.issueNumber}`}
+              >
+                {a.repository} #{a.issueNumber}
+              </a>
+            }
             action={<Badge>{executionLabel(a)}</Badge>}
           >
             <Detail
               pairs={[
                 ["Last reported phase", human(a.phase)],
-                ["Last reported state", human(a.state)],
+                ["Last reported state", attemptStateLabel(a.state)],
                 [
                   "Execution reason",
                   a.reasonCode ? human(a.reasonCode) : "None reported",
@@ -572,6 +581,7 @@ export function Views({
         a.machine,
         a.phase,
         a.state,
+        attemptStateLabel(a.state),
         a.reasonCode,
       ),
     );
@@ -597,17 +607,12 @@ export function Views({
                     (a.reasonCode ? " · " + human(a.reasonCode) : "")
                   }
                   tail={
-                    <Badge
-                      tone={
-                        a.connection === "disconnected" ? "warn" : "neutral"
-                      }
-                    >
-                      {human(
-                        a.connection === "disconnected"
-                          ? a.connection
-                          : a.state,
-                      )}
-                    </Badge>
+                    a.connection === "disconnected" &&
+                    a.state !== "completed" ? (
+                      <Badge tone="warn">Disconnected</Badge>
+                    ) : (
+                      <Badge>{attemptStateLabel(a.state)}</Badge>
+                    )
                   }
                   href={link("work", a.projectId, a.id)}
                 />

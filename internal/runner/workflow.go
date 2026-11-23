@@ -540,7 +540,7 @@ func reviewCandidate(ctx context.Context, a *Attempt) error {
 	a.Phase = "wrap_up"
 	a.State = "completed"
 	a.PRBody = fmt.Sprintf("## Problem\n\n%s\n\n%s\n\n## Changes\n\n%s\n\n## Verification\n\nValidation argv %s returned exit 0 at %s.\n\n## Review\n\n%s\n\nIndependent review recorded %d findings. See the local attempt for their disposition.\n\n## Limitations\n\nIntegration against the current target branch and production deployment remain unverified.\n", a.Issue.Title, a.Issue.URL, summary, encoded(a.Project.Config.Validate), a.CandidateSHA, v.Summary, len(v.Findings))
-	a.Message = "Validated candidate and pull request description ready for inspection."
+	a.Message = fmt.Sprintf("Local candidate ready for %s#%d. The validated commit and draft PR description are available for review.", a.Repository, a.IssueNumber)
 	return nil
 }
 func encoded(v any) string { b, _ := json.Marshal(v); return string(b) }

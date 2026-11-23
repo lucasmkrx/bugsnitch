@@ -16,7 +16,7 @@ services:
     build: {context: .., dockerfile: deploy/Dockerfile}
     restart: unless-stopped
     depends_on: {db: {condition: service_healthy}}
-    ports: ["127.0.0.1:8787:8787"]
+    ports: ["127.0.0.1:${BUGSNITCH_HOST_PORT:-8787}:8787"]
     environment:
       BUGSNITCH_ORIGIN: ${BUGSNITCH_ORIGIN:-http://localhost:8787}
       BUGSNITCH_OWNER_TOKEN: ${BUGSNITCH_OWNER_TOKEN:?set an owner credential}

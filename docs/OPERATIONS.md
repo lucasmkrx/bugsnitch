@@ -20,6 +20,19 @@ docker compose --env-file .env -f deploy/compose.yml -f deploy/github-app.yml up
 
 The optional override mounts the key read-only. The base compose file passes the Sentry secret and hosted MCP OAuth settings when supplied. Register each callback and project mapping separately. [Provider setup](PROVIDERS.md)
 
+### Provision a hosted pilot workspace
+
+Provision one Compose project per pilot customer. Give each project a unique name, HTTPS hostname and loopback `BUGSNITCH_HOST_PORT`. Keep a separate environment file with its own owner credential, database password and optional MCP token. Use unique provider credentials and configure callbacks for that workspace’s hostname. Compose scopes its database volume and network to the project name. Point each hostname at its own loopback port in the reverse proxy. Separate hostnames keep browser session cookies scoped to one workspace.
+
+For an instance named `pilot-acme`, save the values in a private environment file. Set `BUGSNITCH_ORIGIN=https://acme.example.com` and `BUGSNITCH_HOST_PORT=8788` in that file, then start the instance.
+
+```sh
+docker compose --project-name pilot-acme --env-file /path/to/private/pilot-acme.env \
+  -f deploy/compose.yml up --build --detach
+```
+
+Set up HTTPS for that hostname and check `/readyz` through the proxy. Sign in, create a project, pair a runner and verify that it syncs. With two instances running, check that each owner credential and browser session is rejected by the other instance. Record the application revision and back up the instance database before inviting the owner. Reuse the Compose project name on updates to keep the existing volume. Keep customer onboarding and billing operator-managed during the pilot.
+
 ## Install the macOS runner
 
 Follow the [macOS build instructions](../README.md#verification-and-operations) or obtain the archive for your CPU. Extract it into a private directory and run `./bugsnitch doctor`, then `./runner-service install "$PWD/bugsnitch"`. The installer copies both matched executables into a versioned directory and updates the launchd configuration. Starting the service uses that installed pair. For an update, stop the service, install the new pair and start it. Retain the previous archive until the new version has synchronized. To roll back this stage, stop, reinstall the previous release and start. Remove unused releases from the runner’s service directory after confirming the update. Pair and register under the same normal user. Run `scripts/runner-service start` to run the sync loop at login, `scripts/runner-service status` to inspect launchd and `scripts/runner-service stop` to unload it. Service installation is explicit. Local execution still needs the approved repository, Git, the supported Codex binary and the project's validation toolchain. Closing the ChatGPT window does not itself terminate the separate CLI process. Sleep and network loss suspend contact.

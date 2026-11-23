@@ -40,7 +40,9 @@ test: journal server
 	cargo test --locked --workspace --target-dir "$(CARGO_TARGET_DIR)"
 	$(TEST_HELPERS) go test $(GO_TEST_FLAGS) ./...
 
-checkout-acceptance: journal server
+checkout-acceptance:
+	sh scripts/checkout-acceptance check-browser
+	$(MAKE) journal server
 	npm --prefix web ci
 	npm --prefix examples/checkout ci
 	npm --prefix examples/checkout run build:sdk

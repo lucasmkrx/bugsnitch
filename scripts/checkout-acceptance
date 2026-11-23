@@ -3,6 +3,25 @@
 # Run the checkout fixture with a disposable PostgreSQL cluster by default.
 set -eu
 cd "$(dirname "$0")/.."
+if [ "${1:-}" = check-browser ]; then
+    browser=${BUGSNITCH_TEST_CHROME:-}
+    if [ -z "$browser" ]; then
+        case $(uname -s) in
+            Darwin) browser='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome' ;;
+            Linux) browser=/opt/google/chrome/chrome ;;
+            *)
+                echo "Set BUGSNITCH_TEST_CHROME to the absolute path of an installed Chromium browser." >&2
+                exit 1
+                ;;
+        esac
+    fi
+    # The checkout probe runs from web/, including when given a relative path.
+    if ! (cd web && [ -f "$browser" ] && [ -x "$browser" ]); then
+        printf 'Browser executable unavailable at %s. Install Chrome or set BUGSNITCH_TEST_CHROME to an installed Chromium executable.\n' "$browser" >&2
+        exit 1
+    fi
+    exit 0
+fi
 if [ -z "${BUGSNITCH_TEST_DATABASE_URL:-}" ]; then
     pgbin=${PGBIN:-}
     if [ -z "$pgbin" ]; then pgbin=$(pg_config --bindir); fi

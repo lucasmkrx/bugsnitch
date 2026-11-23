@@ -13,14 +13,16 @@ import (
 
 // Local permits cover user-initiated worker and planner turns on one runner.
 // Keep reservations across an unclean exit until the operator reconciles them.
-var errModelCapacity = errors.New("both local model permits are reserved; inspect active or interrupted local turns")
+var errModelCapacity = errors.New("local model permits are reserved; inspect active or interrupted local turns")
+
+const modelSlotAvailable = "(SELECT count(*) FROM model_permits) < (SELECT turn_limit FROM runner_capacity WHERE id=1)"
 
 func acquireModel(role string) (func() error, error) {
 	id, err := newID()
 	if err != nil {
 		return nil, err
 	}
-	b, err := query("BEGIN IMMEDIATE; " + modelSlots + "INSERT INTO model_permits SELECT " + literal(id) + "," + literal(role) + "," + literal(now()) + " WHERE (SELECT count(*) FROM model_permits)<2; SELECT changes(); COMMIT;")
+	b, err := query("BEGIN IMMEDIATE; " + modelSlots + "INSERT INTO model_permits SELECT " + literal(id) + "," + literal(role) + "," + literal(now()) + " WHERE " + modelSlotAvailable + "; SELECT changes(); COMMIT;")
 	if err != nil {
 		return nil, err
 	}

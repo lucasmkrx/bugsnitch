@@ -114,9 +114,28 @@ func send(ctx context.Context, p profile, route string, in any, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
+		admission, ok := in.(protocol.Admission)
+		if route == "admission" && ok && admission.Operation == "turn_start" && resp.StatusCode == http.StatusConflict && turnCapacityConflict(resp.Body) {
+			return errors.Join(statusError(resp.StatusCode), runner.ErrHostedTurnCapacity)
+		}
 		return statusError(resp.StatusCode)
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 65536)).Decode(out)
+}
+func turnCapacityConflict(r io.Reader) bool {
+	var body struct {
+		Code  json.RawMessage
+		Error string
+	}
+	if json.NewDecoder(io.LimitReader(r, 4096)).Decode(&body) != nil {
+		return false
+	}
+	if body.Code == nil {
+		// Older servers reported only the human-readable admission error.
+		return body.Error == "Model-turn capacity is reserved"
+	}
+	var code string
+	return json.Unmarshal(body.Code, &code) == nil && code == "model_turn_capacity"
 }
 func validURL(raw string) bool {
 	u, err := url.Parse(raw)

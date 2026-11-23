@@ -161,7 +161,7 @@ pub(super) async fn call(
         (200, Some(value), None) => Ok(value),
         (status, None, Some(error)) if (400..600).contains(&status) => Err(WebError(
             StatusCode::from_u16(status).map_err(|_| uncertain())?,
-            error,
+            super::ErrorBody { error, code: None },
         )),
         _ => Err(uncertain()),
     }

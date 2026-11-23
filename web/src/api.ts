@@ -18,6 +18,7 @@ export interface Project extends Policy {
 }
 export interface Device {
   id: string;
+  turnLimit?: number;
   name: string;
   platform: string;
   projects: string[];

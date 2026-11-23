@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-use super::{WebError, WebResult};
+use super::{ErrorBody, WebError, WebResult};
 use crate::coord::{MAX_FRAME, response_limit};
 use axum::http::StatusCode;
 use bytes::Bytes;
@@ -31,6 +31,7 @@ struct CommandFrame<'a> {
 struct Failure {
     status: u16,
     message: String,
+    code: Option<String>,
 }
 struct Session {
     child: Child,
@@ -229,7 +230,13 @@ fn decode<'de, T: Deserialize<'de>>(bytes: &'de [u8]) -> WebResult<T> {
         (1, None, Some(e)) => {
             let status = StatusCode::from_u16(e.status).map_err(|_| uncertain())?;
             if status.is_client_error() || status.is_server_error() {
-                Err(WebError(status, e.message))
+                Err(WebError(
+                    status,
+                    ErrorBody {
+                        error: e.message,
+                        code: e.code,
+                    },
+                ))
             } else {
                 Err(uncertain())
             }

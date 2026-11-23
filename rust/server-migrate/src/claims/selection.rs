@@ -10,12 +10,17 @@ use std::collections::HashMap;
 struct Next {
     #[serde(rename = "projectId")]
     project: String,
+    #[serde(default, rename = "waitForTurn")]
+    wait_for_turn: bool,
 }
 
 // This uses a repeatable-read transaction. Selection explains what could be
 // admitted. Only a subsequent claim can reserve capacity or issue ownership.
 pub(super) fn next(db: &Db<'_>, token: &str, request: Value) -> Result<Value> {
-    let Next { project } = serde_json::from_value(request)?;
+    let Next {
+        project,
+        wait_for_turn,
+    } = serde_json::from_value(request)?;
     let row = db.optional("SELECT w.id,d.id,p.repository,p.policy_version,p.paused,w.stopped,w.ticket_limit,w.turn_limit,d.turn_limit,
         EXISTS(SELECT FROM github_mappings g WHERE g.workspace_id=w.id AND g.project_id=p.id AND g.active),
         (SELECT count(*) FROM admission a WHERE a.workspace_id=w.id AND a.active)
@@ -33,7 +38,7 @@ pub(super) fn next(db: &Db<'_>, token: &str, request: Value) -> Result<Value> {
         "The project needs an active GitHub App repository mapping"
     } else if row.i64(10)? >= row.i64(6)? {
         "All workspace implementation slots are reserved"
-    } else if !capacity(db, ws, device, row.i64(7)?, row.i64(8)?)? {
+    } else if !wait_for_turn && !capacity(db, ws, device, row.i64(7)?, row.i64(8)?)? {
         "All workspace or device model-turn slots are reserved"
     } else {
         ""

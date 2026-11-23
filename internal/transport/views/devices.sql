@@ -1,1 +1,1 @@
-SELECT id,name,platform,last_contact AS "lastContact",revoked,COALESCE((SELECT jsonb_agg(project_id ORDER BY project_id) FROM device_projects WHERE device_id=d.id),'[]'::jsonb) AS projects FROM devices d WHERE workspace_id=$1 ORDER BY name,id
+SELECT id,name,platform,last_contact AS "lastContact",revoked,turn_limit AS "turnLimit",COALESCE((SELECT jsonb_agg(project_id ORDER BY project_id) FROM device_projects WHERE device_id=d.id),'[]'::jsonb) AS projects FROM devices d WHERE workspace_id=$1 ORDER BY name,id

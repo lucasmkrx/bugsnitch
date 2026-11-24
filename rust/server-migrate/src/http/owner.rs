@@ -99,6 +99,18 @@ pub(super) fn routes() -> Router<Shared> {
             "pull.evidence",
         ),
         (
+            "/api/v1/projects/{project}/pulls/{number}/handover",
+            "pull.handover",
+        ),
+        (
+            "/api/v1/projects/{project}/pulls/{number}/watch",
+            "pull.watch",
+        ),
+        (
+            "/api/v1/projects/{project}/pulls/{number}/approve",
+            "pull.approve",
+        ),
+        (
             "/api/v1/projects/{project}/attempts/{id}/draft-pr",
             "pull.draft",
         ),

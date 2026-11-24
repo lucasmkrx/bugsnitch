@@ -107,7 +107,10 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 		"pull.refresh": s.refreshPull, "pull.evidence": s.recordPull, "pull.draft": s.requestDraft,
 		"incident.report": s.report, "incident.promote": s.promote,
 		"incident.verdict": s.incidentVerdict, "incident.receipt": s.incidentReceipt,
-		"linear.link": s.linkLinear,
+		"linear.link":   s.linkLinear,
+		"pull.handover": s.recordHandover,
+		"pull.watch":    s.watchPull,
+		"pull.approve":  s.approvePull,
 	}[r.Operation]
 	if op == nil {
 		return nil, bad("Unknown domain operation")
@@ -128,7 +131,7 @@ func (s *Server) authorizeActor(call *domainCall, id string, role audit.Source, 
 		case audit.Operator:
 		case audit.Approver:
 			allowed = allowed || op == "decision.answer" || op == "plan.approve" ||
-				op == "pull.evidence"
+				op == "pull.evidence" || op == "pull.handover" || op == "pull.approve"
 		default:
 			return denied
 		}

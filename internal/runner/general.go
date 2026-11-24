@@ -13,6 +13,7 @@ import (
 	"github.com/lucasmkrx/bugsnitch/internal/turns"
 )
 
+var MeasureGeneral func(turns.Operation, agent.Result)
 var BindGeneral func(workspace, repository, role, id string) (turns.Operation, error)
 var SubmitGeneral func(context.Context, turns.Operation) error
 
@@ -135,6 +136,9 @@ func generalModel(ctx context.Context, ws, repo, role, id, instructions, prompt,
 		authority <- nil
 	}
 	result, runErr := readOnlyModel(turnCtx, instructions, prompt, model, effort, schema)
+	if result.Usage != nil && op.Device != "" && MeasureGeneral != nil {
+		MeasureGeneral(op, result)
+	}
 	cancel()
 	if e := <-authority; e != nil {
 		runErr = errors.Join(runErr, e)

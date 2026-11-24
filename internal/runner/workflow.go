@@ -239,6 +239,8 @@ var modelTurn = func(ctx context.Context, a *Attempt, directive, prompt string, 
 	return c.Turn(directive, prompt, settings.Model, settings.Reasoning, schema)
 }
 
+var MeasureWorker func(Summary, agent.Result)
+
 func turn(ctx context.Context, a *Attempt, directive string, payload any, schema any) (agent.Result, error) {
 	var empty agent.Result
 	if err := boundary(ctx, a.ID); err != nil {
@@ -262,6 +264,9 @@ func turn(ctx context.Context, a *Attempt, directive string, payload any, schema
 	})
 	// The local adapter synchronously waits for the child to end. A lost cloud
 	// end receipt retains server capacity and never substitutes a successful turn.
+	if result.Usage != nil && MeasureWorker != nil {
+		MeasureWorker(admissionSubject(a), result)
+	}
 	return result, errors.Join(runErr, hook(AfterTurn, a), release())
 }
 func activityDuration(start time.Time) *int64 {
@@ -273,7 +278,7 @@ func activityDuration(start time.Time) *int64 {
 }
 
 func recordTurn(a *Attempt, r agent.Result, summary string) Artifact {
-	return Artifact{DurationMS: r.DurationMS, Phase: a.Phase, Model: r.Model, Thread: r.Thread, Turn: r.Turn, Summary: summary}
+	return Artifact{DurationMS: r.DurationMS, Phase: a.Phase, Model: r.Model, Thread: r.Thread, Turn: r.Turn, Summary: summary, Usage: r.Usage}
 }
 
 type edit struct{ Path, Content string }

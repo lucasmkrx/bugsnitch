@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lucasmkrx/bugsnitch/internal/agent"
 	"github.com/lucasmkrx/bugsnitch/internal/journalbridge"
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 )
@@ -70,8 +71,9 @@ type Finding struct {
 	Rationale string `json:"rationale"`
 }
 type Artifact struct {
-	DurationMS                                                                           *int64 `json:"durationMs,omitempty"`
-	ID                                                                                   string `json:"id,omitempty"`
+	Usage                                                                                *agent.ModelUsage `json:"usage,omitempty"`
+	DurationMS                                                                           *int64            `json:"durationMs,omitempty"`
+	ID                                                                                   string            `json:"id,omitempty"`
 	Phase, At, BaseSHA, CandidateSHA, IssueVersion, Policy, Thread, Turn, Model, Summary string
 	ChangedFiles, Command                                                                []string  `json:",omitempty"`
 	ExitCode                                                                             *int      `json:",omitempty"`

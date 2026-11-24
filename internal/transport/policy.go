@@ -136,3 +136,32 @@ func (s *Server) deviceLimits(call *domainCall) error {
 	}
 	return call.reply(200, object{"turns": b.Turns, "version": b.Version + 1})
 }
+
+func (s *Server) budget(call *domainCall) error {
+	var b struct {
+		MonthlyTurns json.RawMessage
+		Version      int64
+	}
+	if err := call.decode(&b); err != nil {
+		return err
+	}
+	var limit *int64
+	if len(b.MonthlyTurns) == 0 || json.Unmarshal(b.MonthlyTurns, &limit) != nil || (limit != nil && (*limit < 0 || *limit > 10000000)) || b.Version < 1 {
+		return bad("Choose a monthly turn budget from 0 to 10000000, or null for unlimited")
+	}
+	err := transaction(call.ctx, s.DB, func(tx *sql.Tx) error {
+		var version int64
+		err := tx.QueryRowContext(call.ctx, "UPDATE workspaces SET monthly_turn_limit=$1,limits_version=limits_version+1 WHERE id=$2 AND limits_version=$3 RETURNING limits_version", limit, call.Workspace, b.Version).Scan(&version)
+		if err == sql.ErrNoRows {
+			return conflict("Workspace limits changed")
+		}
+		if err != nil {
+			return err
+		}
+		return event(call.ctx, tx, call.Workspace, "", "budget.updated", call.Workspace)
+	})
+	if err != nil {
+		return err
+	}
+	return call.reply(200, object{"monthlyTurns": limit})
+}

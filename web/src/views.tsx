@@ -791,9 +791,11 @@ export function Views({
             )}
           </Panel>
           <Verification
-            key={i.id + ":" + i.version}
+            key={i.id}
+            owner={role === "owner"}
+            pulls={s.pullRequests.filter(p=>p.projectId===i.projectId && p.issueNumber===i.issueNumber && p.state==="MERGED" && p.mergedSha)}
             incident={i}
-            locked={locked}
+            locked={offlineLocked}
           />
         </>
       );

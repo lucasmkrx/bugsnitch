@@ -10,6 +10,11 @@ import {
   enc,
   messageOf,
 } from "./api";
+import {
+  DeploymentMonitor,
+  type MonitorState,
+  type GateCredential,
+} from "./deployment-monitor";
 import type { Run } from "./actions";
 import { Field, Panel, Badge, Empty, Modal, when } from "./ui";
 
@@ -559,12 +564,13 @@ function PullHandover({
 }
 
 interface Receipt {
+  source?: string;
   candidate: string;
   build: string;
   at: string;
   evidence: string;
 }
-interface Verdict {
+interface Verdict extends MonitorState {
   status: string;
   reason: string;
   environment: string;
@@ -576,13 +582,22 @@ interface Verdict {
 export function Verification({
   incident,
   locked,
+  owner,
+  pulls,
 }: {
   incident: Incident;
   locked: boolean;
+  owner: boolean;
+  pulls: Pull[];
 }) {
-  const [verdict, setVerdict] = useState<Verdict>(),
+  const [credential, setCredential] = useState<GateCredential>(),
+    [observed, setVerdict] = useState<Verdict>(),
+    [checkedVersion, setCheckedVersion] = useState(0),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false);
+  const verdict = checkedVersion === incident.version ? observed : undefined;
+  const path =
+    "projects/" + enc(incident.projectId) + "/incidents/" + enc(incident.id);
   return (
     <Panel title="Environment verification">
       <form
@@ -594,6 +609,7 @@ export function Verification({
           setVerdict(undefined);
           setLoading(true);
           try {
+            setCheckedVersion(incident.version);
             setVerdict(
               await request<Verdict>(
                 "projects/" +
@@ -630,6 +646,28 @@ export function Verification({
           </p>
         )}
       </form>
+      {credential && (
+        <div className="panel-body" role="status">
+          <p>
+            Save this read-only promotion gate credential in your deployment
+            job.
+          </p>
+          <p>
+            Monitor <code>{credential.monitorId}</code>
+          </p>
+          <Field title="Gate token">
+            <input
+              readOnly
+              type="password"
+              value={credential.gateToken}
+              onFocus={(e) => e.currentTarget.select()}
+            />
+          </Field>
+          <button onClick={() => setCredential(undefined)}>
+            Dismiss credential
+          </button>
+        </div>
+      )}
       {verdict && (
         <div className="panel-body">
           <Badge>{verdict.status}</Badge>
@@ -654,10 +692,21 @@ export function Verification({
                     Revision <code>{r.candidate}</code>
                   </p>
                   {r.build && <p>Build {r.build}</p>}
-                  <p>Recorded by {verdict.receiptSource}</p>
+                  <p>Recorded by {r.source || verdict.receiptSource}</p>
                 </details>
               ),
           )}
+          <DeploymentMonitor
+            pulls={pulls}
+            path={path}
+            state={verdict}
+            environment={verdict.environment}
+            candidate={verdict.fix?.candidate}
+            version={incident.version}
+            locked={locked || !owner}
+            onCredential={setCredential}
+            onChanged={() => setVerdict(undefined)}
+          />
         </div>
       )}
     </Panel>

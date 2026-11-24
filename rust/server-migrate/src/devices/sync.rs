@@ -16,6 +16,8 @@ struct Request {
 #[serde(deny_unknown_fields)]
 struct Sync {
     protocol: i64,
+    #[serde(default)]
+    metering: Vec<super::metering::Reading>,
     attempts: Option<Vec<Report>>,
     acks: Option<Vec<controls::Ack>>,
 }
@@ -55,6 +57,17 @@ struct Evidence {
 }
 
 impl Report {
+    fn workflow_reason(&self) -> bool {
+        matches!(
+            self.reason_code.as_str(),
+            "plan_review_required"
+                | "owner_input_required"
+                | "review_correction"
+                | "recovered_candidate"
+                | "owner_paused"
+        )
+    }
+
     fn validate(&self) -> Result<()> {
         if !self.issue_updated_at.is_empty()
             && (self.issue_updated_at.len() > 40
@@ -84,20 +97,22 @@ impl Report {
         {
             return Err(Error::bad("Invalid attempt metadata"));
         }
-        if !matches!(
-            self.reason_code.as_str(),
-            "" | "sign_in_required"
-                | "allowance_exhausted"
-                | "model_unavailable"
-                | "provider_rate_limited"
-                | "provider_unavailable"
-                | "device_unauthorized"
-                | "authority_unreachable"
-                | "authority_stale"
-                | "control_pending"
-                | "local_capacity"
-                | "task_failed"
-        ) {
+        if !(self.state == "waiting" && self.workflow_reason())
+            && !matches!(
+                self.reason_code.as_str(),
+                "" | "sign_in_required"
+                    | "allowance_exhausted"
+                    | "model_unavailable"
+                    | "provider_rate_limited"
+                    | "provider_unavailable"
+                    | "device_unauthorized"
+                    | "authority_unreachable"
+                    | "authority_stale"
+                    | "control_pending"
+                    | "local_capacity"
+                    | "task_failed"
+            )
+        {
             return Err(Error::bad("Invalid attempt reason code"));
         }
         let evidence = self.evidence.as_deref().unwrap_or_default();
@@ -129,7 +144,7 @@ pub(super) fn handle(db: &Db<'_>, input: Value) -> Result<Value> {
     } = serde_json::from_value(input)?;
     let reports = sync.attempts.unwrap_or_default();
     let acks = sync.acks.unwrap_or_default();
-    if sync.protocol != 1 || reports.len() > 64 || acks.len() > 64 {
+    if sync.protocol != 1 || reports.len() > 64 || acks.len() > 64 || sync.metering.len() > 32 {
         return Err(Error::bad("Invalid device sync envelope"));
     }
     for report in &reports {
@@ -157,6 +172,13 @@ pub(super) fn handle(db: &Db<'_>, input: Value) -> Result<Value> {
             },
         )?;
     }
+    // Publish late measurements and admit new turns in the same workspace lock order.
+    if !sync.metering.is_empty() {
+        db.one(
+            "SELECT id FROM workspaces WHERE id=$1 FOR NO KEY UPDATE",
+            &[workspace],
+        )?;
+    }
     let assigned = projects(db, workspace, device)?;
     for report in reports {
         if !assigned
@@ -167,6 +189,9 @@ pub(super) fn handle(db: &Db<'_>, input: Value) -> Result<Value> {
         }
         save_report(db, workspace, device, &report)?;
     }
+    for reading in sync.metering {
+        reading.record(db, workspace, device, &assigned)?;
+    }
     if db
         .one("SELECT stopped FROM workspaces WHERE id=$1", &[workspace])?
         .bool(0)?
@@ -175,7 +200,7 @@ pub(super) fn handle(db: &Db<'_>, input: Value) -> Result<Value> {
     }
     let commands = controls::deliver(db, workspace, device, acks)?;
     Ok(
-        json!({"workspaceId":workspace,"deviceId":device,"stageTimings":true,"projects":assigned,"commands":commands}),
+        json!({"workspaceId":workspace,"deviceId":device,"stageTimings":true,"workflowReasons":true,"turnMetering":true,"projects":assigned,"commands":commands}),
     )
 }
 
@@ -203,11 +228,15 @@ fn save_report(db: &Db<'_>, workspace: &str, device: &str, a: &Report) -> Result
     // A reconciled snapshot can skip versions, but cannot move the issue,
     // machine, base or finished attempt. An older runner may supply the
     // issue revision later on an otherwise identical, already recorded report.
+    // The same applies to a newly supported workflow reason after a server upgrade.
     let evidence = serde_json::to_string(a.evidence.as_deref().unwrap_or_default())?;
+    let workflow_reason = a.workflow_reason().to_string();
     let updated = db.exec("INSERT INTO attempt_reports
         (id,workspace_id,project_id,device_id,issue_number,base_sha,candidate_sha,phase,state,version,evidence,issue_updated_at,reason_code)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13)
-        ON CONFLICT (workspace_id,id) DO UPDATE SET reason_code=EXCLUDED.reason_code,
+        ON CONFLICT (workspace_id,id) DO UPDATE SET reason_code=CASE
+            WHEN attempt_reports.version=EXCLUDED.version AND EXCLUDED.reason_code='' THEN attempt_reports.reason_code
+            ELSE EXCLUDED.reason_code END,
         issue_updated_at=coalesce(nullif(EXCLUDED.issue_updated_at,''),attempt_reports.issue_updated_at),
         evidence=EXCLUDED.evidence,candidate_sha=EXCLUDED.candidate_sha,phase=EXCLUDED.phase,state=EXCLUDED.state,
         version=EXCLUDED.version,updated_at=now()
@@ -216,10 +245,14 @@ fn save_report(db: &Db<'_>, workspace: &str, device: &str, a: &Report) -> Result
         AND (attempt_reports.issue_updated_at='' OR EXCLUDED.issue_updated_at='' OR attempt_reports.issue_updated_at=EXCLUDED.issue_updated_at)
         AND ((attempt_reports.version<EXCLUDED.version AND attempt_reports.state NOT IN ('completed','failed','cancelled')
         AND (EXCLUDED.phase<>'plan' OR attempt_reports.phase='plan') AND (EXCLUDED.candidate_sha<>'' OR attempt_reports.candidate_sha=''))
-        OR (attempt_reports.issue_updated_at='' AND EXCLUDED.issue_updated_at<>''
-        AND (attempt_reports.version,attempt_reports.state,attempt_reports.phase,attempt_reports.candidate_sha,attempt_reports.evidence,attempt_reports.reason_code)
-          = (EXCLUDED.version,EXCLUDED.state,EXCLUDED.phase,EXCLUDED.candidate_sha,EXCLUDED.evidence,EXCLUDED.reason_code)))",
-        &[&a.id,workspace,&a.project_id,device,&number,&a.base_sha,&a.candidate_sha,&a.phase,&a.state,&revision,&evidence,&a.issue_updated_at,&a.reason_code])?;
+        OR (((attempt_reports.issue_updated_at='' AND EXCLUDED.issue_updated_at<>'')
+             OR (attempt_reports.reason_code='' AND $14::bool))
+        AND (attempt_reports.version,attempt_reports.state,attempt_reports.phase,attempt_reports.candidate_sha,attempt_reports.evidence)
+          = (EXCLUDED.version,EXCLUDED.state,EXCLUDED.phase,EXCLUDED.candidate_sha,EXCLUDED.evidence)
+        AND (attempt_reports.reason_code=EXCLUDED.reason_code OR (attempt_reports.reason_code='' AND $14::bool)
+            OR (EXCLUDED.reason_code='' AND attempt_reports.reason_code IN
+                ('plan_review_required','owner_input_required','review_correction','recovered_candidate','owner_paused')))))",
+        &[&a.id,workspace,&a.project_id,device,&number,&a.base_sha,&a.candidate_sha,&a.phase,&a.state,&revision,&evidence,&a.issue_updated_at,&a.reason_code,&workflow_reason])?;
     if updated == 1 {
         let sha = if a.candidate_sha.is_empty() {
             &a.base_sha
@@ -242,7 +275,9 @@ fn save_report(db: &Db<'_>, workspace: &str, device: &str, a: &Report) -> Result
     } else {
         let permitted = db.one("SELECT (device_id,project_id,issue_number,base_sha)=($3,$4,$5::int,$6)
             AND (version>$7::bigint OR (version=$7 AND candidate_sha=$8 AND phase=$9 AND state=$10 AND evidence=$11::jsonb
-            AND reason_code=$13 AND ($12='' OR issue_updated_at=$12))) FROM attempt_reports WHERE workspace_id=$1 AND id=$2",
+            AND (reason_code=$13 OR ($13='' AND reason_code IN
+                ('plan_review_required','owner_input_required','review_correction','recovered_candidate','owner_paused')))
+            AND ($12='' OR issue_updated_at=$12))) FROM attempt_reports WHERE workspace_id=$1 AND id=$2",
             &[workspace,&a.id,device,&a.project_id,&number,&a.base_sha,&revision,&a.candidate_sha,&a.phase,&a.state,&evidence,&a.issue_updated_at,&a.reason_code])?.bool(0)?;
         if !permitted {
             return Err(Error::conflict(

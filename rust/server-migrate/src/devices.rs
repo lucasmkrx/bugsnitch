@@ -3,6 +3,7 @@
 //! Only hashes of pairing codes and bearer credentials cross the local protocol.
 mod artifacts;
 mod controls;
+mod metering;
 mod sync;
 
 use crate::coord::{Db, Details, Error, Result};
@@ -105,13 +106,15 @@ fn pairing(db: &Db<'_>, b: Pairing) -> Result<Value> {
 
 fn projects(db: &Db<'_>, workspace: &str, device: &str) -> Result<Vec<Value>> {
     db.rows(
-        "SELECT p.id,p.repository,p.paused FROM projects p JOIN device_projects m
+        "SELECT p.id,p.repository,(p.paused OR w.stopped),p.policy_version,coalesce((SELECT v.id FROM plan_versions v
+          WHERE v.workspace_id=p.workspace_id AND v.project_id=p.id AND v.approved_at IS NOT NULL ORDER BY v.version DESC LIMIT 1),'')
+        FROM projects p JOIN workspaces w ON w.id=p.workspace_id JOIN device_projects m
         ON (p.workspace_id,p.id)=(m.workspace_id,m.project_id)
         WHERE m.workspace_id=$1 AND m.device_id=$2 ORDER BY p.id",
         &[workspace, device],
     )?
     .iter()
-    .map(|r| Ok(json!({"id":r.text(0)?, "repository":r.text(1)?, "paused":r.bool(2)?})))
+    .map(|r| Ok(json!({"id":r.text(0)?, "repository":r.text(1)?, "paused":r.bool(2)?,"policyVersion":r.i64(3)?,"planId":r.text(4)?})))
     .collect()
 }
 

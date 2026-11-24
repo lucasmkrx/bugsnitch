@@ -306,6 +306,13 @@ pub(super) async fn github(
             .map_err(intake_error)?;
         return Ok(StatusCode::ACCEPTED);
     }
+    let event = header(&headers, "x-github-event").unwrap_or("");
+    if matches!(event, "deployment_status" | "check_run") {
+        let delivery = header(&headers, "x-github-delivery")
+            .filter(|d| UUID.is_match(d))
+            .ok_or_else(|| fail(StatusCode::UNPROCESSABLE_ENTITY, "Invalid delivery id"))?;
+        return super::releases::record(state, delivery, event, &body).await;
+    }
     let p = github_signal(
         header(&headers, "x-github-delivery").unwrap_or(""),
         header(&headers, "x-github-event").unwrap_or(""),

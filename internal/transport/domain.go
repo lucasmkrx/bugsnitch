@@ -86,6 +86,9 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 	if r.Actor[0] == "plugin" && (r.Actor[1] == "local-grant" || r.Actor[1] == "oauth-owner-grant") {
 		return s.integrationDomain(audit.WithActor(ctx, audit.Plugin, r.Actor[1]), r.Operation, r.Actor, r.Input)
 	}
+	if r.Operation == "deployment.github" || r.Operation == "deployment.gate" {
+		return s.releaseSignal(ctx, r)
+	}
 	if r.Actor[1] == "" {
 		return nil, denied
 	}
@@ -108,6 +111,7 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 		"pull.queue": s.queuePull, "pull.refresh": s.refreshPull, "pull.evidence": s.recordPull, "pull.draft": s.requestDraft,
 		"incident.report": s.report, "incident.promote": s.promote,
 		"incident.verdict": s.incidentVerdict, "incident.receipt": s.incidentReceipt,
+		"deployment.disable": s.disableMonitor, "deployment.configure": s.configureMonitor, "deployment.clear": s.clearHold,
 		"linear.link":   s.linkLinear,
 		"pull.handover": s.recordHandover,
 		"pull.watch":    s.watchPull,

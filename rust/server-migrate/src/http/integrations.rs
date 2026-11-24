@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 pub(crate) mod hooks;
 pub(super) mod mcp;
+mod releases;
 
 use super::Shared;
 use axum::{
@@ -187,6 +188,10 @@ pub fn routes() -> Router<Shared> {
         .route(
             "/hooks/github",
             post(hooks::github).layer(DefaultBodyLimit::max(1 << 20)),
+        )
+        .route(
+            "/api/v1/deployment-gates/{id}",
+            post(releases::gate).layer(DefaultBodyLimit::max(2048)),
         )
         .route(DISCOVERY, get(mcp::discovery))
         .route("/mcp", any(mcp::serve))

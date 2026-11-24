@@ -122,6 +122,18 @@ pub(super) fn routes() -> Router<Shared> {
             "/api/v1/projects/{project}/attempts/{id}/draft-pr",
             "pull.draft",
         ),
+        (
+            "/api/v1/projects/{project}/incidents/{id}/deployment-monitor",
+            "deployment.configure",
+        ),
+        (
+            "/api/v1/projects/{project}/incidents/{id}/deployment-holds/clear",
+            "deployment.clear",
+        ),
+        (
+            "/api/v1/projects/{project}/incidents/{id}/deployment-monitor/disable",
+            "deployment.disable",
+        ),
         ("/api/v1/incidents", "incident.report"),
         (
             "/api/v1/projects/{project}/incidents/{id}/promote",

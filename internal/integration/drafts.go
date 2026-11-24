@@ -23,32 +23,38 @@ import (
 )
 
 type DraftRequest struct {
-	Target        string `json:"target"`
-	Version       int64  `json:"version"`
-	PolicyVersion int64  `json:"policyVersion"`
-	Summary       string `json:"summary,omitempty"`
-	Behavior      string `json:"behavior,omitempty"`
+	ApprovalVersion int64  `json:"approvalVersion,omitempty"`
+	Delivery        string `json:"delivery,omitempty"`
+	Candidate       string `json:"candidateSha,omitempty"`
+	Target          string `json:"target"`
+	Version         int64  `json:"version"`
+	PolicyVersion   int64  `json:"policyVersion"`
+	Summary         string `json:"summary,omitempty"`
+	Behavior        string `json:"behavior,omitempty"`
 }
 type Draft struct {
-	ProjectID   string    `json:"projectId"`
-	AttemptID   string    `json:"attemptId"`
-	IssueNumber int64     `json:"issueNumber"`
-	Number      *int64    `json:"number,omitempty"`
-	Candidate   string    `json:"candidateSha"`
-	Base        string    `json:"baseSha"`
-	Target      string    `json:"target"`
-	Status      string    `json:"status"`
-	Reason      string    `json:"reason,omitempty"`
-	UpdatedAt   time.Time `json:"updatedAt"`
+	ApprovalVersion int64     `json:"approvalVersion"`
+	ReportVersion   int64     `json:"reportVersion"`
+	PolicyVersion   int64     `json:"policyVersion"`
+	ProjectID       string    `json:"projectId"`
+	AttemptID       string    `json:"attemptId"`
+	IssueNumber     int64     `json:"issueNumber"`
+	Number          *int64    `json:"number,omitempty"`
+	Candidate       string    `json:"candidateSha"`
+	Base            string    `json:"baseSha"`
+	Target          string    `json:"target"`
+	Status          string    `json:"status"`
+	Reason          string    `json:"reason,omitempty"`
+	UpdatedAt       time.Time `json:"updatedAt"`
 }
 
 var attemptIdentity = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
-const draftCols = "project_id,attempt_id,issue_number,number,candidate_sha,base_sha,target,status,reason,updated_at"
+const draftCols = "approval_version,report_version,policy_version,project_id,attempt_id,issue_number,number,candidate_sha,base_sha,target,status,reason,updated_at"
 
 func scanDraft(row scanner) (Draft, error) {
 	var d Draft
-	err := row.Scan(&d.ProjectID, &d.AttemptID, &d.IssueNumber, &d.Number, &d.Candidate, &d.Base, &d.Target, &d.Status, &d.Reason, &d.UpdatedAt)
+	err := row.Scan(&d.ApprovalVersion, &d.ReportVersion, &d.PolicyVersion, &d.ProjectID, &d.AttemptID, &d.IssueNumber, &d.Number, &d.Candidate, &d.Base, &d.Target, &d.Status, &d.Reason, &d.UpdatedAt)
 	return d, err
 }
 func (s Store) Drafts(ctx context.Context, w string) ([]Draft, error) {
@@ -75,10 +81,11 @@ func inspectCandidate(ctx context.Context, tx *sql.Tx, w, p, id string) (candida
 	err := tx.QueryRowContext(ctx, `SELECT p.repository,m.installation_id,m.repository_id,a.candidate_sha,a.base_sha,a.issue_number,a.issue_updated_at,a.version,p.policy_version,a.evidence,coalesce((SELECT plan_id FROM admission WHERE workspace_id=a.workspace_id AND attempt_id=a.id),''),
 	m.active AND NOT w.stopped AND NOT p.paused AND p.allow_draft_pr AND NOT d.revoked AND a.state='completed' AND a.phase='wrap_up'
 	FROM attempt_reports a JOIN projects p ON (p.id,p.workspace_id)=(a.project_id,a.workspace_id)
+	JOIN device_projects assigned ON (assigned.workspace_id,assigned.project_id,assigned.device_id)=(a.workspace_id,a.project_id,a.device_id)
 	JOIN workspaces w ON w.id=a.workspace_id
 	JOIN devices d ON (d.id,d.workspace_id)=(a.device_id,a.workspace_id)
 	JOIN github_mappings m ON (m.project_id,m.workspace_id)=(p.id,p.workspace_id)
-	WHERE p.workspace_id=$1 AND p.id=$2 AND a.id=$3 FOR SHARE OF w,p,m,d,a`, w, p, id).Scan(&c.repo, &c.install, &c.repoID, &c.head, &c.base, &c.issue, &c.issueTime, &c.version, &c.policy, &stages, &planID, &allowed)
+	WHERE p.workspace_id=$1 AND p.id=$2 AND a.id=$3 FOR SHARE OF w,p,m,d,a,assigned`, w, p, id).Scan(&c.repo, &c.install, &c.repoID, &c.head, &c.base, &c.issue, &c.issueTime, &c.version, &c.policy, &stages, &planID, &allowed)
 	if err != nil {
 		return c, err
 	}
@@ -118,7 +125,13 @@ func (s Store) RequestDraft(ctx context.Context, w, p, id string, r DraftRequest
 	if !attemptIdentity.MatchString(id) || !github.ValidBranch(r.Target) || strings.HasPrefix(r.Target, "bugsnitch/") || r.Version < 1 || r.PolicyVersion < 1 || len(r.Summary) > 2048 || len(r.Behavior) > 2048 {
 		return empty, ErrInvalid
 	}
-	if s.App == nil {
+	if r.ApprovalVersion < 0 || r.Delivery == "withdraw" && r.ApprovalVersion < 1 || r.Delivery == "" && r.ApprovalVersion != 0 {
+		return empty, ErrInvalid
+	}
+	if r.Delivery != "" && (r.Delivery != "local_ship" && r.Delivery != "withdraw" || !commitSHA.MatchString(r.Candidate)) {
+		return empty, ErrInvalid
+	}
+	if s.App == nil && r.Delivery != "withdraw" {
 		return empty, ErrUnavailable
 	}
 	tx, err := s.DB.BeginTx(ctx, nil)
@@ -126,19 +139,46 @@ func (s Store) RequestDraft(ctx context.Context, w, p, id string, r DraftRequest
 		return empty, err
 	}
 	defer tx.Rollback()
+	if r.Delivery == "withdraw" {
+		d, err := scanDraft(tx.QueryRowContext(ctx, `UPDATE draft_pr_intents SET status='withdrawn',approval_version=approval_version+1,reason='Owner withdrew local publication approval',updated_at=now()
+		  WHERE workspace_id=$1 AND project_id=$2 AND attempt_id=$3 AND report_version=$4 AND policy_version=$5 AND candidate_sha=$6 AND target=$7 AND approval_version=$8 AND status='awaiting_publication' RETURNING `+draftCols, w, p, id, r.Version, r.PolicyVersion, r.Candidate, r.Target, r.ApprovalVersion))
+		if errors.Is(err, sql.ErrNoRows) {
+			return empty, ErrConflict
+		}
+		if err != nil {
+			return empty, err
+		}
+		ctx = audit.WithDetails(ctx, audit.Details{PolicyVersion: r.PolicyVersion, SubjectVersion: r.Version, EvidenceRef: r.Candidate, Reason: "Owner withdrew local publication approval"})
+		if err = draftEvent(ctx, tx, w, p, id, "draft.withdrawn"); err != nil {
+			return empty, err
+		}
+		return d, tx.Commit()
+	}
 	c, err := inspectCandidate(ctx, tx, w, p, id)
 	if err != nil {
 		return empty, err
 	}
-	if c.version != r.Version || c.policy != r.PolicyVersion {
+	if c.version != r.Version || c.policy != r.PolicyVersion || (r.Candidate != "" && r.Candidate != c.head) {
 		return empty, ErrConflict
 	}
 	r.Summary = incidents.Redact(r.Summary)
 	r.Behavior = incidents.Redact(r.Behavior)
 	var nonce [16]byte
 	rand.Read(nonce[:])
-	result, err := tx.ExecContext(ctx, `INSERT INTO draft_pr_intents(workspace_id,project_id,attempt_id,report_version,policy_version,installation_id,repository_id,issue_number,issue_updated_at,candidate_sha,base_sha,target,marker,status,summary,behavior)
-	VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'queued',$14,$15) ON CONFLICT DO NOTHING`, w, p, id, r.Version, r.PolicyVersion, c.install, c.repoID, c.issue, c.issueTime, c.head, c.base, r.Target, hex.EncodeToString(nonce[:]), r.Summary, r.Behavior)
+	var result sql.Result
+	if r.ApprovalVersion > 0 {
+		// Only a held approval can transition to withdrawn. A released
+		// or terminal App job never re-enters the local publication flow.
+		result, err = tx.ExecContext(ctx, `UPDATE draft_pr_intents SET
+		    approval_version=approval_version+1,report_version=$4,policy_version=$5,installation_id=$6,repository_id=$7,issue_number=$8,
+		    issue_updated_at=$9,candidate_sha=$10,base_sha=$11,target=$12,marker=$13,summary=$14,behavior=$15,
+		    status='awaiting_publication',reason='',updated_at=now()
+		  WHERE workspace_id=$1 AND project_id=$2 AND attempt_id=$3 AND status='withdrawn' AND local_ship
+		    AND approval_version=$16 AND number IS NULL AND tries=0`, w, p, id, r.Version, r.PolicyVersion, c.install, c.repoID, c.issue, c.issueTime, c.head, c.base, r.Target, hex.EncodeToString(nonce[:]), r.Summary, r.Behavior, r.ApprovalVersion)
+	} else {
+		result, err = tx.ExecContext(ctx, `INSERT INTO draft_pr_intents(workspace_id,project_id,attempt_id,report_version,policy_version,installation_id,repository_id,issue_number,issue_updated_at,candidate_sha,base_sha,target,marker,status,summary,behavior,local_ship)
+	VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,CASE WHEN $16 THEN 'awaiting_publication' ELSE 'queued' END,$14,$15,$16) ON CONFLICT DO NOTHING`, w, p, id, r.Version, r.PolicyVersion, c.install, c.repoID, c.issue, c.issueTime, c.head, c.base, r.Target, hex.EncodeToString(nonce[:]), r.Summary, r.Behavior, r.Delivery == "local_ship")
+	}
 	if err != nil {
 		return empty, err
 	}
@@ -146,7 +186,7 @@ func (s Store) RequestDraft(ctx context.Context, w, p, id string, r DraftRequest
 	if err != nil {
 		return empty, err
 	}
-	d, err := scanDraft(tx.QueryRowContext(ctx, "SELECT "+draftCols+" FROM draft_pr_intents WHERE workspace_id=$1 AND project_id=$2 AND attempt_id=$3 AND report_version=$4 AND policy_version=$5 AND target=$6 AND summary=$7 AND behavior=$8", w, p, id, r.Version, r.PolicyVersion, r.Target, r.Summary, r.Behavior))
+	d, err := scanDraft(tx.QueryRowContext(ctx, "SELECT "+draftCols+" FROM draft_pr_intents WHERE workspace_id=$1 AND project_id=$2 AND attempt_id=$3 AND report_version=$4 AND policy_version=$5 AND target=$6 AND summary=$7 AND behavior=$8 AND local_ship=$9 AND approval_version=$10 AND status<>'withdrawn'", w, p, id, r.Version, r.PolicyVersion, r.Target, r.Summary, r.Behavior, r.Delivery == "local_ship", r.ApprovalVersion+1))
 	if errors.Is(err, sql.ErrNoRows) {
 		return empty, ErrConflict
 	}
@@ -154,8 +194,12 @@ func (s Store) RequestDraft(ctx context.Context, w, p, id string, r DraftRequest
 		return empty, err
 	}
 	if count == 1 {
-		ctx = audit.WithDetails(ctx, audit.Details{Reason: "Reviewed candidate queued for draft publication", PolicyVersion: r.PolicyVersion, SubjectVersion: r.Version, EvidenceRef: c.head})
-		if err = draftEvent(ctx, tx, w, p, id, "draft.requested"); err != nil {
+		ctx = audit.WithDetails(ctx, audit.Details{Reason: "Owner authorized draft publication of the reviewed candidate", PolicyVersion: r.PolicyVersion, SubjectVersion: r.Version, EvidenceRef: c.head})
+		event := "draft.requested"
+		if r.ApprovalVersion > 0 {
+			event = "draft.reauthorized"
+		}
+		if err = draftEvent(ctx, tx, w, p, id, event); err != nil {
 			return empty, err
 		}
 	}

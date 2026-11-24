@@ -1124,7 +1124,15 @@ export function Views({
     );
   }
   if (page === "prs")
-    return <Pulls state={s} project={project} locked={locked} run={run} />;
+    return (
+      <Pulls
+        state={s}
+        project={project}
+        locked={offlineLocked}
+        canAttest={role !== "operator"}
+        run={run}
+      />
+    );
   if (page === "chat") {
     return (
       <>

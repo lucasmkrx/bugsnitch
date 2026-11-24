@@ -1,6 +1,6 @@
 # Paired factory evaluation
 
-Run both products on fresh clones of the same commit with the same ticket, model, permissions, time limit and maximum spend. The evaluator measures the resulting **local candidate**. Each row identifies its driver as a real product or a test control. A successful local trial is evidence about candidate delivery. A production comparison also needs an independent deployment observation and an acceptance probe on the served build.
+Run both products on fresh clones of the same commit with the same ticket, model, permissions, time limit and maximum spend. The evaluator measures the resulting **local candidate**. Each row names the product, and the report identifies each configured driver as a product or scripted control. A successful local trial is evidence about candidate delivery. A production comparison also needs an independent deployment observation and an acceptance probe on the served build.
 
 ## Local trials
 
@@ -45,12 +45,12 @@ The example uses absolute paths to both bundled drivers. Give each real run an e
 
 ```sh
 python3 scripts/factory-eval.py --drivers /private/path/drivers.json \
-  --output /private/tmp/factory-evaluation --seed 7421 --repetitions 3
+  --output /tmp/factory-evaluation --seed 7421 --repetitions 3
 ```
 
 The output directory must be new. Each driver starts in its own clone with its own temporary and home directories. `FACTORY_JOB` identifies a JSON file containing the task, base SHA, ticket, repository, shared constraints, result reference, checkpoint reference and telemetry path. `FACTORY_PHASE` is `start` on first invocation and `resume` after the interruption. A driver can explicitly allow selected incoming environment variables using its `passEnv` array. Configure repeatable, identically scoped product identities and enforce the common spend ceiling through those accounts or adapters. The harness enforces the elapsed limit and checks reported spend after execution.
 
-A wrapper submits the ticket to the named product, waits for it to produce a candidate, and makes its commit available in the supplied clone under `refs/heads/factory-result`. On the interrupted-CI trial it first records the reviewed commit in `refs/heads/factory-checkpoint` and stays alive. The harness kills the driver’s process group after observing the checkpoint and starts the same driver again. A wrapper should run the worker in the foreground or couple its worker’s lifetime to that foreground process. A persistent hosted worker needs a separately observed provider interruption to support a claim about remote-worker recovery. Set `unsupported` to a mapping of task names to reasons for capabilities the product lacks. A missing account or broken wrapper is an environment or trial failure.
+A wrapper submits the ticket to the named product, waits for it to produce a candidate, and makes its commit available in the supplied clone under `refs/heads/factory-result`. On the interrupted-CI trial it first records the candidate in `refs/heads/factory-checkpoint` before validation and review, then stays alive. The harness kills the driver’s process group after observing the checkpoint and starts the same driver again. The resumed Bugsnitch worker validates and reviews that exact commit. A wrapper should run the worker in the foreground or couple its worker’s lifetime to that foreground process. A persistent hosted worker needs a separately observed provider interruption to support a claim about remote-worker recovery. Set `unsupported` to a mapping of task names to reasons the driver cannot perform them. A missing account or broken wrapper is an environment or trial failure.
 
 Driver exit 75 identifies an explicit product hold. If a commit was produced, the harness grades it independently and records its result in `candidateGrade`. The aggregate retains the held outcome. Exit 78 identifies an unsupported driver capability. An optional `driver-outcome.json` beside the job file supplies a short `reason` for either outcome.
 
@@ -60,7 +60,7 @@ The wrapper may write an operator-measured timing and cost record to the supplie
 {"costUsd":0.37,"costBasis":"billed","humanSeconds":42,"source":"trial-scoped billing export and operator timer"}
 ```
 
-`report.json` is updated after each trial. It preserves failures and unsupported rows. Costs from unsuccessful attempts contribute to cost per passing candidate. Missing costs, mixed cost bases and missing human timings leave their respective aggregate unknown. Elapsed driver time and grading time are recorded separately for graded candidates. The output records actual model and permission declarations supplied by the operator. Check provider receipts before making claims about equal conditions. For a blinded product study, keep the harness and graders under a separate identity and retain a private historical task set. A seeded local smoke trial exercises a narrow family of checkout changes.
+`report.json` is updated after each trial. It preserves failures and unsupported rows. Costs from unsuccessful attempts contribute to cost per passing candidate. Missing costs, mixed cost bases and missing human timings leave their respective aggregate unknown. Elapsed driver time and grading time are recorded separately for graded candidates. The output records the model and permissions declared in the shared configuration. Use provider receipts to verify which model actually ran and the credentials and limits applied to each trial. For a blinded product study, keep the harness and graders under a separate identity and retain a private historical task set. A seeded local smoke trial exercises a narrow family of checkout changes.
 
 ## Local product probes, November 24, 2026
 

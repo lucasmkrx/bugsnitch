@@ -20,7 +20,7 @@ The runner creates a disposable Git worktree, pauses after planning, applies the
 
 ## Run the repair with a live local Codex account
 
-First run the acceptance target to prepare the dependencies and confirm the browser and database setup. Export the helper paths from the [test setup](../../README.md#verification-and-operations) and sign in to the supported local Codex runtime with your ChatGPT account. The following opt-in runs the same checkout exercise with real planning, implementation and independent review turns, spending that account's allowance.
+First run the acceptance target to prepare the dependencies and confirm the browser and database setup. Its temporary database is removed when the target exits. For the direct Go test below, set `BUGSNITCH_TEST_DATABASE_URL` to a running disposable PostgreSQL database where the test role can create schemas. Export the helper paths and sign in to the supported local Codex runtime with your ChatGPT account. This opt-in uses live planning, implementation and independent review turns and spends that account's allowance. The provider endpoints and served deployment still run on loopback. [Helper paths](../../README.md#verification-and-operations)
 
 ```sh
 BUGSNITCH_TEST_LIVE_CHECKOUT=1 go test -count=1 -v -timeout 15m \
@@ -29,6 +29,6 @@ BUGSNITCH_TEST_LIVE_CHECKOUT=1 go test -count=1 -v -timeout 15m \
 
 ## Connect an instrumented test project
 
-The default configuration works offline. To exercise a real Sentry project that you control, run `npm ci` and `npm run build:sdk` in the disposable copy, then set its public DSN in `config.mjs`. Use a unique release per deployed build. The pinned browser SDK captures a deliberate application signal with a stable grouping key. Run `npm test` to check the fixture's event projection. [SDK release](https://github.com/getsentry/sentry-javascript/releases/tag/11.13.0) · [SDK settings](https://docs.sentry.io/platforms/javascript/configuration/options/)
+The standalone checkout works offline with reporting disabled. A fresh build of the full acceptance exercise downloads its dependencies. To exercise a real Sentry project that you control, run `npm ci` and `npm run build:sdk` in the disposable copy, then set its public DSN in `config.mjs`. Use a unique release per deployed build. The pinned browser SDK captures a deliberate application signal with a stable grouping key. Run `npm test` to check the fixture's event projection. [SDK release](https://github.com/getsentry/sentry-javascript/releases/tag/11.13.0) · [SDK settings](https://docs.sentry.io/platforms/javascript/configuration/options/)
 
 Map the Sentry installation and project, trigger the calculation twice and inspect the distinct event IDs and grouped incident. Promote the incident to a connected disposable GitHub repository. Set `node verify.mjs` as the approved runner validation command. Complete the repair, deploy the actual fixed revision under a new release identifier and record the positive check from that build. [Provider setup](../../docs/PROVIDERS.md)

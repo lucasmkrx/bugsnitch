@@ -26,6 +26,16 @@ func TestOwnerDiagnosticsSamplesAndReconnect(t *testing.T) {
 		}
 	}
 	exec("INSERT INTO workspaces(id,account_id,name) VALUES('test_other','owner','PRIVATE_FOREIGN_MARKER'); INSERT INTO projects(id,workspace_id,name,repository) VALUES('other_project','test_other','private','local/other')")
+	// The live worker marks inbox rows processed in the same transaction that writes
+	// incidents. Hold its write until the owner has sampled the pending rows.
+	gate, err := s.DB.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gate.Rollback()
+	if _, err := gate.Exec("LOCK TABLE incidents IN SHARE MODE"); err != nil {
+		t.Fatal(err)
+	}
 	exec(`INSERT INTO incident_inbox(workspace_id,project_id,source,event_key,group_key,observed,seen_at,accepted_at)
 	VALUES('personal',$1,'sentry','a','g','PRIVATE_INCIDENT_MARKER',now(),now()-interval '8 minutes'),
 	('test_other','other_project','sentry','b','g','private',now(),now()-interval '2 hours')`, p)
@@ -47,6 +57,9 @@ func TestOwnerDiagnosticsSamplesAndReconnect(t *testing.T) {
 		return body, o
 	}
 	body, o := check()
+	if err := gate.Rollback(); err != nil {
+		t.Fatal(err)
+	}
 	if o["contact"].(map[string]any)["observedReconnects24h"] != nil {
 		t.Fatal("historical reconnect count must be unknown")
 	}

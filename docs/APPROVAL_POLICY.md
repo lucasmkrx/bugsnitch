@@ -61,7 +61,9 @@ The command prints the actual policy revision, policy digest, changed paths, mat
 
 ## Replay historical changes
 
-Create a JSON case file with schema 1 and a `cases` array. Each case has a unique `id`, immutable `base` and `head`, `cohort` (`calibration` or `holdout`), `label` (`clean`, `regression` or `revert`), and `labelReference` identifying the accepted result, confirmed incident or observed revert. An optional `evidence` object uses the single-change schema above. An omitted observation produces a hold and shows the policy requirements when the Git subjects and policy are available.
+The workspace owner can label an inspected pre-merge revision and download a case file in Settings → Approval policy history. The export retains the observed base and head, records the outcome evidence and includes attributable current-build recurrences. Run the replay in a checkout containing those Git objects. [Historical approval cases](INTEGRATIONS.md#historical-approval-cases)
+
+To supply your own cases, create a JSON file with schema 1 and a `cases` array. Each case has a unique `id`, immutable `base` and `head`, `cohort` (`calibration` or `holdout`), `label` (`clean`, `regression` or `revert`), and `labelReference` identifying the accepted result, confirmed incident or observed revert. An optional `evidence` object uses the single-change schema above. An omitted observation produces a hold and shows the policy requirements when the Git subjects and policy are available.
 
 ```sh
 bin/bugsnitch approval-preview --repo /path/to/repository \

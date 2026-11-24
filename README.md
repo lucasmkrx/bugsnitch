@@ -1,85 +1,96 @@
+<p><img src="web/public/brand/app-icon-192.png" alt="Bugsnitch logo" width="80" height="80"></p>
+
 # Bugsnitch
 
-Bugsnitch takes a GitHub issue from an approved plan through implementation, independent review, pull request and deployment verification. Teams can coordinate changes across repositories and trace a production incident back to the build that fixed it.
+Bugsnitch is a software factory for teams that run coding agents on their own machines. Start with a GitHub issue and an approved plan. A registered runner makes the change in a Git worktree, validates the candidate, and sends it for independent review. Your team decides what to publish and can trace a verified fix back to the build its users received.
 
-**Developer preview.** Run Bugsnitch from source with one owner per workspace and optional named operators and approvers. Managed hosting is available through invitation-only pilots. The [v0.2.0 release](https://github.com/lucasmkrx/bugsnitch/releases/tag/v0.2.0) is for the earlier VS Code extension.
+**Developer preview.** Build the factory from `main` or self-host it with Docker Compose. Hosted pilot access is by invitation. The numbered VS Code extension releases belong to the earlier product. [Self-hosting guide](docs/OPERATIONS.md#hosted-service) · [Changelog](CHANGELOG.md)
 
-The runner keeps worktrees and detailed execution evidence on your machine. The registered project selects its editing scope and validation command. Projects can opt into isolated validation with a read-only checkout and writable scratch directory. The service receives status and bounded metadata. You can approve sharing a specific candidate diff. [Architecture](docs/ARCHITECTURE.md) · [Runner configuration and model access](docs/RUNNER.md)
+[Try the checkout demo](#try-it-locally) · [Open a local workspace](#start-the-dashboard) · [Follow an issue through release](#workflows) · [Documentation](#documentation)
 
 ## Try it locally
 
-Install Git, Go (tested with 1.27.4), rustup, Node 26.13.1 with npm, PostgreSQL 17 with libpq development headers, libclang, a C compiler and OpenSSL. Cargo selects the pinned Rust 1.100.0 toolchain. Put Cargo and `pg_config` on `PATH`. On macOS with Homebrew and Xcode Command Line Tools, run
+The bundled checkout advertises free shipping on orders of $50 or more, but charges $5 at exactly $50. The demo reproduces the bug in Chromium, opens a fixture issue, repairs it with a scripted worker, and tests the served checkout. It starts a disposable PostgreSQL instance and uses local provider fixtures. You can run it without a model or GitHub account.
+
+Use Git, Make, Go (CI uses 1.27.4), rustup, Node.js 26.13.1 with npm, PostgreSQL 17 with its client development headers, libclang, a C compiler, OpenSSL, and Chrome or Chromium. Cargo selects Rust 1.100.0 from the repository. Put Cargo and `pg_config` on your `PATH`. On macOS with Homebrew and Xcode Command Line Tools, this selects the Homebrew tools.
 
 ```sh
 export PATH="$(brew --prefix rustup)/bin:$(brew --prefix postgresql@17)/bin:$PATH"
 ```
 
-Clone the repository and run the following commands from its root.
-
 ```sh
 git clone https://github.com/lucasmkrx/bugsnitch.git
 cd bugsnitch
-```
-
-### Try the bundled checkout repair
-
-Install Chrome or set `BUGSNITCH_TEST_CHROME` to your Chromium executable, then run
-
-```sh
 make checkout-acceptance
 ```
 
-The exercise reproduces a checkout bug in Chromium, promotes the incident to a fixture GitHub issue, applies a scripted repair in a temporary worktree and verifies the deployed result in the browser. It starts a disposable database by default and runs without GitHub, Sentry or ChatGPT accounts. [Checkout walkthrough](examples/checkout/README.md) · [Verification ledger](docs/PROGRESS.md)
+For a nonstandard Chromium installation, set `BUGSNITCH_TEST_CHROME` to the executable. The test verifies free shipping on the repaired build, requires a fresh check after redeployment, and returns the incident to triage when the bug recurs. [Checkout walkthrough](examples/checkout/README.md) · [Recorded results](docs/PROGRESS.md)
 
 ## Start the dashboard
+
+Start the local service from the repository root.
 
 ```sh
 make dev
 ```
 
-Open **http://localhost:8787** for the homepage or **http://localhost:8787/app/** for the workspace. Sign in using the high-entropy credential saved in **.local/dev/owner-token**. The script creates a private Unix-socket PostgreSQL cluster, applies migrations, installs the locked web dependencies, builds the frontend and starts the service. Stop the foreground service with Ctrl-C. Use `scripts/dev stop` to stop its database. The next start reuses the data. To choose a PostgreSQL installation, set PGBIN to its bin directory.
-
-You can also [self-host with Docker Compose](docs/OPERATIONS.md#hosted-service). [Dashboard walkthrough and screenshots](docs/DASHBOARD.md)
+Open the [local homepage](http://localhost:8787/) for the interactive release example or the [workspace](http://localhost:8787/app/) to sign in with the owner credential saved in `.local/dev/owner-token`. The script starts a private PostgreSQL cluster, applies migrations, and builds the web app. Stop the service with Ctrl-C and its database with `scripts/dev stop`. The next start reuses your data. For a read-only tour with sample data, the workspace demo needs only Node.js and npm. [Workspace walkthrough](docs/DASHBOARD.md) · [Read-only demo](docs/DASHBOARD.md#read-only-demo)
 
 ### Connect a macOS runner
 
-In Settings, register a project by its GitHub owner/repository name. In Devices, issue a ten-minute pairing code for the specific computer and projects. Build and connect a runner on that computer.
+Register a project in the workspace using its GitHub `owner/repository`. In **Devices**, issue a pairing code for the computer and assign its projects. On the runner, substitute that code, the assigned project ID and the path to a checkout with a matching GitHub origin. For a remote service, use its HTTPS origin.
 
 ```sh
 make runner
-bin/bugsnitch doctor
 bin/bugsnitch pair --server http://localhost:8787 --code PAIRING_CODE
 bin/bugsnitch register --project PROJECT_ID --path /absolute/path/to/checkout
 bin/bugsnitch sync --watch
 ```
 
-Use the public HTTPS service origin on another computer. Each project checkout needs a matching GitHub origin. Project execution configuration, selected issue revisions, validation and local worktree recovery are described in [the runner guide](docs/RUNNER.md). The local runtime requires separate supported ChatGPT sign-in. The service never receives that credential.
+Pairing connects the device. Before executing an issue, use `project-add` on that machine to register the permitted edit scope and validation command. Worktrees and detailed artifacts stay on the runner. The runner authenticates directly with the configured model provider and sends the context for that stage. For Codex-backed turns, install the pinned `codex-cli 0.171.0-alpha.13`, sign in locally, and run `bin/bugsnitch doctor` to check the runtime and native helper. Individual stages can use the Claude Messages API with a locally supplied API key. [Worker configuration](docs/RUNNER.md#select-a-project) · [Model access](docs/CODEX.md)
 
 ## Workflows
 
-- Inspect projects, connection status and recent execution reports. Queue a manual report with observed behavior, expected behavior and reproduction steps. Approved incident promotion uses a scoped GitHub App integration.
-- Propose and approve a versioned plan. Approved criteria, dependencies and shared resource declarations constrain local admission. Pausing closes the gate to new work. Resuming requires a decision bound to the current project version.
-- Use `bugsnitch next --project PROJECT_ID` to inspect the next eligible issue from the approved plan. Run independent issues in separate worktrees with `bugsnitch local-run --project PROJECT_ID`. Each worker validates its candidate and collects separate review evidence. New runners default to two active tickets and two simultaneous model turns. Use `bugsnitch local-limits` to view or change these values on the Mac. **Settings → Workspace capacity** controls the shared workspace limits and each enrolled device's model-turn limit. [Parallel batch example](docs/RUNNER.md#execute-a-bounded-local-batch)
-- Record deployment and validation evidence for the specific incident, environment and build. PR readiness, merging and deployment have separate evidence requirements.
-- Use **Work** to see the next action for each attempt. Use **Pull requests** to watch GitHub checks, attach evidence, sign off on an inspected revision and attest a deployment handover. In **Settings → Workspace access**, the owner can issue and revoke named member keys. [Pull-request workflow](docs/INTEGRATION_QUEUE.md)
-- Use the local MCP bridge or an OAuth-configured hosted MCP connection to read project and decision state, record reports and answer current decisions. Dashboard messages persist with their inference availability status.
-- For an issue whose code has already deployed, use `bugsnitch local-verify` to record a passed, failed or pending result with evidence for each criterion. It records the build and environment without creating a commit. [Verification walkthrough](docs/RUNNER.md#verify-an-issue-on-an-existing-deployment)
+| Stage | What happens |
+| --- | --- |
+| Plan | Start with a canonical GitHub issue. Optionally link its Linear ticket. Approve the ticket's criteria, prerequisites and shared resources. Eligible independent tickets can run in parallel worktrees. [Runner guide](docs/RUNNER.md) |
+| Review | The runner validates the candidate commit. A separate reviewer inspects its diff and the validation result. The **Work** board shows the next action when an attempt needs input. [Workspace guide](docs/DASHBOARD.md) |
+| Ship | Approve the candidate and target. On the originating device, `local-ship` publishes the reviewed branch and requests a GitHub draft PR. Mark the PR ready for review on GitHub. Sign-off requires passing checks, GitHub approval, and independent review and combined-validation evidence for the inspected revision. Eligible repositories can opt into protected queue delivery. [PR workflow](docs/INTEGRATION_QUEUE.md) · [Approval policies](docs/APPROVAL_POLICY.md) |
+| Verify | Record the merged revision, environment and build. For a monitored incident, a signed deployment event and an independent behavior check provide evidence for that deployment. A redeployment needs a fresh check. [Deployment monitors](docs/PROVIDERS.md#github-deployment-monitor) |
 
 ### Team delivery
 
-- Use `bugsnitch local-ship` on the originating device to publish the exact reviewed candidate and open its owner-approved draft PR. The steward can repair a failing PR, and eligible repositories can enable protected queue delivery. Path-based policies can require deeper review, named owners and App-bound checks. Replay a proposed policy against labeled historical changes. [PR stewardship and queues](docs/INTEGRATION_QUEUE.md) · [Approval policies](docs/APPROVAL_POLICY.md)
-- Delegate linked issues from Linear, answer dispatch decisions from Slack or Telegram, and give a named member access to one project. Settings provides a hard monthly turn budget, cross-device token usage and monthly estimated USD thresholds for a project or workspace. [Team integrations](docs/INTEGRATIONS.md)
-- Order PRs across repositories for one environment. Record the merged commit, then verify the deployed build through signed deployment events and an independent behavior check. A matching recurrence holds promotion and affected release stages. [Deployment monitors](docs/PROVIDERS.md) · [Ordered releases](docs/INTEGRATIONS.md#ordered-releases-and-workspace-budget)
-- Run a repeatable feature, incident and interrupted-CI evaluation against another factory on paired task inputs. The report includes failures, candidate outcomes, elapsed time and available cost evidence. [Factory evaluation](docs/FACTORY_EVAL.md)
+Each workspace has one owner. Named operators can report incidents and inspect PRs. Approvers can act on plans, evidence and decisions within their assigned scope. Link a GitHub issue to Linear, answer dispatch decisions through a bound Slack or Telegram identity, or order release stages across repositories for one environment. [Team integrations](docs/INTEGRATIONS.md)
+
+Use **Settings → Workspace capacity** to limit concurrent work and model turns. **Model usage and cost** shows reported usage and estimated spend. Owners can cap monthly turns and set cost thresholds. [Usage and budgets](docs/INTEGRATIONS.md#device-token-usage-and-cost)
+
+## Documentation
+
+| For | Start here |
+| --- | --- |
+| Using the workspace | [Product overview](docs/PRODUCT.md) · [Dashboard](docs/DASHBOARD.md) · [Local runner](docs/RUNNER.md) |
+| Connecting services and tools | [GitHub and Sentry](docs/PROVIDERS.md) · [Linear, chat and MCP](docs/INTEGRATIONS.md) · [HTTP API](api/README.md) |
+| Operating a deployment | [Operations and recovery](docs/OPERATIONS.md) · [Architecture](docs/ARCHITECTURE.md) · [Architecture decisions](docs/decisions/) |
+| Evaluating the factory | [Factory comparison and controls](docs/FACTORY_EVAL.md) · [Issue trials](docs/TRIALS.md) · [Verification ledger](docs/PROGRESS.md) · [Implementation history](docs/IMPLEMENTATION_PLAN.md) |
 
 ## Verification and operations
+
+Build and test from the repository root.
 
 ```sh
 make test
 make build
+npm --prefix web run test:browser
 ```
 
-Database tests use a disposable instance with schema-creation privileges. Set BUGSNITCH_TEST_DSN and BUGSNITCH_TEST_DATABASE_URL to its PostgreSQL URI, then run `make test GO_TEST_FLAGS="-race -count=1"`. Run `cargo test --locked -p bugsnitch-server-migrate --test database -- --ignored` against the same disposable database for migration compatibility, concurrency and rollback. For focused Go tests that use either store, run `make helpers` and export the matching executable paths first.
+For database-backed tests, set `BUGSNITCH_TEST_DSN` and `BUGSNITCH_TEST_DATABASE_URL` to a disposable PostgreSQL database whose user can create schemas. Then run the race-enabled tests and the migration suite.
+
+```sh
+make test GO_TEST_FLAGS="-race -count=1"
+cargo test --locked -p bugsnitch-server-migrate --test database -- --ignored
+```
+
+For focused Go integration tests, run `make helpers server` first and export the paths to the packaged executables.
 
 ```sh
 export BUGSNITCH_JOURNAL_HELPER="$PWD/bin/bugsnitch-runner-journal"
@@ -88,12 +99,17 @@ export BUGSNITCH_PROVIDER="$PWD/bin/bugsnitch-provider"
 export BUGSNITCH_TEST_SERVER="$PWD/bin/bugsnitch-server"
 ```
 
-On macOS, install both compilation targets with `rustup target add aarch64-apple-darwin x86_64-apple-darwin` and run `make macos`. Each archive in `bin/packages/` contains the runner, its matching Rust executable and the service installer. For a complete installation exercise, build the binaries, set PGHOST, PGPORT and PGUSER for a disposable instance with CREATEDB permission, and run `python3 scripts/smoke.py`. The script creates two temporary databases, two runner profiles and a fixture checkout.
+To build the Intel and Apple Silicon runner archives on macOS, install both Rust targets and run the package build. The archives are written to `bin/packages/`.
 
-[Operations guide](docs/OPERATIONS.md) · [Provider configuration](docs/INTEGRATIONS.md) · [Architecture](docs/ARCHITECTURE.md) · [Implementation plan](docs/IMPLEMENTATION_PLAN.md) · [Product brief](docs/PRODUCT.md)
+```sh
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+make macos
+```
+
+For a packaged installation check, set `PGHOST`, `PGPORT` and `PGUSER` for a disposable PostgreSQL instance with permission to create databases, then run `python3 scripts/smoke.py` after `make build`. [Packaging, deployment and restore](docs/OPERATIONS.md)
 
 ## Contributing and license
 
-[Contributing guide](CONTRIBUTING.md) · [Support](SUPPORT.md) · [Private security reporting](SECURITY.md)
+Bug reports and feature proposals go through GitHub Issues. Report suspected vulnerabilities privately. [Contributing](CONTRIBUTING.md) · [Support](SUPPORT.md) · [Security reporting](SECURITY.md)
 
-The source is licensed under the [Mozilla Public License 2.0](LICENSE). The [trademark terms](TRADEMARKS.md) apply to the Bugsnitch name and brand assets.
+Bugsnitch source is licensed under the [Mozilla Public License 2.0](LICENSE). The name, logo and other brand assets have [separate terms](TRADEMARKS.md). [Official logo and wordmark](assets/brand/README.md)

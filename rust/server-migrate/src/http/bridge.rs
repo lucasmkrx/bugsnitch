@@ -63,10 +63,14 @@ impl Worker {
                             | "http_proxy"
                             | "ALL_PROXY"
                             | "all_proxy"
+                            | "BUGSNITCH_GITHUB_INSTALLATION_ID"
+                            | "BUGSNITCH_GITHUB_QUEUE_REPOSITORIES"
                             | "GITHUB_APP_CLIENT_ID"
                             | "GITHUB_APP_KEY_FILE"
                             | "BUGSNITCH_MIGRATOR"
                             | "BUGSNITCH_PROVIDER"
+                            | "BUGSNITCH_LINEAR_AGENT_TOKEN"
+                            | "BUGSNITCH_LINEAR_API_KEY"
                     ))
             {
                 cmd.env(k, v);

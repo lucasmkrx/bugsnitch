@@ -75,6 +75,10 @@ func run() error {
 	}
 	var work sync.WaitGroup
 	defer func() { stop(); work.Wait() }()
+	if token := os.Getenv("BUGSNITCH_LINEAR_AGENT_TOKEN"); token != "" {
+		service.LinearAgent = linear.New("Bearer " + token)
+		work.Go(func() { service.ProcessLinearSessions(ctx) })
+	}
 	work.Go(func() { storage.Maintain(ctx, db) })
 	work.Go(func() { runBackground(ctx, db, dsn, app) })
 	go func() { <-ctx.Done(); _ = listener.Close() }()

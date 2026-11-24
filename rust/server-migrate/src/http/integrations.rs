@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 mod chat;
 pub(crate) mod hooks;
+mod linear;
 pub(super) mod mcp;
 mod releases;
 
@@ -31,6 +32,7 @@ const SCOPES: [&str; 6] = [
 const DISCOVERY: &str = "/.well-known/oauth-protected-resource/mcp";
 
 pub struct Integrations {
+    linear_secret: String,
     slack_secret: String,
     telegram_secret: String,
     github_secret: String,
@@ -84,6 +86,7 @@ pub fn from_env() -> Result<Integrations, &'static str> {
         &scopes
     };
     Ok(Integrations {
+        linear_secret: get("LINEAR_WEBHOOK_SECRET"),
         slack_secret: get("SLACK_SIGNING_SECRET"),
         telegram_secret: get("TELEGRAM_WEBHOOK_SECRET"),
         github_secret: get("GITHUB_WEBHOOK_SECRET"),
@@ -205,6 +208,10 @@ pub fn routes() -> Router<Shared> {
         .route(
             "/hooks/telegram",
             post(chat::telegram).layer(DefaultBodyLimit::max(16 << 10)),
+        )
+        .route(
+            "/hooks/linear",
+            post(linear::receive).layer(DefaultBodyLimit::max(1 << 20)),
         )
         .route(DISCOVERY, get(mcp::discovery))
         .route("/mcp", any(mcp::serve))

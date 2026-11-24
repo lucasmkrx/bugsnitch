@@ -334,8 +334,12 @@ func run(ctx context.Context, args []string) error {
 		id := fs.String("id", "", "local attempt id")
 		feedback := fs.String("feedback", "", "feedback for the worker")
 		version := fs.Int("version", 0, "reviewed attempt version for local-continue")
+		until := fs.Bool("until-candidate", false, "pause after committing the candidate and before validation")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
+		}
+		if *until && args[0] != "local-continue" {
+			return errors.New("--until-candidate applies to local-continue")
 		}
 		if args[0] == "local-recover" {
 			a, e := runner.RecoverCommit(*id)
@@ -353,7 +357,9 @@ func run(ctx context.Context, args []string) error {
 		}
 		var a runner.Attempt
 		var err error
-		if *version != 0 {
+		if *until {
+			a, err = runner.ContinueToCandidate(ctx, *id, *feedback, *version)
+		} else if *version != 0 {
 			a, err = runner.ContinueAt(ctx, *id, *feedback, *version)
 		} else {
 			a, err = runner.Continue(ctx, *id, *feedback)

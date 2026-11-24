@@ -44,12 +44,19 @@ type Client struct {
 	dir          string
 	next         int
 }
+
+type ModelUsage struct {
+	InputTokens  int64 `json:"input_tokens"`
+	OutputTokens int64 `json:"output_tokens"`
+}
+
 type Result struct {
-	DurationMS *int64 `json:"-"`
-	Model      string `json:"model"`
-	Thread     string `json:"thread"`
-	Turn       string `json:"turn"`
-	Text       string `json:"text"`
+	Usage      *ModelUsage `json:"usage,omitempty"`
+	DurationMS *int64      `json:"-"`
+	Model      string      `json:"model"`
+	Thread     string      `json:"thread"`
+	Turn       string      `json:"turn"`
+	Text       string      `json:"text"`
 }
 
 type Failure string
@@ -57,12 +64,13 @@ type Failure string
 func (f Failure) Error() string { return string(f) }
 
 const (
-	SignIn           Failure = "ChatGPT sign-in required"
-	Allowance        Failure = "ChatGPT usage allowance reached"
-	RateLimit        Failure = "provider rate limit reached"
-	UnavailableModel Failure = "selected model unavailable"
-	Provider         Failure = "provider connection or service unavailable"
-	Interrupted      Failure = "model turn interrupted"
+	SignIn            Failure = "ChatGPT sign-in required"
+	ClaudeKeyRequired Failure = "Claude API key missing or rejected"
+	Allowance         Failure = "ChatGPT usage allowance reached"
+	RateLimit         Failure = "provider rate limit reached"
+	UnavailableModel  Failure = "selected model unavailable"
+	Provider          Failure = "provider connection or service unavailable"
+	Interrupted       Failure = "model turn interrupted"
 )
 
 func localEnv() []string {
@@ -360,9 +368,28 @@ func (c *Client) Turn(instructions, prompt, model, effort string, schema any) (R
 	for {
 		m, err := c.read()
 		if err != nil {
+			// A disconnected stream can end between cumulative usage updates.
+			r.Usage = nil
 			return r, err
 		}
 		switch m.Method {
+		case "thread/tokenUsage/updated":
+			var n struct {
+				ThreadID, TurnID string
+				TokenUsage       struct {
+					Total struct {
+						Input  *int64 `json:"inputTokens"`
+						Output *int64 `json:"outputTokens"`
+					}
+				}
+			}
+			if json.Unmarshal(m.Params, &n) == nil && n.ThreadID == r.Thread && n.TurnID == r.Turn {
+				u := n.TokenUsage.Total
+				// Each call creates a fresh ephemeral thread with exactly one turn.
+				if u.Input != nil && u.Output != nil && *u.Input >= 0 && *u.Input <= 1<<32 && *u.Output >= 0 && *u.Output <= 1<<32 {
+					r.Usage = &ModelUsage{InputTokens: *u.Input, OutputTokens: *u.Output}
+				}
+			}
 		case "item/completed":
 			var n struct {
 				ThreadID, TurnID string

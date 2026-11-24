@@ -1,10 +1,5 @@
 :root {
-  font-family:
-    "Inter",
-    -apple-system,
-    BlinkMacSystemFont,
-    "Segoe UI",
-    sans-serif;
+  font-family: var(--brand-font);
   font-size: 14px;
   line-height: 1.5;
   color-scheme: light;
@@ -15,8 +10,8 @@
   --text: #232421;
   --mute: #61655f;
   --line: #dedfd8;
-  --accent: #aa372d;
-  --accentbg: #f9eae6;
+  --accent: var(--brand-accent);
+  --accentbg: #ffeded;
   --warn: #865300;
   --warnbg: #fff0cc;
   --success: #396346;
@@ -105,11 +100,11 @@ button:hover:enabled,
 }
 .primary {
   color: white;
-  background: #a7352d;
-  border-color: #963128;
+  background: var(--brand-accent);
+  border-color: var(--brand-accent);
 }
 .primary:hover:enabled {
-  background: #842a24;
+  background: #af0000;
 }
 .icon {
   padding: 6px;
@@ -161,21 +156,17 @@ button:hover:enabled,
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 24px;
-  letter-spacing: -0.07em;
-  font-weight: 730;
+  font-size: 23px;
+  letter-spacing: -0.055em;
+  font-weight: 700;
 }
 .brand img {
-  width: 36px;
-  height: 30px;
   object-fit: contain;
 }
-.logo-dark,
-[data-theme="dark"] .logo-light {
-  display: none;
-}
-[data-theme="dark"] .logo-dark {
-  display: inline;
+[data-theme="dark"] .brand img {
+  background: #f7f7f5;
+  border-radius: 4px;
+  padding: 3px;
 }
 .nav-group {
   margin: 23px 0;
@@ -904,7 +895,7 @@ fieldset {
   tab-size: 4;
   border: 1px solid var(--line);
   border-radius: 5px;
-  font-family: ui-monospace, monospace;
+  font-family: var(--brand-font);
 }
 .diff code > span {
   display: block;

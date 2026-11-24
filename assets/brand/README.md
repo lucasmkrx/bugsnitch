@@ -1,9 +1,17 @@
 # Official Bugsnitch brand assets
 
-`bugsnitch-logo.svg` is the canonical supplied logo. Its bytes and design are preserved. Build tooling renders a PNG packaging derivative on a white background without changing the artwork.
+`bugsnitch-logo.svg` is the canonical icon. Use **Bugsnitch** in product copy and in the wordmark, set in IBM Plex Mono Bold (700). Use lowercase for `bugsnitch.com` and the `bugsnitch` command. The palette uses red `#d40000`, ink `#201e1d`, and a light canvas `#faf9f6`. Place the icon on a light surface.
 
-`bugsnitch-logo-dark.svg` is the variant for dark backgrounds. The black elements are white; the red elements, geometry, and transparent background are unchanged.
+| Use | Asset |
+| --- | --- |
+| Icon artwork | [Transparent SVG](bugsnitch-logo.svg) |
+| Horizontal wordmark | [Outlined SVG](../../web/public/brand/bugsnitch-wordmark.svg) · [Transparent PNG](../../web/public/brand/bugsnitch-wordmark.png) |
+| Browser tabs | [SVG favicon](../../web/public/brand/favicon.svg) · [Multi-size ICO](../../web/public/favicon.ico) · [16 px](../../web/public/brand/favicon-16.png) · [32 px](../../web/public/brand/favicon-32.png) · [48 px](../../web/public/brand/favicon-48.png) |
+| Home screen and profile images | [180 px Apple touch icon](../../web/public/brand/apple-touch-icon.png) · [192 px icon](../../web/public/brand/app-icon-192.png) · [512 px icon or avatar](../../web/public/brand/app-icon-512.png) |
+| Social link preview | [1200 × 630 PNG](../../web/public/brand/social-share.png), served at `https://bugsnitch.com/brand/social-share.png` after deployment |
+
+With the web dependencies and Chrome installed, run `node web/brand/render.mjs` from the repository root to regenerate the favicon, PNG exports, and social image. The horizontal SVG uses glyph outlines from the bundled Bold font. The font is accompanied by its [SIL Open Font License](../../web/public/licenses/ibm-plex-mono-OFL.txt).
 
 These files are brand assets. They are **not licensed under MPL-2.0 merely because they are stored in this public repository**. The software license covers source code, not the Bugsnitch name, logo, visual identity, or derived brand images.
 
-The official extension and README may display this logo. Forks should provide their own identity unless permission is granted. See [TRADEMARKS.md](../../TRADEMARKS.md).
+Official Bugsnitch releases and documentation may display this logo. Forks should provide their own identity unless permission is granted. See [TRADEMARKS.md](../../TRADEMARKS.md).

@@ -16,6 +16,7 @@ import {
 import { Editor, type ModalKind, type Run } from "./actions";
 import { Views } from "./views";
 import { useWorkspace, startPolling, refresh, forget } from "./store";
+import "./brand.css";
 import "./style.css";
 
 const groups: [string, Page[]][] = [
@@ -43,10 +44,8 @@ function App() {
     [busy, setBusy] = useState(false),
     [feedback, setFeedback] = useState(""),
     [failed, setFailed] = useState(false),
-    [theme, setTheme] = useState(
-      () =>
-        localStorage.getItem("bugsnitch-theme") ||
-        (matchMedia("(prefers-color-scheme:dark)").matches ? "dark" : "light"),
+    [theme, setTheme] = useState(() =>
+      localStorage.getItem("bugsnitch-theme") === "dark" ? "dark" : "light",
     );
   const pending = useRef(false),
     [token, setToken] = useState("");

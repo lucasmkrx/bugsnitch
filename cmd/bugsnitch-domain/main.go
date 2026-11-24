@@ -18,6 +18,7 @@ import (
 
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"github.com/lucasmkrx/bugsnitch/internal/incidents"
+	"github.com/lucasmkrx/bugsnitch/internal/linear"
 	"github.com/lucasmkrx/bugsnitch/internal/storage"
 	"github.com/lucasmkrx/bugsnitch/internal/transport"
 )
@@ -56,7 +57,7 @@ func run() error {
 		}
 	}
 	store := incidents.Store{DB: db}
-	service := transport.Server{GitHubApp: app, DB: db, Incidents: store, Origin: os.Getenv("BUGSNITCH_ORIGIN")}
+	service := transport.Server{GitHubApp: app, DB: db, Incidents: store, Origin: os.Getenv("BUGSNITCH_ORIGIN"), Linear: linear.New(os.Getenv("BUGSNITCH_LINEAR_API_KEY"))}
 	listener, err := net.Listen("unix", os.Args[1])
 	if err != nil {
 		return errors.New("private domain socket unavailable")

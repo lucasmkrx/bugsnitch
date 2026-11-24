@@ -75,6 +75,10 @@ pub(super) fn routes() -> Router<Shared> {
     for (path, op) in [
         ("/api/v1/projects", "project.create"),
         ("/api/v1/projects/{id}/policy", "project.policy"),
+        (
+            "/api/v1/projects/{project}/issues/{number}/linear",
+            "linear.link",
+        ),
         ("/api/v1/projects/{id}/retention", "project.retention"),
         ("/api/v1/limits", "workspace.limits"),
         ("/api/v1/devices/{id}/limits", "device.limits"),

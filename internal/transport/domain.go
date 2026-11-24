@@ -107,6 +107,7 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 		"pull.refresh": s.refreshPull, "pull.evidence": s.recordPull, "pull.draft": s.requestDraft,
 		"incident.report": s.report, "incident.promote": s.promote,
 		"incident.verdict": s.incidentVerdict, "incident.receipt": s.incidentReceipt,
+		"linear.link": s.linkLinear,
 	}[r.Operation]
 	if op == nil {
 		return nil, bad("Unknown domain operation")

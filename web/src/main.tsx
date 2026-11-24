@@ -120,7 +120,7 @@ function App() {
           {snapshot.signedOut ? (
             <>
               <h1>Sign in to your workspace</h1>
-              <p>Use the owner token configured on your Bugsnitch server.</p>
+              <p>Use your owner token or workspace access key.</p>
               <form
                 onSubmit={async (e) => {
                   e.preventDefault();
@@ -129,7 +129,7 @@ function App() {
                   await run(() => post("login", { token: t }));
                 }}
               >
-                <Field title="Owner token">
+                <Field title="Owner token or access key">
                   <input
                     type="password"
                     value={token}
@@ -171,6 +171,7 @@ function App() {
     missing = !!route.project && !project;
   const demo = !!state.capabilities.demo;
   const locked = demo || busy || !snapshot.online || !!snapshot.error;
+  const role = state.viewer?.role || "owner";
   const open = (m: ModalKind) => {
     setFeedback("");
     setModal(m);
@@ -182,7 +183,10 @@ function App() {
     devices: ["pair", "Pair device"],
     settings: ["project", "Register project"],
   };
-  const action = buttons[route.page];
+  const action =
+    role === "owner" || route.page === "incidents"
+      ? buttons[route.page]
+      : undefined;
   const nav = (
     <nav aria-label="Main navigation">
       {groups.map(([label, items]) => (
@@ -228,9 +232,11 @@ function App() {
       </div>
       {nav}
       <div className="sidebar-end">
-        <div className="avatar">O</div>
+        <div className="avatar">
+          {(state.viewer?.name || "Owner").charAt(0).toUpperCase()}
+        </div>
         <div>
-          <strong>Owner</strong>
+          <strong>{state.viewer?.name || "Owner"}</strong>
           <small>{state.workspace.name}</small>
         </div>
         <button

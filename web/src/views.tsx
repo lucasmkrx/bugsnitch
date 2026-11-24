@@ -25,6 +25,7 @@ import { Settings } from "./settings";
 import { Publications } from "./publications";
 import { Pulls, Verification } from "./evidence";
 import { type ModalKind, type Run, decide } from "./actions";
+import { Members } from "./members";
 
 interface Props {
   page: Page;
@@ -199,9 +200,12 @@ export function Views({
   project,
   subject,
   run,
-  locked,
+  locked: offlineLocked,
   open,
 }: Props) {
+  const role = s.viewer?.role || "owner";
+  const locked = offlineLocked || role !== "owner";
+  const approvalsLocked = offlineLocked || role === "operator";
   const [query, setQuery] = useState(""),
     [status, setStatus] = useState("all"),
     [picked, setPicked] = useState(""),
@@ -824,11 +828,28 @@ export function Views({
                 </p>
                 {d.answer && <strong>Recorded answer · {d.answer}</strong>}
                 {d.status === "pending" && (
+                  <details>
+                    <summary>Share decision link</summary>
+                    <Field title="Decision link">
+                      <input
+                        readOnly
+                        value={
+                          new URL(
+                            link("decisions", d.projectId, d.id),
+                            window.location.href,
+                          ).href
+                        }
+                        onFocus={(e) => e.currentTarget.select()}
+                      />
+                    </Field>
+                  </details>
+                )}
+                {d.status === "pending" && (
                   <div className="actions">
                     {d.options.map((option) => (
                       <button
                         key={option}
-                        disabled={locked}
+                        disabled={approvalsLocked}
                         onClick={() =>
                           void run(
                             () => decide(s.workspace.id, d, option),
@@ -1005,7 +1026,7 @@ export function Views({
               {p.status === "proposed" && (
                 <div className="panel-body">
                   <button
-                    disabled={locked}
+                    disabled={approvalsLocked}
                     onClick={() =>
                       void run(
                         () =>
@@ -1167,6 +1188,9 @@ export function Views({
       </Panel>
       <DispatchControl workspace={s.workspace} run={run} locked={locked} />
       <Settings state={s} projects={projects} locked={locked} run={run} />
+      {!project && role === "owner" && !s.capabilities.demo && (
+        <Members locked={locked} run={run} projects={s.projects} />
+      )}
       <Panel title="Model access">
         <div className="panel-body">
           <Badge tone="warn">Hosted inference unavailable</Badge>

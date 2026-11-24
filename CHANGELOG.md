@@ -2,8 +2,13 @@
 
 ## Unreleased rebuild
 
-The Rust and Go service, local runner and React dashboard replace the extension. The entries under numbered releases describe the earlier extension. [Verification ledger](docs/PROGRESS.md)
+The software factory is available from source as a developer preview. It includes a Rust HTTP service, a Go application worker, a local runner and a React dashboard at `/app/`. The numbered releases below cover the earlier VS Code extension. [Getting started](README.md) · [Verification ledger](docs/PROGRESS.md)
 
+- The public homepage at `/` follows a checkout issue through Plan, Review, Ship and Verify. The README, homepage and workspace use the current Bugsnitch logo. [Checkout exercise](examples/checkout/README.md) · [Official artwork](assets/brand/README.md)
+- Local workers can create, edit, rename and delete files inside approved directories, pause at a candidate commit before validation, and resume at the recorded version. Projects can isolate the validator and select Codex or Claude per stage. [Runner configuration](docs/RUNNER.md)
+- An owner can approve publishing an exact reviewed candidate from its originating device. The runner can repair an existing PR, and enrolled repositories can bind queue authorization to the signed merge group and an independent check. [Pull-request delivery](docs/INTEGRATION_QUEUE.md)
+- Project-scoped member access, Linear delegation, Slack and Telegram decisions, ordered cross-repository releases, and monthly turn and estimated-cost controls are available. Deployment monitors use signed provider events and hold promotion after a matching recurrence. [Team integrations](docs/INTEGRATIONS.md) · [Deployment monitors](docs/PROVIDERS.md#github-deployment-monitor)
+- Repository policies can require review and checks by changed path. Teams can replay a policy against labeled historical changes and run paired local factory trials with held-out behavior checks. [Approval policies](docs/APPROVAL_POLICY.md) · [Evaluation results](docs/FACTORY_EVAL.md)
 - Each environment check now belongs to a specific deployment. Deploying the same revision again requires a fresh check. Migration 022 preserves historical evidence and binds validations with an unambiguous deployment history.
 - Workers recheck prerequisite revisions before taking or renewing authority. A timed-out model turn can release its reservation even when the grant acknowledgement was lost. Foreground sync and verification checks respond to process signals.
 - Local ticket admission handles concurrent capacity changes. The runner bounds Git output and reads tracked filenames literally, including non-ASCII characters.
@@ -39,4 +44,4 @@ The Rust and Go service, local runner and React dashboard replace the extension.
 - Add tests, strict TypeScript, lint/format/build tooling, CI, and community documentation.
 - License source under MPL-2.0 and document separate Bugsnitch brand terms.
 
-This is early development. Regression ranking, bisect, integrations, and optional intelligence are future work.
+At the time of the 0.1.0 extension release, regression ranking, bisect, integrations and optional intelligence were future work.

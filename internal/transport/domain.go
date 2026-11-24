@@ -80,6 +80,9 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 	if r.Version != 1 {
 		return nil, bad("Unsupported domain protocol")
 	}
+	if r.Operation == "chat.command" && r.Actor == [2]string{"service", "verified-chat"} {
+		return s.chatCommand(ctx, r.Input)
+	}
 	if r.Operation == "system.ready" {
 		return true, s.DB.PingContext(ctx)
 	}
@@ -103,6 +106,7 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 	op := map[string]func(*domainCall) error{
 		"project.create":         s.createProject,
 		"project.connect_github": s.connectGitHub,
+		"member.chat":            s.bindChat,
 		"project.policy":         s.policy, "project.retention": s.retention, "workspace.limits": s.limits,
 		"workspace.budget": s.budget,
 		"device.limits":    s.deviceLimits,

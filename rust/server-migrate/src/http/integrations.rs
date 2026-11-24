@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+mod chat;
 pub(crate) mod hooks;
 pub(super) mod mcp;
 mod releases;
@@ -30,6 +31,8 @@ const SCOPES: [&str; 6] = [
 const DISCOVERY: &str = "/.well-known/oauth-protected-resource/mcp";
 
 pub struct Integrations {
+    slack_secret: String,
+    telegram_secret: String,
     github_secret: String,
     sentry_secret: String,
     local_hash: Option<[u8; 32]>,
@@ -81,6 +84,8 @@ pub fn from_env() -> Result<Integrations, &'static str> {
         &scopes
     };
     Ok(Integrations {
+        slack_secret: get("SLACK_SIGNING_SECRET"),
+        telegram_secret: get("TELEGRAM_WEBHOOK_SECRET"),
         github_secret: get("GITHUB_WEBHOOK_SECRET"),
         sentry_secret: get("SENTRY_CLIENT_SECRET"),
         local_hash: (local.len() >= 32).then(|| Sha256::digest(local.as_bytes()).into()),
@@ -192,6 +197,14 @@ pub fn routes() -> Router<Shared> {
         .route(
             "/api/v1/deployment-gates/{id}",
             post(releases::gate).layer(DefaultBodyLimit::max(2048)),
+        )
+        .route(
+            "/hooks/slack",
+            post(chat::slack).layer(DefaultBodyLimit::max(16 << 10)),
+        )
+        .route(
+            "/hooks/telegram",
+            post(chat::telegram).layer(DefaultBodyLimit::max(16 << 10)),
         )
         .route(DISCOVERY, get(mcp::discovery))
         .route("/mcp", any(mcp::serve))

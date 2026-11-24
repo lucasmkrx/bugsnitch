@@ -7,20 +7,20 @@
     <meta name="theme-color" content="#faf9f6" />
     <meta
       name="description"
-      content="Take a bug from report to verified fix with Bugsnitch. Triage the issue, run the repair on your Mac, and verify the build you shipped."
+      content="Bugsnitch is a software factory for teams. Plan GitHub issues, run agents on your own machines, review pull requests, and verify the deployed build."
     />
-    <title>Bugsnitch — From bug report to verified fix</title>
+    <title>Bugsnitch — From issue to verified release</title>
     <link rel="canonical" href="https://bugsnitch.com/" />
     <meta property="og:site_name" content="Bugsnitch" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://bugsnitch.com/" />
     <meta
       property="og:title"
-      content="Bugsnitch — From bug report to verified fix"
+      content="Bugsnitch — From issue to verified release"
     />
     <meta
       property="og:description"
-      content="Approve the work, run the repair on your Mac, and verify the build you shipped."
+      content="Plan issues, run agents on your own machines, and take independently reviewed changes through GitHub to a verified release."
     />
     <meta
       property="og:image"
@@ -31,7 +31,7 @@
     <meta property="og:image:height" content="630" />
     <meta
       property="og:image:alt"
-      content="Bugsnitch. Know the bug is fixed. The black and red Bugsnitch icon on a light circuit board."
+      content="Bugsnitch. From issue to verified release. A software factory for teams that ship from their own machines. A black and red bug icon sits on a light circuit board."
     />
     <meta name="twitter:card" content="summary_large_image" />
     <meta
@@ -40,7 +40,7 @@
     />
     <meta
       name="twitter:image:alt"
-      content="Bugsnitch. Know the bug is fixed. The black and red Bugsnitch icon on a light circuit board."
+      content="Bugsnitch. From issue to verified release. A software factory for teams that ship from their own machines. A black and red bug icon sits on a light circuit board."
     />
     <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
     <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" />
@@ -66,7 +66,7 @@
           Bugsnitch
         </a>
         <nav aria-label="Main navigation">
-          <a href="#workflow">How it works</a>
+          <a href="#workflow">Workflow</a>
           <a href="#quickstart">Quickstart</a>
         </nav>
         <a class="button outline nav-action" href="/app/"
@@ -81,86 +81,265 @@
           <p class="eyebrow">
             <span class="signal" aria-hidden="true"></span> Developer preview
           </p>
-          <h1 id="hero-title">
-            Know the bug is fixed<span class="accent">.</span>
-          </h1>
+          <h1 id="hero-title">From issue to <em>verified</em> release.</h1>
           <p class="hero-description">
-            Take a bug from report to verified fix. Approve the work, run the
-            repair on your Mac, and check the build you actually shipped.
+            A software factory for teams that ship from their own machines. Give
+            your agents an approved GitHub issue, review the change, and follow
+            it all the way to the build your users get.
           </p>
           <div class="hero-actions">
             <a class="button primary" href="#quickstart"
               >Try the checkout demo <span aria-hidden="true">↓</span></a
             >
-            <a class="button text-button" href="#workflow"
-              >How it works <span aria-hidden="true">↓</span></a
+            <a
+              class="inline-link"
+              href="https://github.com/lucasmkrx/bugsnitch#workflows"
+              >Read the docs <span aria-hidden="true">↗</span></a
             >
           </div>
         </div>
 
-        <figure class="hero-visual">
-          <div class="window">
-            <div class="window-bar">
-              <span class="window-dots" aria-hidden="true"
-                ><i></i><i></i><i></i
-              ></span>
-              <span>Bugsnitch workspace</span>
+        <div class="trace-visual">
+          <section class="trace" aria-labelledby="trace-title">
+            <header class="trace-header">
+              <span class="trace-label"
+                ><span class="trace-mark" aria-hidden="true"></span> Example
+                release</span
+              >
+              <a
+                href="https://github.com/lucasmkrx/bugsnitch/tree/main/examples/checkout"
+                aria-label="View the checkout fixture on GitHub"
+                >examples/checkout <span aria-hidden="true">↗</span></a
+              >
+            </header>
+            <h2 id="trace-title">Fix free shipping at $50</h2>
+            <div
+              class="trace-tabs"
+              role="tablist"
+              aria-label="Release stages"
+              hidden
+            >
+              <button
+                type="button"
+                role="tab"
+                id="stage-plan"
+                aria-controls="evidence-plan"
+                aria-selected="false"
+                tabindex="-1"
+              >
+                Plan
+              </button>
+              <button
+                type="button"
+                role="tab"
+                id="stage-review"
+                aria-controls="evidence-review"
+                aria-selected="false"
+                tabindex="-1"
+              >
+                Review
+              </button>
+              <button
+                type="button"
+                role="tab"
+                id="stage-ship"
+                aria-controls="evidence-ship"
+                aria-selected="false"
+                tabindex="-1"
+              >
+                Ship
+              </button>
+              <button
+                type="button"
+                role="tab"
+                id="stage-verify"
+                aria-controls="evidence-verify"
+                aria-selected="true"
+              >
+                Verify
+              </button>
             </div>
-            <img
-              class="dashboard-image"
-              src="../docs/screenshots/fixture-overview-1440.png"
-              alt="Bugsnitch dashboard with project activity, work in progress, and a pending owner decision"
-              width="1440"
-              height="900"
-              fetchpriority="high"
-            />
-          </div>
-          <figcaption>Dashboard with sample data</figcaption>
-        </figure>
+            <div class="trace-panels">
+              <div
+                id="evidence-plan"
+                class="trace-panel"
+                role="tabpanel"
+                aria-labelledby="stage-plan"
+                tabindex="0"
+                inert
+              >
+                <h3>Approve the work</h3>
+                <p>
+                  The checkout charges $5 on a $50 order. The issue defines
+                  where free shipping should begin.
+                </p>
+                <dl>
+                  <div>
+                    <dt>Acceptance criterion</dt>
+                    <dd>Free at $50</dd>
+                  </div>
+                  <div>
+                    <dt>Below the threshold</dt>
+                    <dd>$5 shipping</dd>
+                  </div>
+                </dl>
+              </div>
+              <div
+                id="evidence-review"
+                class="trace-panel"
+                role="tabpanel"
+                aria-labelledby="stage-review"
+                tabindex="0"
+                inert
+              >
+                <h3>Review the candidate</h3>
+                <p>
+                  A runner changes the threshold in its own Git worktree. An
+                  independent reviewer checks the validated revision.
+                </p>
+                <dl>
+                  <div>
+                    <dt>Validator</dt>
+                    <dd>node verify.mjs</dd>
+                  </div>
+                  <div>
+                    <dt>Test cases</dt>
+                    <dd>Below, at, above $50</dd>
+                  </div>
+                </dl>
+              </div>
+              <div
+                id="evidence-ship"
+                class="trace-panel"
+                role="tabpanel"
+                aria-labelledby="stage-ship"
+                tabindex="0"
+                inert
+              >
+                <h3>Publish the reviewed change</h3>
+                <p>
+                  With the owner's approval, the originating runner opens a
+                  draft PR for the reviewed commit.
+                </p>
+                <dl>
+                  <div>
+                    <dt>Runner command</dt>
+                    <dd>bugsnitch local-ship</dd>
+                  </div>
+                  <div>
+                    <dt>Destination</dt>
+                    <dd>GitHub draft PR</dd>
+                  </div>
+                </dl>
+              </div>
+              <div
+                id="evidence-verify"
+                class="trace-panel"
+                role="tabpanel"
+                aria-labelledby="stage-verify"
+                tabindex="0"
+              >
+                <h3>Check the deployed build</h3>
+                <p>
+                  Chromium tries the $50 order on the served checkout. The
+                  result is recorded against that build.
+                </p>
+                <dl>
+                  <div>
+                    <dt>Cart subtotal</dt>
+                    <dd>$50.00</dd>
+                  </div>
+                  <div>
+                    <dt>Shipping charged</dt>
+                    <dd class="verified">
+                      <span aria-hidden="true">✓</span> $0.00
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            </div>
+          </section>
+        </div>
       </section>
 
       <section
-        class="workflow frame"
+        class="workspace frame"
         id="workflow"
         aria-labelledby="workflow-title"
       >
-        <p class="eyebrow">The workflow</p>
+        <p class="eyebrow">The workspace</p>
         <h2 id="workflow-title">
-          From first report to<br class="wide-only" />
-          the build you shipped.
+          Coordinate a release<br />
+          across repositories.
         </h2>
-        <ol class="steps">
-          <li>
-            <span class="step-name"
-              ><span class="step-icon" aria-hidden="true">↳</span> Triage</span
-            >
-            <h3>Decide what to fix.</h3>
-            <p>
-              Capture what happened and what should have happened. Link the
-              incident to a GitHub issue with criteria you can check.
-            </p>
-          </li>
-          <li>
-            <span class="step-name"
-              ><span class="step-icon" aria-hidden="true">⌘</span> Repair</span
-            >
-            <h3>Review work on your Mac.</h3>
-            <p>
-              The runner works in a separate Git worktree, runs your validation
-              command, and records an independent review of the candidate.
-            </p>
-          </li>
-          <li>
-            <span class="step-name"
-              ><span class="step-icon" aria-hidden="true">✓</span> Verify</span
-            >
-            <h3>Check the deployed build.</h3>
-            <p>
-              Attach evidence to the exact deployment. A redeploy needs a fresh
-              check, and a recurrence returns the incident to triage.
-            </p>
-          </li>
-        </ol>
+        <div class="workspace-layout">
+          <figure class="workspace-visual">
+            <div class="window-bar">
+              <span class="window-dots" aria-hidden="true"
+                ><i></i><i></i><i></i></span
+              >Workspace overview
+            </div>
+            <picture>
+              <source
+                media="(max-width: 540px)"
+                srcset="../docs/screenshots/fixture-overview-360.png"
+                width="360"
+                height="800"
+              />
+              <img
+                class="dashboard-image"
+                src="../docs/screenshots/fixture-overview-1440.png"
+                alt="Bugsnitch overview showing a paused Storefront project and a pending decision to resume work"
+                width="1440"
+                height="900"
+                loading="lazy"
+              />
+            </picture>
+            <figcaption>Workspace with sample data</figcaption>
+          </figure>
+          <div class="capabilities">
+            <article>
+              <h3>
+                <a
+                  href="https://github.com/lucasmkrx/bugsnitch/blob/main/docs/RUNNER.md"
+                  >Run agents in parallel <span aria-hidden="true">↗</span></a
+                >
+              </h3>
+              <p>
+                Start with a GitHub issue or a linked Linear ticket. Independent
+                tasks get separate worktrees on registered machines, each with
+                its own validation and review.
+              </p>
+            </article>
+            <article>
+              <h3>
+                <a
+                  href="https://github.com/lucasmkrx/bugsnitch/blob/main/docs/INTEGRATION_QUEUE.md"
+                  >Control what ships <span aria-hidden="true">↗</span></a
+                >
+              </h3>
+              <p>
+                Sign off on a specific revision, watch its GitHub checks, and
+                order pull requests across repositories. Signed deployment
+                events and a fresh behavior check tie the result to the build.
+              </p>
+            </article>
+            <article>
+              <h3>
+                <a
+                  href="https://github.com/lucasmkrx/bugsnitch/blob/main/docs/INTEGRATIONS.md"
+                  >Set team permissions and budgets
+                  <span aria-hidden="true">↗</span></a
+                >
+              </h3>
+              <p>
+                Give operators and approvers access by project. Answer dispatch
+                decisions in Slack or Telegram, cap monthly model turns, and
+                track estimated spend.
+              </p>
+            </article>
+          </div>
+        </div>
       </section>
 
       <section
@@ -171,11 +350,11 @@
         <div class="frame quickstart">
           <div>
             <p class="eyebrow">Run it locally</p>
-            <h2 id="quickstart-title">Try a complete repair.</h2>
+            <h2 id="quickstart-title">Run the checkout demo.</h2>
             <p>
-              The bundled demo reproduces a checkout bug in Chromium, applies a
-              scripted repair, then checks the served build from the browser.
-              The exercise runs with local fixtures.
+              Reproduce the $50 shipping bug, apply a scripted fix, and verify
+              the served checkout in Chromium. The demo runs locally with
+              fixtures.
             </p>
             <a
               class="inline-link"
@@ -191,7 +370,7 @@
               </button>
             </div>
             <pre><span aria-hidden="true">$ </span><code id="checkout-command">make checkout-acceptance</code></pre>
-            <p>Hosted access is invite-only during the pilot.</p>
+            <p>Requires Chromium and the source-build tools.</p>
             <span class="visually-hidden" id="copy-status" role="status"></span>
           </div>
         </div>
@@ -208,6 +387,7 @@
         />
         Bugsnitch
       </a>
+      <span class="pilot-note">Hosted pilot by invitation</span>
       <nav aria-label="Footer navigation">
         <a href="https://github.com/lucasmkrx/bugsnitch"
           >GitHub <span aria-hidden="true">↗</span></a

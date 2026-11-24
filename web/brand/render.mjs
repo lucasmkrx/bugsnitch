@@ -118,9 +118,9 @@ try {
       body {background:#faf9f6; color:#201e1d; font-family:Plex,monospace}
       main {height:630px; padding:60px 64px; display:grid; grid-template-columns: 1fr 390px; gap:24px}
       section {display:flex; flex-direction:column; align-items:flex-start; justify-content:space-between}
-      h1 {font-size:72px; line-height:1.04; letter-spacing:-5px; margin:0}
+      h1 {font-size:68px; line-height:1.06; letter-spacing:-4px; margin:0}
       strong {color:#d40000}
-      p {font-size:23px; line-height:1.5; color:#5b5651; margin:21px 0 0}
+      p {font-size:23px; line-height:1.5; text-wrap:balance; color:#5b5651; margin:21px 0 0}
       footer {font-size:18px; color:#5b5651}
       figure {margin:0; border:1px solid #d7cec4; border-radius:28px; background:url(${dataURL("image/jpeg", texture)}) center/cover; display:grid; place-items:center; overflow:hidden}
       .icon {height:244px; width:244px; border:1px solid #e0d7ce; border-radius:51px; background:#faf9f6; display:grid; place-items:center; box-shadow: 0 22px 55px #48392836}
@@ -129,8 +129,8 @@ try {
        <section>
          ${scaled(wordmark, 213, 40)}
          <div>
-           <h1>Know the bug<br>is fixed<strong>.</strong></h1>
-           <p>From bug report to verified fix.</p>
+           <h1>From issue to<br>verified release<strong>.</strong></h1>
+           <p>A software factory for teams that ship from their own machines.</p>
          </div>
          <footer>bugsnitch.com</footer>
        </section>

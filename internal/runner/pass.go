@@ -46,12 +46,14 @@ func workerPlan(ctx context.Context, a *Attempt, files map[string]string, ordina
 	}
 	a.add(recordTurn(a, r, summary))
 	a.Phase = "implement"
-	if ordinary && a.OwnerQuestion == "" {
+	if ordinary && !a.Project.Config.RequirePlanReview && a.OwnerQuestion == "" {
 		return a.save()
 	}
 	a.State = "waiting"
+	a.ReasonCode = protocol.PlanReviewRequired
 	a.Message = "Review the plan and continue locally with any feedback."
 	if a.OwnerQuestion != "" {
+		a.ReasonCode = protocol.OwnerInputRequired
 		a.Message = "Answer the recorded owner question with local-continue --feedback."
 	}
 	return nil

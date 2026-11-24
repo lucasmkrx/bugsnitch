@@ -106,14 +106,43 @@ func create(ctx context.Context, w, r string, i Issue, previous, reason string, 
 		return existing, errors.New("this issue already has a local attempt; inspect its recorded state")
 	}
 	if admitted != nil {
-		return runClaimed(ctx, &a, admitted)
+		return runClaimed(ctx, &a, admitted, true)
 	}
-	return advance(ctx, &a, "")
+	return advance(ctx, &a, "", false)
 }
 func Continue(ctx context.Context, id, feedback string) (Attempt, error) {
+	return continueAttempt(ctx, id, feedback, 0, false)
+}
+
+// ContinueAt acts on the exact checkpoint the local operator reviewed.
+func ContinueAt(ctx context.Context, id, feedback string, version int) (Attempt, error) {
+	if version < 1 {
+		return Attempt{}, errors.New("provide the reviewed attempt version")
+	}
+	return continueAttempt(ctx, id, feedback, version, false)
+}
+
+// ContinueToCandidate stops at a durable boundary before running validation.
+func ContinueToCandidate(ctx context.Context, id, feedback string, version int) (Attempt, error) {
+	if version < 1 {
+		return Attempt{}, errors.New("provide the reviewed attempt version")
+	}
+	return continueAttempt(ctx, id, feedback, version, true)
+}
+
+func continueAttempt(ctx context.Context, id, feedback string, version int, untilCandidate bool) (Attempt, error) {
 	a, err := Get(id)
 	if err != nil {
 		return a, err
+	}
+	if version != 0 && a.Version != version {
+		return a, errors.New("attempt changed since review; inspect the current version with local-show")
+	}
+	if untilCandidate {
+		if a.Phase != "implement" {
+			return a, errors.New("a candidate checkpoint requires a waiting implementation")
+		}
+		a.stopAtCandidate = true
 	}
 	if a.State != "waiting" {
 		return a, errors.New("attempt is not waiting; inspect the retained worktree and journal")
@@ -124,7 +153,8 @@ func Continue(ctx context.Context, id, feedback string) (Attempt, error) {
 	if a.OwnerQuestion != "" && a.OwnerAnswer == "" && strings.TrimSpace(feedback) == "" {
 		return a, errors.New("answer the recorded owner question with --feedback before continuing")
 	}
-	return advance(ctx, &a, feedback)
+	guarded := a.OwnerQuestion == "" && version != 0 && a.LocalRunScope != nil && a.Project.Config.AutoCorrect
+	return advance(ctx, &a, feedback, guarded)
 }
 func hook(f func(Summary) error, a *Attempt) error {
 	if f == nil {
@@ -137,7 +167,7 @@ func admissionSubject(a *Attempt) Summary {
 	s.CriteriaHash = domain.CriteriaHash(a.Issue.Criteria)
 	return s
 }
-func advance(ctx context.Context, a *Attempt, feedback string) (Attempt, error) {
+func advance(ctx context.Context, a *Attempt, feedback string, guarded bool) (Attempt, error) {
 	unlock, err := attemptLock(a.ID)
 	if err != nil {
 		return *a, err
@@ -161,10 +191,10 @@ func advance(ctx context.Context, a *Attempt, feedback string) (Attempt, error) 
 		}
 		return current, err
 	}
-	return runClaimed(ctx, a, nil)
+	return runClaimed(ctx, a, nil, guarded)
 }
 
-func runClaimed(ctx context.Context, a *Attempt, admitted func(Summary)) (Attempt, error) {
+func runClaimed(ctx context.Context, a *Attempt, admitted func(Summary), guarded bool) (Attempt, error) {
 	if err := hook(BeforeStart, a); err != nil {
 		a.State = "waiting"
 		a.Message = "Execution admission unavailable"
@@ -183,7 +213,18 @@ func runClaimed(ctx context.Context, a *Attempt, admitted func(Summary)) (Attemp
 	runCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go watchControls(runCtx, a.ID, cancel, done)
-	err := steps(runCtx, a, admitted != nil)
+	err := steps(runCtx, a, guarded)
+	for err == nil && guarded && a.Project.Config.AutoCorrect && a.State == "waiting" && a.ReasonCode == protocol.ReviewCorrection {
+		// Persist the finding and next stage before another turn. Pauses and
+		// questions always stop automatic corrections.
+		a.State, a.ReasonCode, a.Message = "running", "", ""
+		if err = a.save(); err == nil {
+			err = boundary(runCtx, a.ID)
+		}
+		if err == nil {
+			err = steps(runCtx, a, guarded)
+		}
+	}
 	cancel()
 	<-done
 	if errors.Is(err, errValidationUnconfirmed) {
@@ -383,6 +424,7 @@ func steps(ctx context.Context, a *Attempt, ordinaryPass bool) error {
 				a.OwnerQuestion = "The proposed change touches " + edit.Path + ". Which changes to this sensitive path do you approve for this ticket?"
 				a.Message = "Sensitive change requires owner feedback."
 				a.State = "waiting"
+				a.ReasonCode = protocol.OwnerInputRequired
 				return nil
 			}
 		}
@@ -477,6 +519,11 @@ func steps(ctx context.Context, a *Attempt, ordinaryPass bool) error {
 	imp.ChangedFiles = paths
 	a.add(imp)
 	a.Intent = nil
+	if a.stopAtCandidate {
+		a.Phase, a.State, a.ReasonCode = "validate", "waiting", protocol.OwnerPaused
+		a.Message = "Candidate committed. Continue this version to run validation."
+		return nil
+	}
 	if err = stage(a, "validate"); err != nil {
 		return err
 	}
@@ -548,6 +595,7 @@ func reviewCandidate(ctx context.Context, a *Attempt) error {
 		a.Rounds++
 		a.Phase = "implement"
 		a.State = "waiting"
+		a.ReasonCode = protocol.ReviewCorrection
 		a.Message = "Review found issues. Inspect findings and continue for a correction."
 		return nil
 	}

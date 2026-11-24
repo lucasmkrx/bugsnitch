@@ -56,6 +56,8 @@ type Config struct {
 	ReviewDepth              string                   `json:"reviewDepth,omitempty"`
 	ValidationSandbox        string                   `json:"validationSandbox,omitempty"`
 	Stages                   map[string]StageSettings `json:"stages,omitempty"`
+	RequirePlanReview        bool                     `json:"requirePlanReview,omitempty"`
+	AutoCorrect              bool                     `json:"autoCorrect,omitempty"`
 	ValidationTimeoutSeconds int                      `json:"validationTimeoutSeconds,omitempty"`
 	Files                    []string                 `json:"files"`
 	Validate                 []string                 `json:"validate"`
@@ -93,6 +95,8 @@ type CandidateIntent struct {
 	Artifact Artifact
 }
 type Attempt struct {
+	stopAtCandidate bool // invocation-only stop requested by local-continue
+
 	LocalRunScope   *protocol.RunScope `json:"localRunScope,omitempty"`
 	OwnerAnswer     string             `json:"ownerAnswer,omitempty"`
 	OwnerQuestion   string             `json:"ownerQuestion,omitempty"`

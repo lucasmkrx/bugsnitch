@@ -11,6 +11,7 @@ import (
 
 	"github.com/lucasmkrx/bugsnitch/internal/domain"
 	"github.com/lucasmkrx/bugsnitch/internal/journalbridge"
+	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 )
 
 type controlRequest struct {
@@ -116,10 +117,11 @@ func settle(a *Attempt) (bool, error) {
 		return false, errors.New("attempt changed during finalization")
 	case "pause", "stop":
 		next.State = "waiting"
+		next.ReasonCode = protocol.OwnerPaused
 		if op == "stop" {
 			next.State = "cancelled"
+			next.ReasonCode = ""
 		}
-		next.ReasonCode = ""
 		next.Message = "Owner control applied"
 	case "":
 	default:

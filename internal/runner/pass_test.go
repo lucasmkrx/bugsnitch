@@ -104,6 +104,54 @@ func TestSensitiveEditsRequireOwnerFeedback(t *testing.T) {
 	}
 }
 
+func TestReviewedCheckpointAndBoundedAutomaticCorrections(t *testing.T) {
+	dir, issue := fixture(t)
+	issue.GitHubID = 77
+	issue.RequirementsDigest = strings.Repeat("a", 64)
+	scope := protocol.RunScope{Device: "fixture", Project: "selected", Plan: "approved", Policy: 2}
+	before, after, check := BeforeTurn, AfterTurn, CheckWorker
+	t.Cleanup(func() { BeforeTurn, AfterTurn, CheckWorker = before, after, check })
+	BeforeStart = func(Summary) error { return nil }
+	AfterFinish, AfterTurn = BeforeStart, BeforeStart
+	BeforeTurn = func(context.Context, Summary) error { return nil }
+	CheckWorker = func(context.Context, Summary, bool) (time.Duration, error) { return time.Minute, nil }
+	if err := AddProject("personal", issue.Repository, dir, Config{
+		Files: []string{"example.txt"}, Validate: []string{"/bin/sh", "-c", "true"},
+		RequirePlanReview: true, AutoCorrect: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	var stages []string
+	modelTurn = func(_ context.Context, a *Attempt, _, _ string, _ any) (agent.Result, error) {
+		stages = append(stages, a.Phase)
+		switch a.Phase {
+		case "plan":
+			return agent.Result{Text: `{"summary":"Implement the approved change","disposition":"ready","question":""}`}, nil
+		case "implement":
+			edits := []string{"first", "second", "fixed"}
+			return agent.Result{Text: `{"summary":"Update the value","edits":[{"path":"example.txt","content":"` + edits[a.Rounds] + `\n"}]}`}, nil
+		case "review":
+			return agent.Result{Text: `{"summary":"A correction remains","findings":[{"severity":"important","location":"example.txt","rationale":"Retain the review stop"}]}`}, nil
+		}
+		return agent.Result{}, errors.New("unexpected worker stage")
+	}
+	a, err := StartPass(t.Context(), "personal", issue, scope, func(Summary) {})
+	if err != nil || a.State != "waiting" || a.ReasonCode != protocol.PlanReviewRequired || len(stages) != 1 {
+		t.Fatal(a.Summary, stages, err)
+	}
+	version := a.Version
+	if _, err := ContinueAt(t.Context(), a.ID, "", version-1); err == nil || len(stages) != 1 {
+		t.Fatal("stale approval started a worker", err)
+	}
+	result, err := ContinueAt(t.Context(), a.ID, "", version)
+	if err == nil || result.State != "failed" || result.Rounds != 2 || len(stages) != 7 {
+		t.Fatal(result.Summary, stages, err)
+	}
+	if _, err := ContinueAt(t.Context(), a.ID, "", version); err == nil || len(stages) != 7 {
+		t.Fatal("replayed approval started a worker", err)
+	}
+}
+
 func TestConcurrentPassesKeepDistinctWorktreesAndEvidence(t *testing.T) {
 	_, first := fixture(t)
 	first.GitHubID = 80

@@ -2,6 +2,7 @@
 use super::super::{Shared, WebError, WebResult};
 use crate::coord::{Db, Details, Error, Result};
 use axum::{
+    Json,
     body::Bytes,
     extract::State,
     http::{HeaderMap, StatusCode},
@@ -53,7 +54,7 @@ fn authenticate(secret: &str, sig: Option<&str>, prefix: &str, body: &[u8]) -> W
     Ok(())
 }
 
-static UUID: LazyLock<Regex> = LazyLock::new(|| {
+pub(super) static UUID: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$").unwrap()
 });
 static LABEL: LazyLock<Regex> =
@@ -286,13 +287,9 @@ pub(super) async fn github(
     )?;
     if header(&headers, "x-github-event") == Some("merge_group") {
         let delivery = header(&headers, "x-github-delivery").unwrap_or("");
-        let v: Value = serde_json::from_slice(&body)
-            .map_err(|_| fail(StatusCode::UNPROCESSABLE_ENTITY, "Invalid merge group"))?;
-        if v["action"] != "checks_requested" {
+        let Some(group) = parse_merge_group(delivery, &body)? else {
             return Ok(StatusCode::ACCEPTED);
-        }
-        let group = queue_group(delivery, &v)
-            .ok_or_else(|| fail(StatusCode::UNPROCESSABLE_ENTITY, "Invalid merge group"))?;
+        };
         state
             .coord(
                 "hooks.merge_group",
@@ -335,12 +332,75 @@ pub(super) async fn github(
     Ok(StatusCode::ACCEPTED)
 }
 
-fn queue_group(delivery: &str, v: &Value) -> Option<Value> {
-    let g = &v["merge_group"];
-    let head = g["head_sha"].as_str()?;
-    let base = g["base_sha"].as_str()?;
-    let target = g["base_ref"].as_str()?.strip_prefix("refs/heads/")?;
-    let head_ref = g["head_ref"].as_str()?.strip_prefix("refs/heads/")?;
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum MergeGroupAction {
+    ChecksRequested,
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+struct MergeGroupEvent {
+    action: MergeGroupAction,
+}
+
+#[derive(Deserialize)]
+struct ChecksRequested {
+    installation: GithubObject,
+    repository: GithubObject,
+    merge_group: MergeGroup,
+}
+
+#[derive(Deserialize)]
+struct MergeGroup {
+    head_sha: String,
+    base_sha: String,
+    base_ref: String,
+    head_ref: String,
+}
+
+#[derive(Deserialize)]
+struct GithubObject {
+    id: GithubId,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum GithubId {
+    Number(i64),
+    Text(String),
+}
+
+impl GithubId {
+    fn positive(self) -> Option<i64> {
+        let id = match self {
+            Self::Number(n) => n,
+            Self::Text(s) if s.len() <= 20 => s.parse().ok()?,
+            Self::Text(_) => return None,
+        };
+        (id > 0).then_some(id)
+    }
+}
+
+fn parse_merge_group(delivery: &str, body: &[u8]) -> WebResult<Option<Value>> {
+    let invalid = || fail(StatusCode::UNPROCESSABLE_ENTITY, "Invalid merge group");
+    let Json(event) = Json::<MergeGroupEvent>::from_bytes(body).map_err(|_| invalid())?;
+    if matches!(event.action, MergeGroupAction::Other) {
+        return Ok(None);
+    }
+    let Json(subject) = Json::<ChecksRequested>::from_bytes(body).map_err(|_| invalid())?;
+    Ok(Some(queue_group(delivery, subject).ok_or_else(invalid)?))
+}
+
+fn queue_group(delivery: &str, event: ChecksRequested) -> Option<Value> {
+    let installation = event.installation.id.positive()?;
+    let repository = event.repository.id.positive()?;
+    let g = event.merge_group;
+    let head = g.head_sha.as_str();
+    let base = g.base_sha.as_str();
+    let target = g.base_ref.strip_prefix("refs/heads/")?;
+    let head_ref = g.head_ref.strip_prefix("refs/heads/")?;
     let oid = |s: &str| {
         [40, 64].contains(&s.len())
             && s.bytes()
@@ -363,10 +423,8 @@ fn queue_group(delivery: &str, v: &Value) -> Option<Value> {
     {
         return None;
     }
-    Some(
-        json!({"installation":numeric_id(&v["installation"]["id"])?,"repository":numeric_id(&v["repository"]["id"])?,
-        "head":head,"base":base,"target":target,"headRef":head_ref,"delivery":delivery}),
-    )
+    Some(json!({"installation":installation,"repository":repository,
+        "head":head,"base":base,"target":target,"headRef":head_ref,"delivery":delivery}))
 }
 
 fn record_merge_group(db: &Db<'_>, g: Value) -> Result<Value> {
@@ -469,15 +527,31 @@ mod tests {
     #[test]
     fn signed_group_subject_requires_real_refs_and_distinct_commits() {
         let delivery = "00112233-aabb-ccdd-eeff-001122334455";
-        let mut e = json!({"installation":{"id":10},"repository":{"id":11},"merge_group":{
+        let group = |e: &Value| parse_merge_group(delivery, &serde_json::to_vec(e).unwrap());
+        let mut e = json!({"action":"checks_requested","installation":{"id":10},"repository":{"id":"11","description":"unused metadata"},"merge_group":{
             "head_sha":"a".repeat(40),"base_sha":"b".repeat(40),"base_ref":"refs/heads/main","head_ref":"refs/heads/gh-readonly-queue/main/pr-12-example"}});
-        let group = queue_group(delivery, &e).unwrap();
-        assert_eq!(group["target"], "main");
+        let accepted = group(&e).unwrap().unwrap();
+        assert_eq!(accepted["target"], "main");
+        assert_eq!(accepted["repository"], 11);
         e["merge_group"]["base_sha"] = e["merge_group"]["head_sha"].clone();
-        assert!(queue_group(delivery, &e).is_none());
+        assert!(group(&e).is_err());
         e["merge_group"]["base_sha"] = json!("b".repeat(40));
         e["merge_group"]["head_ref"] = json!("refs/heads/bugsnitch/user");
-        assert!(queue_group(delivery, &e).is_none());
+        assert!(group(&e).is_err());
+        e["merge_group"]["head_ref"] =
+            json!(format!("refs/heads/gh-readonly-queue/{}", "a".repeat(240)));
+        assert!(group(&e).is_err());
+        e["merge_group"]["head_ref"] = json!("refs/heads/gh-readonly-queue/main/pr-12-example");
+        e["installation"]["id"] = json!(0);
+        assert!(group(&e).is_err());
+        e["installation"]["id"] = json!({"value":10});
+        assert!(group(&e).is_err());
+        assert!(group(&json!({"action":"checks_requested"})).is_err());
+        assert!(
+            group(&json!({"action":"destroyed","merge_group":{"reason":"removed"}}))
+                .unwrap()
+                .is_none()
+        );
     }
     #[test]
     fn sentry_keeps_only_authorized_fields_and_uses_tag_fallbacks() {

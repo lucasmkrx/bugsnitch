@@ -333,6 +333,7 @@ func run(ctx context.Context, args []string) error {
 	case "local-continue", "local-show", "local-recover":
 		id := fs.String("id", "", "local attempt id")
 		feedback := fs.String("feedback", "", "feedback for the worker")
+		version := fs.Int("version", 0, "reviewed attempt version for local-continue")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -350,7 +351,13 @@ func run(ctx context.Context, args []string) error {
 			}
 			return printJSON(a)
 		}
-		a, err := runner.Continue(ctx, *id, *feedback)
+		var a runner.Attempt
+		var err error
+		if *version != 0 {
+			a, err = runner.ContinueAt(ctx, *id, *feedback, *version)
+		} else {
+			a, err = runner.Continue(ctx, *id, *feedback)
+		}
 		if a.ID != "" {
 			if e := printJSON(a.Summary); e != nil {
 				return e

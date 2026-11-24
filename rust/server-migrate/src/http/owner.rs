@@ -138,6 +138,14 @@ pub(super) fn routes() -> Router<Shared> {
             "/api/v1/projects/{project}/incidents/{id}/deployment-monitor/disable",
             "deployment.disable",
         ),
+        ("/api/v1/usage", "usage.report"),
+        ("/api/v1/usage/prices", "usage.price"),
+        ("/api/v1/usage/threshold", "usage.threshold"),
+        (
+            "/api/v1/projects/{project}/usage/threshold",
+            "usage.threshold",
+        ),
+        ("/api/v1/projects/{project}/usage", "usage.report"),
         ("/api/v1/incidents", "incident.report"),
         (
             "/api/v1/projects/{project}/incidents/{id}/promote",

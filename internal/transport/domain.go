@@ -120,7 +120,7 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 		"pull.queue": s.queuePull, "pull.refresh": s.refreshPull, "pull.evidence": s.recordPull, "pull.draft": s.requestDraft,
 		"incident.report": s.report, "incident.promote": s.promote,
 		"incident.verdict": s.incidentVerdict, "incident.receipt": s.incidentReceipt,
-		"deployment.disable": s.disableMonitor, "deployment.configure": s.configureMonitor, "deployment.clear": s.clearHold,
+		"usage.threshold": s.setCostThreshold, "usage.price": s.setModelPrice, "usage.report": s.meterReport, "deployment.disable": s.disableMonitor, "deployment.configure": s.configureMonitor, "deployment.clear": s.clearHold,
 		"linear.link":   s.linkLinear,
 		"pull.handover": s.recordHandover,
 		"pull.watch":    s.watchPull,
@@ -140,7 +140,7 @@ func (s *Server) authorizeActor(call *domainCall, id string, role audit.Source, 
 	query := "SELECT EXISTS(SELECT FROM workspaces WHERE id=$1 AND account_id=$2)"
 	args := []any{workspace, id}
 	if role != audit.Owner {
-		allowed := op == "incident.verdict" || op == "pull.refresh" || op == "incident.report"
+		allowed := op == "usage.report" || op == "incident.verdict" || op == "pull.refresh" || op == "incident.report"
 		switch role {
 		case audit.Operator:
 		case audit.Approver:

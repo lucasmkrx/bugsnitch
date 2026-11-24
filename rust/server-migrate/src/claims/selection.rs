@@ -50,7 +50,13 @@ pub(super) fn next(db: &Db<'_>, token: &str, request: Value) -> Result<Value> {
         return Ok(json!({"reason":"Approve a plan before requesting its next issue"}));
     };
     let facts = ticket_facts(db, ws, &project, &plan.id)?;
-    plan.tickets.sort_by_key(|t| (t.priority, t.number));
+    plan.tickets.sort_by_key(|t| {
+        (
+            t.priority,
+            !facts.get(&t.number).is_some_and(|f| f.delegated),
+            t.number,
+        )
+    });
     let mut candidates = Vec::with_capacity(plan.tickets.len());
     for ticket in &plan.tickets {
         candidates.push(candidate(&facts, repository, ticket)?);
@@ -76,6 +82,7 @@ impl Canonical {
 }
 
 struct TicketFacts {
+    delegated: bool,
     attempted: bool,
     integrated: bool,
     reserved: bool,
@@ -105,7 +112,7 @@ fn ticket_facts(
         SELECT t.number, a.issue_number IS NOT NULL, e.issue_number IS NOT NULL,
             EXISTS(SELECT FROM reservations r WHERE r.resources ?| t.resources),
             z.source_state, coalesce(m.active AND z.availability='current' AND z.checked_at>now()-interval '20 minutes'
-                AND b.plan_id IS NOT NULL,false), z.github_id, z.digest, z.title, z.selection_revision
+                AND b.plan_id IS NOT NULL,false), z.github_id, z.digest, z.title, z.selection_revision, EXISTS(SELECT FROM linear_sessions s WHERE s.workspace_id=$1 AND s.project_id=$2 AND s.issue_number=t.number AND NOT s.finished)
         FROM tickets t
         LEFT JOIN attempted a ON a.issue_number=t.number
         LEFT JOIN prerequisite_evidence e ON e.workspace_id=$1 AND e.project_id=$2 AND e.plan_id=$3 AND e.issue_number=t.number
@@ -133,6 +140,7 @@ fn ticket_facts(
         facts.insert(
             row.i64(0)?,
             TicketFacts {
+                delegated: row.bool(10)?,
                 attempted: row.bool(1)?,
                 integrated: row.bool(2)?,
                 reserved: row.bool(3)?,

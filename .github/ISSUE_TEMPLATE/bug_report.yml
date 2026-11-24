@@ -3,14 +3,18 @@ description: Report a reproducible problem in Bugsnitch
 body:
   - type: markdown
     attributes:
-      value: Do not paste secrets, tokens, or unnecessary proprietary code. Report exploitable vulnerabilities privately using SECURITY.md.
+      value: Redact credentials and private repository content. Use [private security reporting](https://github.com/lucasmkrx/bugsnitch/security/advisories) for suspected vulnerabilities.
   - type: input
     id: bugsnitch
-    attributes: { label: Bugsnitch version }
+    attributes:
+      label: Bugsnitch commit or version
+      description: When running from source, include the output of `git rev-parse --short HEAD`.
     validations: { required: true }
   - type: input
-    id: runner
-    attributes: { label: Runner or server version }
+    id: component
+    attributes:
+      label: Affected component
+      description: For example, the dashboard, macOS runner, self-hosted server, or a provider integration.
     validations: { required: true }
   - type: input
     id: os
@@ -19,7 +23,6 @@ body:
   - type: input
     id: git
     attributes: { label: Git version }
-    validations: { required: true }
   - type: textarea
     id: steps
     attributes:

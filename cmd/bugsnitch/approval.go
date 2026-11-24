@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"strings"
 
 	"github.com/lucasmkrx/bugsnitch/internal/approvalpolicy"
+	"github.com/lucasmkrx/bugsnitch/internal/runner"
 )
 
 func approvalCheck(ctx context.Context, args []string) error {
@@ -57,4 +59,55 @@ func approvalPreview(ctx context.Context, args []string) error {
 		return err
 	}
 	return printJSON(report)
+}
+
+// approvalReceipt prepares a check-run request from completed local evidence.
+// Publication and the review App's credentials belong to the trusted publisher.
+func approvalReceipt(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("approval-review-receipt", flag.ContinueOnError)
+	id := fs.String("id", "", "completed local attempt")
+	version := fs.Int("version", 0, "exact attempt version")
+	var s approvalpolicy.PullSubject
+	fs.StringVar(&s.Repository, "repository", "", "trusted repository name")
+	fs.Int64Var(&s.RepositoryID, "repository-id", 0, "trusted numeric repository ID")
+	fs.IntVar(&s.PR, "pr", 0, "PR number")
+	fs.StringVar(&s.Target, "target", "", "target branch")
+	fs.StringVar(&s.Base, "base", "", "target SHA reviewed by this attempt")
+	fs.StringVar(&s.Head, "head", "", "candidate SHA reviewed independently")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("unexpected receipt arguments")
+	}
+	a, err := runner.Get(*id)
+	if err != nil {
+		return err
+	}
+	if !strings.EqualFold(a.Repository, s.Repository) || s.Head != a.CandidateSHA || a.Version != *version || a.State != "completed" || a.Phase != "wrap_up" {
+		return errors.New("receipt requires the completed local attempt for this exact repository and head")
+	}
+	reviewBase := a.BaseSHA
+	if a.Steward != nil {
+		reviewBase = a.Steward.OriginalBase
+		if a.Steward.Pull != s.PR || a.Steward.Target != s.Target {
+			return errors.New("receipt differs from the reviewed pull request")
+		}
+	}
+	if s.Base != reviewBase {
+		return errors.New("target no longer matches the base of the reviewed diff")
+	}
+	depth, artifact, err := a.PassingReview(reviewBase)
+	if err != nil {
+		return err
+	}
+	body, err := approvalpolicy.ReviewRequest(s, depth)
+	if err != nil {
+		return err
+	}
+	body["output"] = map[string]string{"title": "Independent local review", "summary": "Validated and independently reviewed local candidate. Retained artifact SHA-256: " + artifact}
+	return printJSON(body)
 }

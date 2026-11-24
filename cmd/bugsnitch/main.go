@@ -27,6 +27,7 @@ const usage = `Usage: bugsnitch COMMAND [OPTIONS]
 
   share-diff             Preview or share an approved candidate diff
   approval-check         Evaluate repository policy on an exact base and candidate
+  approval-review-receipt Prepare a check-run body for an independently reviewed candidate
   approval-preview       Replay repository policy against labeled historical changes
   doctor                 Check Git, native runner capabilities and Codex
   models                 List models and reasoning settings on this runtime
@@ -101,6 +102,8 @@ func run(ctx context.Context, args []string) error {
 		return device.Share(args[1:])
 	case "next", "pair", "rotate", "unpair", "register", "sync", "status":
 		return device.RunCLIContext(ctx, args)
+	case "approval-review-receipt":
+		return approvalReceipt(ctx, args[1:])
 	case "approval-check":
 		return approvalCheck(ctx, args[1:])
 	case "approval-preview":

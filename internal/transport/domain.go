@@ -104,6 +104,7 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 		return nil, err
 	}
 	op := map[string]func(*domainCall) error{
+		"release.create": s.createReleasePlan, "release.cancel": s.cancelReleasePlan,
 		"project.create":         s.createProject,
 		"project.connect_github": s.connectGitHub,
 		"member.chat":            s.bindChat,

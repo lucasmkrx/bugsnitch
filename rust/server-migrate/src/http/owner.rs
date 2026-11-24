@@ -74,6 +74,8 @@ pub(super) fn routes() -> Router<Shared> {
     );
     for (path, op) in [
         ("/api/v1/projects", "project.create"),
+        ("/api/v1/releases", "release.create"),
+        ("/api/v1/releases/{id}/cancel", "release.cancel"),
         ("/api/v1/members/{id}/chat", "member.chat"),
         (
             "/api/v1/projects/{project}/github",

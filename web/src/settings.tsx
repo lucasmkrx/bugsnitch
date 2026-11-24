@@ -306,6 +306,39 @@ export function Settings({
             locked={locked}
           />
         ))}
+      {(!state.viewer || state.viewer.role === "owner") &&
+        projects.map((project) => (
+          <Panel key={project.id} title={project.repository + " on GitHub"}>
+            <div className="panel-body">
+              {project.githubConnected ? (
+                <p>Installation connected.</p>
+              ) : (
+                <>
+                  <p>
+                    Verify this repository against the workspace’s configured
+                    GitHub App installation.
+                  </p>
+                  <button
+                    disabled={locked}
+                    onClick={() =>
+                      void run(
+                        () =>
+                          post("projects/" + enc(project.id) + "/github", {
+                            version: project.version,
+                          }),
+                        "GitHub installation verified and connected.",
+                      )
+                    }
+                  >
+                    {project.githubConnected === false
+                      ? "Verify and reconnect"
+                      : "Connect repository"}
+                  </button>
+                </>
+              )}
+            </div>
+          </Panel>
+        ))}
       {limits && (
         <Panel title="Workspace capacity">
           <form key={limits.version} className="panel-body" onSubmit={save}>

@@ -385,7 +385,10 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
         );
         await page.goto(origin);
         await page
-          .getByRole("heading", { name: "Know the bug is fixed." })
+          .getByRole("heading", {
+            name: "From issue to verified release.",
+            level: 1,
+          })
           .waitFor();
         await page.evaluate(() => document.fonts.ready);
         assert.deepEqual(
@@ -449,10 +452,41 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
             ["image/png", 1200, 630],
           );
         }
-        assert.ok(
+        async function expectStage(name, heading) {
+          const selected = page.getByRole("tab", { selected: true });
+          assert.equal(await selected.count(), 1);
+          assert.equal(
+            await page
+              .getByRole("tab", { name, exact: true })
+              .getAttribute("aria-selected"),
+            "true",
+          );
+          assert.equal(await page.getByRole("tabpanel").count(), 1);
           await page
-            .locator(".dashboard-image")
-            .evaluate((image) => image.naturalWidth > 0),
+            .getByRole("tabpanel", { name, exact: true })
+            .getByRole("heading", { name: heading, exact: true })
+            .waitFor();
+        }
+        await expectStage("Verify", "Check the deployed build");
+        await page.getByRole("tab", { name: "Plan", exact: true }).click();
+        await expectStage("Plan", "Approve the work");
+        await page.keyboard.press("ArrowRight");
+        await expectStage("Review", "Review the candidate");
+        await page.keyboard.press("ArrowRight");
+        await expectStage("Ship", "Publish the reviewed change");
+        await page.keyboard.press("End");
+        await expectStage("Verify", "Check the deployed build");
+        await page.keyboard.press("Home");
+        await expectStage("Plan", "Approve the work");
+
+        const dashboardImage = page.locator(".dashboard-image");
+        await dashboardImage.scrollIntoViewIfNeeded();
+        assert.equal(
+          await dashboardImage.evaluate(async (image) => {
+            await image.decode();
+            return image.naturalWidth;
+          }),
+          width,
         );
         assert.ok(
           await page.evaluate(

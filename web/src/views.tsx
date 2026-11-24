@@ -590,6 +590,7 @@ export function Views({
             project={pRef(a.projectId)}
             state={s}
             locked={locked}
+            canInspect={!offlineLocked}
             run={run}
           />
         </>

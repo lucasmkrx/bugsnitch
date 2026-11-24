@@ -120,6 +120,94 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
   );
   t.after(() => browser.close());
   await t.test(
+    "a stale draft approval can be withdrawn and renewed on the exact candidate",
+    async (t) => {
+      const page = await browser.newPage();
+      t.after(() => page.close());
+      const state = fixture(),
+        id = "c".repeat(32),
+        base = "a".repeat(40),
+        head = "b".repeat(40);
+      state.projects[0].paused = false;
+      state.attempts = [
+        {
+          id,
+          projectId: "p1",
+          repository: project.repository,
+          machine: "Builder",
+          issueNumber: 7,
+          phase: "wrap_up",
+          state: "completed",
+          baseSha: base,
+          candidateSha: head,
+          version: 8,
+          connection: "connected",
+          updatedAt: state.updatedAt,
+        },
+      ];
+      const intent = {
+        attemptId: id,
+        projectId: "p1",
+        candidateSha: head,
+        baseSha: base,
+        target: "staging",
+        status: "awaiting_publication",
+        reportVersion: 7,
+        policyVersion: 1,
+        approvalVersion: 1,
+        updatedAt: state.updatedAt,
+      };
+      state.draftPRs = [intent];
+      const writes = [];
+      await page.route("**/api/v1/state", (r) => r.fulfill({ json: state }));
+      await page.route("**/draft-pr", (r) => {
+        const req = r.request().postDataJSON();
+        writes.push(req);
+        intent.status =
+          req.delivery === "withdraw" ? "withdrawn" : "awaiting_publication";
+        intent.approvalVersion++;
+        intent.reportVersion = req.version;
+        intent.target = req.target;
+        return r.fulfill({ json: intent });
+      });
+      await page.goto(url + "/#/work?project=p1&id=" + id);
+      await page.getByText(/The attempt version changed/).waitFor();
+      await page
+        .getByRole("button", { name: "Withdraw publication approval" })
+        .click();
+      await page.getByLabel("Target branch").fill("staging");
+      await page
+        .getByRole("button", { name: /Review.*(draft|approval)/i })
+        .click();
+      await page
+        .getByRole("dialog")
+        .getByRole("button", { name: "Request draft PR" })
+        .click();
+      await page
+        .getByText(
+          "bugsnitch local-ship --id " +
+            id +
+            " --version 8 --candidate " +
+            head +
+            " --target staging",
+          { exact: true },
+        )
+        .waitFor();
+      assert.deepEqual(
+        writes.map((x) => [
+          x.delivery,
+          x.version,
+          x.approvalVersion,
+          x.candidateSha,
+        ]),
+        [
+          ["withdraw", 7, 1, head],
+          ["local_ship", 8, 2, head],
+        ],
+      );
+    },
+  );
+  await t.test(
     "homepage works on desktop and mobile and opens the workspace",
     async (t) => {
       for (const width of [1440, 360]) {

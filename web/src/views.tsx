@@ -25,6 +25,12 @@ import { Settings } from "./settings";
 import { Publications } from "./publications";
 import { Pulls, Verification } from "./evidence";
 import { type ModalKind, type Run, decide } from "./actions";
+import {
+  AttemptAction,
+  LinearLinks,
+  attemptAction,
+  ticketAction,
+} from "./work";
 import { Members } from "./members";
 
 interface Props {
@@ -505,6 +511,7 @@ export function Views({
                 ["Attempt ID", <code>{a.id}</code>],
               ]}
             />
+            <AttemptAction state={s} attempt={a} />
             <div className="panel-body">
               <h3>Execution evidence</h3>
               {a.evidence?.length ? (
@@ -523,6 +530,17 @@ export function Views({
                         ["Changed files", e.changedFiles],
                         ["Important findings", e.importantFindings],
                         ["Minor findings", e.minorFindings],
+                        ...(e.durationMs == null
+                          ? []
+                          : [
+                              [
+                                "Elapsed time",
+                                (e.durationMs / 1000).toLocaleString(
+                                  undefined,
+                                  { maximumFractionDigits: 3 },
+                                ) + " s",
+                              ] as [string, ReactNode],
+                            ]),
                       ]}
                     />
                   </details>
@@ -592,6 +610,17 @@ export function Views({
     const items = tickets.filter((t) =>
       match(query, t.repository, t.number, t.title, t.state),
     );
+    const latest = new Map<string, (typeof attempts)[number]>();
+    for (const a of attempts) {
+      const key = a.projectId + ":" + a.issueNumber;
+      const prior = latest.get(key);
+      if (
+        !prior ||
+        (terminalStates.has(prior.state) && !terminalStates.has(a.state))
+      ) {
+        latest.set(key, a);
+      }
+    }
     return (
       <>
         {search("Search issues and attempts")}
@@ -608,7 +637,8 @@ export function Views({
                     a.machine +
                     " · " +
                     when(a.updatedAt) +
-                    (a.reasonCode ? " · " + human(a.reasonCode) : "")
+                    " · " +
+                    attemptAction(s, a).label
                   }
                   tail={
                     a.connection === "disconnected" &&
@@ -629,24 +659,43 @@ export function Views({
         </Panel>
         <Panel title="Canonical issues">
           {items.length
-            ? items.map((t) => (
-                <Row
-                  key={t.id}
-                  icon="repo"
-                  heading={t.title}
-                  detail={t.repository + " #" + t.number}
-                  href={
-                    "https://github.com/" + t.repository + "/issues/" + t.number
-                  }
-                  tail={<Badge>{human(t.state || "unknown")}</Badge>}
-                />
-              ))
+            ? items.map((t) => {
+                const action = ticketAction(
+                  s,
+                  t,
+                  latest.get(t.projectId + ":" + t.number),
+                );
+                return (
+                  <Row
+                    key={t.id}
+                    icon="repo"
+                    heading={t.title}
+                    detail={
+                      t.repository + " #" + t.number + " · " + action.label
+                    }
+                    href={
+                      action.href ||
+                      "https://github.com/" +
+                        t.repository +
+                        "/issues/" +
+                        t.number
+                    }
+                    tail={<Badge>{human(t.state || "unknown")}</Badge>}
+                  />
+                );
+              })
             : note(
                 query ? "No matching issues" : "No linked issues",
                 "Qualifying incident promotions appear here after GitHub confirms the issue.",
                 "repo",
               )}
         </Panel>
+        <LinearLinks
+          tickets={tickets}
+          run={run}
+          locked={locked}
+          canLink={role === "owner"}
+        />
       </>
     );
   }
@@ -884,66 +933,84 @@ export function Views({
         {search("Search devices")}
         <Panel title="Registered computers">
           {rows.length
-            ? rows.map((d) => (
-                <div key={d.id} className="device">
-                  <Row
-                    icon="devices"
-                    heading={d.name}
-                    detail={
-                      (d.platform || "Platform unknown") +
-                      " · Last contact " +
-                      when(d.lastContact)
-                    }
-                    tail={
-                      <Badge tone={d.revoked ? "warn" : "neutral"}>
-                        {d.revoked
-                          ? "Revoked"
-                          : Date.now() - Date.parse(d.lastContact || "") <
-                              120000
-                            ? "Recently connected"
-                            : "Contact unknown"}
-                      </Badge>
-                    }
-                  />
-                  <div className="device-detail">
-                    <span>
-                      {d.projects.map(name).join(", ") ||
-                        "No assigned projects"}
-                    </span>
-                    {!d.revoked &&
-                      (confirmRevoke === d.id ? (
-                        <div className="confirm">
-                          <span>
-                            Revoke future authorization on this device?
-                          </span>
-                          <button
-                            disabled={locked}
-                            onClick={() =>
-                              void run(
-                                () =>
-                                  post("devices/" + enc(d.id) + "/revoke", {}),
-                                "Device access revoked.",
-                              )
-                            }
-                          >
-                            Confirm revocation
-                          </button>
-                          <button onClick={() => setConfirmRevoke("")}>
-                            Cancel
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          className="quiet"
-                          disabled={locked}
-                          onClick={() => setConfirmRevoke(d.id)}
+            ? rows.map((d) => {
+                const reports = attempts.filter((a) => a.deviceId === d.id);
+                const owned = reports.filter(
+                  (a) => !terminalStates.has(a.state),
+                );
+                return (
+                  <div key={d.id} className="device">
+                    <Row
+                      icon="devices"
+                      heading={d.name}
+                      detail={
+                        (d.platform || "Platform unknown") +
+                        " · Last contact " +
+                        when(d.lastContact)
+                      }
+                      tail={
+                        <Badge tone={d.revoked ? "warn" : "neutral"}>
+                          {d.revoked
+                            ? "Revoked"
+                            : Date.now() - Date.parse(d.lastContact || "") <
+                                120000
+                              ? "Recently connected"
+                              : "Contact unknown"}
+                        </Badge>
+                      }
+                    />
+                    <div className="device-detail">
+                      <span>
+                        {d.projects.map(name).join(", ") ||
+                          "No assigned projects"}
+                      </span>
+                      {owned.length > 0 && (
+                        <ActionLink
+                          href={link("work", owned[0].projectId, owned[0].id)}
                         >
-                          Revoke access
-                        </button>
-                      ))}
+                          {owned.length === 1
+                            ? "1 unresolved attempt"
+                            : owned.length + " unresolved attempts"}
+                        </ActionLink>
+                      )}
+                      {!d.revoked &&
+                        (confirmRevoke === d.id ? (
+                          <div className="confirm">
+                            <span>
+                              Revoke future authorization on this device?
+                            </span>
+                            <button
+                              disabled={locked}
+                              onClick={() =>
+                                void run(
+                                  () =>
+                                    post(
+                                      "devices/" + enc(d.id) + "/revoke",
+                                      {},
+                                    ),
+                                  "Device access revoked.",
+                                )
+                              }
+                            >
+                              Confirm revocation
+                            </button>
+                            <button onClick={() => setConfirmRevoke("")}>
+                              Cancel
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            className="quiet"
+                            disabled={locked}
+                            onClick={() => setConfirmRevoke(d.id)}
+                          >
+                            Revoke access
+                          </button>
+                        ))}
+                    </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             : note(
                 query ? "No matching devices" : "No registered computers",
                 "Pair a computer with a one-time code and select its permitted projects.",

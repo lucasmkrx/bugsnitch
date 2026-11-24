@@ -425,6 +425,9 @@ main#main-content {
 .panel-body p:first-child {
   margin-top: 0;
 }
+.work-action code {
+  overflow-wrap: anywhere;
+}
 .panel-body button,
 .panel-body .actions {
   margin-top: 14px;

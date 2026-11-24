@@ -367,6 +367,59 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
       assert.equal(writes, 2);
     },
   );
+  await t.test(
+    "mobile work shows a version-bound local approval and respects dispatch pause",
+    async (t) => {
+      const page = await browser.newPage({
+        viewport: { width: 360, height: 800 },
+      });
+      t.after(() => page.close());
+      const state = fixture();
+      state.projects[0].paused = false;
+      const id = "a".repeat(32);
+      state.attempts = [
+        {
+          id,
+          projectId: "p1",
+          machine: "Builder",
+          repository: "example/storefront",
+          issueNumber: 7,
+          phase: "implement",
+          state: "waiting",
+          reasonCode: "plan_review_required",
+          version: 12,
+          baseSha: "b".repeat(40),
+          candidateSha: null,
+          updatedAt: state.updatedAt,
+          connection: "connected",
+        },
+      ];
+      await page.route("**/api/v1/state", (route) =>
+        route.fulfill({ json: state }),
+      );
+      const location = url + "#/work?project=p1&id=" + id;
+      await page.goto(location);
+      await page.getByRole("heading", { name: "Next action" }).waitFor();
+      await page
+        .getByText("Review the implementation plan", { exact: true })
+        .waitFor();
+      await page
+        .getByText("bugsnitch local-continue --id " + id + " --version 12", {
+          exact: true,
+        })
+        .waitFor();
+      assert.equal(
+        await page.evaluate(() => document.documentElement.scrollWidth),
+        360,
+      );
+      state.workspace.stopped = true;
+      await page.reload();
+      await page
+        .getByText("Workspace dispatch is stopped", { exact: true })
+        .waitFor();
+      assert.equal(await page.getByText(/bugsnitch local-continue/).count(), 0);
+    },
+  );
   for (const viewport of [
     { width: 1440, height: 900 },
     { width: 360, height: 800 },

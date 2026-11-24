@@ -40,6 +40,8 @@ mod unix {
     #[serde(deny_unknown_fields)]
     struct Launch {
         version: u8,
+        #[serde(default)]
+        sandbox: String,
         worktree: PathBuf,
         project: PathBuf,
         argv: Vec<String>,
@@ -295,11 +297,25 @@ mod unix {
             return Ok((Outcome::DidNotStart, -1));
         }
         let deadline = Instant::now() + Duration::from_secs(request.timeout_seconds);
-        let mut command = Command::new(program);
+        let mut command = match request.sandbox.as_str() {
+            "" => Command::new(&program),
+            "isolated" => match crate::validation_sandbox::command(&program, &tree, &scratch.0) {
+                Ok(command) => command,
+                Err(_) => return Ok((Outcome::DidNotStart, -1)),
+            },
+            _ => return Ok((Outcome::InvalidRequest, -1)),
+        };
         command
             .args(&request.argv[1..])
             .env_clear()
-            .env("PATH", env::var_os("PATH").unwrap_or_default())
+            .env(
+                "PATH",
+                if request.sandbox.is_empty() {
+                    env::var_os("PATH").unwrap_or_default()
+                } else {
+                    "/usr/bin:/bin".into()
+                },
+            )
             .env("HOME", &scratch.0)
             .env("TMPDIR", &scratch.0)
             .env("LANG", "C")

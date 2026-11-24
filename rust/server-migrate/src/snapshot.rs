@@ -14,8 +14,14 @@ macro_rules! view {
 static STATE: LazyLock<String> = LazyLock::new(|| {
     let mut fields = vec![
         r#"json_build_object('id',owner_scope.id,'name',owner_scope.name,'stopped',owner_scope.stopped,'dispatchVersion',owner_scope.dispatch_version) AS "workspace""#.into(),
+        r#"json_build_object('name',coalesce(viewer.name,'Owner'),'role',coalesce(viewer.role,'owner'),'projectId',viewer.project_id) AS "viewer""#.into(),
         r#"json_build_object('tickets',owner_scope.ticket_limit,'turns',owner_scope.turn_limit,'version',owner_scope.limits_version) AS "limits""#.into(),
         r#"json_build_object('hostedInference',false,'reason','Hosted inference requires confirmation of this deployment’s eligibility for Sign in with ChatGPT. Local account-backed runs can be started on the computer.') AS "capabilities""#.into(),
+        r#"CASE WHEN viewer.id IS NULL THEN json_build_object('monthlyTurns',owner_scope.monthly_turn_limit,'usedTurns',coalesce((SELECT turns FROM monthly_model_usage WHERE workspace_id=owner_scope.id AND month=date_trunc('month',now() AT TIME ZONE 'UTC')::date),0)) ELSE 'null'::json END AS "budget""#.into(),
+        r#"CASE WHEN viewer.id IS NULL THEN (SELECT coalesce(json_agg(q),'[]') FROM (SELECT r.id,r.name,r.environment,r.cancelled_at AS "cancelledAt",
+          (SELECT json_agg(json_build_object('projectId',s.project_id,'number',s.pull_number,'status',s.status,'head',s.head,'target',s.target) ORDER BY s.position)
+           FROM release_stage_status s WHERE s.workspace_id=r.workspace_id AND s.release_id=r.id) AS stages
+          FROM release_plans r WHERE r.workspace_id=owner_scope.id ORDER BY r.created_at DESC,r.id LIMIT 60) q) ELSE '[]'::json END AS releases"#.into(),
         r#"to_json(now()) AS "updatedAt""#.into(),
     ];
     let events = format!(
@@ -55,17 +61,47 @@ static STATE: LazyLock<String> = LazyLock::new(|| {
         ELSE coalesce(json_agg(t),'[]') END FROM ({}) t) AS plans"#,
         view!("plans")
     ));
-    owner_query(&format!("SELECT {}", fields.join(",")))
+    session_query(&format!("SELECT {}", fields.join(",")), false)
 });
 
-static DIAGNOSTICS: LazyLock<String> = LazyLock::new(|| owner_query(view!("diagnostics")));
+static DIAGNOSTICS: LazyLock<String> = LazyLock::new(|| session_query(view!("diagnostics"), true));
 
 // Scope every fragment to the workspace derived from the live browser session.
 // The only wire parameter is the session hash; a caller cannot nominate an account or workspace.
-fn owner_query(projection: &str) -> String {
+fn session_query(projection: &str, owner_only: bool) -> String {
+    let access = if owner_only {
+        " AND s.member_id IS NULL"
+    } else {
+        " AND (s.member_id IS NULL OR viewer.revoked_at IS NULL)"
+    };
+    // Apply the session's project restriction before each section's ordering and
+    // row limit. All detail subqueries join through these visible project rows.
+    let mut scope = String::new();
+    if !owner_only {
+        let mut tables = vec!["projects AS NOT MATERIALIZED (SELECT * FROM projects WHERE viewer.project_id IS NULL OR id=viewer.project_id)".to_owned()];
+        for table in [
+            "device_projects",
+            "events",
+            "decisions",
+            "publications",
+            "manager_messages",
+            "attempt_reports",
+            "plan_versions",
+            "incidents",
+            "incident_issues",
+            "planned_issue_state",
+            "pull_observations",
+            "draft_pr_intents",
+        ] {
+            tables.push(format!("{table} AS NOT MATERIALIZED (SELECT * FROM {table} WHERE viewer.project_id IS NULL OR project_id=viewer.project_id)"));
+        }
+        tables.push("devices AS NOT MATERIALIZED (SELECT d.* FROM devices d WHERE viewer.project_id IS NULL OR EXISTS(SELECT FROM device_projects dp WHERE dp.device_id=d.id))".into());
+        scope = format!("WITH {} ", tables.join(","));
+    }
     format!(
         "SELECT dashboard.* FROM sessions s JOIN workspaces owner_scope ON owner_scope.id=s.workspace_id \
-            CROSS JOIN LATERAL ({}) dashboard WHERE s.token_hash=$1 AND s.expires_at>now()",
+            LEFT JOIN workspace_members viewer ON (viewer.workspace_id,viewer.id)=(s.workspace_id,s.member_id) \
+            CROSS JOIN LATERAL ({scope}{}) dashboard WHERE s.token_hash=$1 AND s.expires_at>now(){access}",
         projection.replace("$1", "owner_scope.id")
     )
 }

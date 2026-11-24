@@ -5,9 +5,11 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"database/sql"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"github.com/lucasmkrx/bugsnitch/internal/storage"
 	"github.com/lucasmkrx/bugsnitch/internal/testgithub"
 	"io"
 	"net/http"
@@ -97,11 +99,51 @@ func TestPostgresDraftReconcilesLostResponseAndRejectsStalePolicy(t *testing.T) 
 		t.Fatal(err)
 	}
 	s := Store{DB: db, App: app}
-	for i := 0; i < 2; i++ {
-		d, err := s.RequestDraft(ctx, "personal", "p", id, request)
-		if err != nil || d.Status != "queued" {
-			t.Fatal("expected one queued intent", d, err)
+	token := strings.Repeat("c", 64)
+	exec("UPDATE devices SET token_hash=$1 WHERE id='d'", token)
+	delivery := func(op, key, attempt, target string, report, approval int) (string, error) {
+		var out struct {
+			Status string `json:"status"`
 		}
+		err := storage.Coordinate(ctx, db, "device.draft_delivery", map[string]any{"tokenHash": key, "request": map[string]any{"protocol": 1, "operation": op, "attemptId": attempt, "version": report, "approvalVersion": approval, "candidateSha": head, "baseSha": base, "target": target}}, &out)
+		return out.Status, err
+	}
+	if status, err := delivery("status", token, id, "main", 5, 0); err != nil || status != "awaiting_approval" {
+		t.Fatal("missing owner approval", status, err)
+	}
+	if _, err := delivery("published", token, id, "main", 5, 1); err == nil {
+		t.Fatal("device created a draft intent")
+	}
+	request.Delivery, request.Candidate = "local_ship", head
+	for range 2 {
+		d, err := s.RequestDraft(ctx, "personal", "p", id, request)
+		if err != nil || d.Status != "awaiting_publication" {
+			t.Fatal("expected one held intent", d, err)
+		}
+	}
+	if err = s.syncDraft(ctx); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("worker selected an unpublished branch", err)
+	}
+	exec("INSERT INTO devices(id,workspace_id,name,platform,token_hash) VALUES('other','personal','other','test',$1)", strings.Repeat("e", 64))
+	for _, tc := range []struct{ key, target string }{{strings.Repeat("e", 64), "main"}, {token, "production"}} {
+		if _, err := delivery("published", tc.key, id, tc.target, 5, 1); err == nil {
+			t.Fatal("wrong device or target accepted")
+		}
+	}
+	exec("UPDATE devices SET revoked=true WHERE id='d'")
+	if _, err := delivery("published", token, id, "main", 5, 1); err == nil {
+		t.Fatal("revoked device released draft")
+	}
+	exec("UPDATE devices SET revoked=false WHERE id='d'")
+	for range 2 {
+		status, err := delivery("published", token, id, "main", 5, 1)
+		if err != nil || status != "queued" {
+			t.Fatal("lost release reconciliation", status, err)
+		}
+	}
+	var releaseEvents int
+	if err = db.QueryRow("SELECT count(*) FROM events WHERE kind='draft.publication_confirmed'").Scan(&releaseEvents); err != nil || releaseEvents != 1 {
+		t.Fatal("duplicate confirmation", releaseEvents, err)
 	}
 	if err = s.syncDraft(ctx); err != nil {
 		t.Fatal(err)
@@ -118,6 +160,73 @@ func TestPostgresDraftReconcilesLostResponseAndRejectsStalePolicy(t *testing.T) 
 	if err != nil || list[0].Number == nil || *list[0].Number != 18 || writes.Load() != 1 {
 		t.Fatal(list, writes.Load(), err)
 	}
+	if status, err := delivery("status", token, id, "main", 5, 0); err != nil || status != "created" {
+		t.Fatal("missing device receipt", status, err)
+	}
+	withdraw := strings.Repeat("3", 32)
+	exec("INSERT INTO attempt_reports(id,workspace_id,project_id,device_id,issue_number,base_sha,candidate_sha,phase,state,version,evidence,issue_updated_at) SELECT $1,workspace_id,project_id,device_id,issue_number,base_sha,candidate_sha,phase,state,version,evidence,issue_updated_at FROM attempt_reports WHERE id=$2", withdraw, id)
+	if _, err = s.RequestDraft(ctx, "personal", "p", withdraw, request); err != nil {
+		t.Fatal(err)
+	}
+	cancel := request
+	cancel.Delivery, cancel.ApprovalVersion = "withdraw", 1
+	if d, err := s.RequestDraft(ctx, "personal", "p", withdraw, cancel); err != nil || d.Status != "withdrawn" || d.ApprovalVersion != 2 {
+		t.Fatal("withdraw", d, err)
+	}
+	if _, err := delivery("published", token, withdraw, "main", 5, 1); err == nil {
+		t.Fatal("stale release accepted after withdrawal")
+	}
+	if _, err = s.RequestDraft(ctx, "personal", "p", withdraw, request); !errors.Is(err, ErrConflict) {
+		t.Fatal("replayed original approval", err)
+	}
+	renew := request
+	renew.ApprovalVersion = 2
+	for range 2 {
+		d, err := s.RequestDraft(ctx, "personal", "p", withdraw, renew)
+		if err != nil || d.Status != "awaiting_publication" || d.ApprovalVersion != 3 {
+			t.Fatal("renew same subject", d, err)
+		}
+	}
+	if _, err = s.RequestDraft(ctx, "personal", "p", withdraw, cancel); !errors.Is(err, ErrConflict) {
+		t.Fatal("stale withdrawal cancelled new approval", err)
+	}
+	if _, err := delivery("published", token, withdraw, "main", 5, 1); err == nil {
+		t.Fatal("old release accepted for new approval")
+	}
+	// A sync advances the local version. The owner must still be able to
+	// withdraw the earlier receipt and approve the current target/version.
+	exec("UPDATE attempt_reports SET version=6 WHERE id=$1", withdraw)
+	cancel.ApprovalVersion = 3
+	if d, err := s.RequestDraft(ctx, "personal", "p", withdraw, cancel); err != nil || d.ApprovalVersion != 4 {
+		t.Fatal("withdraw after new report", d, err)
+	}
+	if _, err = s.RequestDraft(ctx, "personal", "p", withdraw, renew); !errors.Is(err, ErrConflict) {
+		t.Fatal("old reapproval resurrected withdrawn job", err)
+	}
+	renew.Version, renew.Target, renew.ApprovalVersion = 6, "staging", 4
+	if d, err := s.RequestDraft(ctx, "personal", "p", withdraw, renew); err != nil || d.ReportVersion != 6 || d.Target != "staging" || d.ApprovalVersion != 5 {
+		t.Fatal("renew current report", d, err)
+	}
+	if status, err := delivery("status", token, withdraw, "staging", 6, 5); err != nil || status != "awaiting_publication" {
+		t.Fatal("current release unavailable", status, err)
+	}
+	cancel.Version, cancel.Target, cancel.ApprovalVersion = 6, "staging", 5
+	if _, err = s.RequestDraft(ctx, "personal", "p", withdraw, cancel); err != nil {
+		t.Fatal(err)
+	}
+	// A completed delivery and its PR number must never become a new draft.
+	if _, err = s.RequestDraft(ctx, "personal", "p", withdraw, renew); !errors.Is(err, ErrConflict) {
+		t.Fatal("same-subject stale reapproval resurrected job", err)
+	}
+	created := request
+	created.ApprovalVersion = 1
+	if _, err = s.RequestDraft(ctx, "personal", "p", id, created); !errors.Is(err, ErrConflict) {
+		t.Fatal("reopened created draft", err)
+	}
+	if status, err := delivery("status", token, id, "main", 5, 1); err != nil || status != "created" {
+		t.Fatal("lost prior draft", status, err)
+	}
+	request.Delivery, request.Candidate = "", ""
 	if _, err = s.RequestDraft(ctx, "personal", "p", second, request); err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +235,7 @@ func TestPostgresDraftReconcilesLostResponseAndRejectsStalePolicy(t *testing.T) 
 		t.Fatal(err)
 	}
 	list, err = s.Drafts(ctx, "personal")
-	if err != nil || len(list) != 2 || list[0].Status != "blocked" || writes.Load() != 1 {
+	if err != nil || len(list) != 3 || list[0].Status != "blocked" || writes.Load() != 1 {
 		t.Fatal("stale policy produced a side effect", list, writes.Load(), err)
 	}
 }

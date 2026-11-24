@@ -22,6 +22,7 @@ pub fn public() -> Router<Shared> {
     Router::new()
         .route("/api/v1/device/pair", post(pair))
         .route("/api/v1/device/sync", post(sync))
+        .route("/api/v1/device/draft-delivery", post(draft_delivery))
         .route("/api/v1/device/rotate", post(rotate))
         .route("/api/v1/device/admission", post(admission))
         .route("/api/v1/device/model-permit", post(permit))
@@ -206,6 +207,14 @@ async fn claim(s: Shared, token: String, op: &str, body: Value) -> WebResult<Val
     )
     .await
 }
+async fn draft_delivery(
+    State(s): State<Shared>,
+    Device(token): Device,
+    ApiJson(body): ApiJson<Value>,
+) -> Reply {
+    Ok(Json(claim(s, token, "device.draft_delivery", body).await?))
+}
+
 async fn admission(
     State(s): State<Shared>,
     Device(token): Device,

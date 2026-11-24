@@ -62,3 +62,21 @@ func TestUsagePreservesUnknownAndDropsAccountIdentity(t *testing.T) {
 		t.Fatal("unexpected account metadata exposed")
 	}
 }
+
+func TestCodexTurnMeteringBindsSingleThreadAndTurn(t *testing.T) {
+	messages := `{"id":1,"result":{"data":[{"id":"fixture-model","model":"fixture-model","isDefault":true}]}}
+{"id":2,"result":{"thread":{"id":"thread1"},"model":"fixture-model","modelProvider":"openai","cwd":"/work","approvalPolicy":"never","sandbox":{"type":"readOnly","networkAccess":false}}}
+{"id":3,"result":{"data":[]}}
+{"id":4,"result":{"turn":{"id":"turn1"}}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"thread1","turnId":"turn1","tokenUsage":{"total":{"inputTokens":33,"outputTokens":10},"last":{"inputTokens":2,"outputTokens":4}}}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"thread2","turnId":"turn1","tokenUsage":{"total":{"inputTokens":999,"outputTokens":999}}}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"thread1","turnId":"turn2","tokenUsage":{"total":{"inputTokens":888,"outputTokens":888}}}}
+{"method":"item/completed","params":{"threadId":"thread1","turnId":"turn1","item":{"type":"agentMessage","text":"done","phase":"final_answer"}}}
+{"method":"turn/completed","params":{"threadId":"thread1","turn":{"id":"turn1","status":"completed"}}}
+`
+	c := Client{in: &input{}, dir: "/work", out: bufio.NewScanner(strings.NewReader(messages))}
+	r, err := c.Turn("work", "example", "", "", nil)
+	if err != nil || r.Usage == nil || r.Usage.InputTokens != 33 || r.Usage.OutputTokens != 10 {
+		t.Fatalf("usage %+v, err %v", r.Usage, err)
+	}
+}

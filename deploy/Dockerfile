@@ -4,6 +4,7 @@ COPY web/package*.json ./
 RUN npm ci
 COPY web/ ./
 COPY assets/brand /assets/brand
+COPY docs/screenshots/fixture-overview-1440.png /docs/screenshots/
 RUN npm run build
 
 FROM golang:1.27.4-alpine AS domain

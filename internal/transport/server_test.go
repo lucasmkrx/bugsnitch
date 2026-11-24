@@ -34,6 +34,10 @@ func fixture(t *testing.T) *testServer { t.Helper(); return fixtureWithWeb(t, ""
 
 func fixtureWithWeb(t *testing.T, web string) *testServer {
 	t.Helper()
+	return fixtureWithIntegrations(t, testserver.Config{WebDir: web})
+}
+func fixtureWithIntegrations(t *testing.T, cfg testserver.Config) *testServer {
+	t.Helper()
 	dsn := os.Getenv("BUGSNITCH_TEST_DSN")
 	if dsn == "" {
 		t.Skip("set BUGSNITCH_TEST_DSN to a disposable PostgreSQL database")
@@ -66,7 +70,8 @@ func fixtureWithWeb(t *testing.T, web string) *testServer {
 	}
 	reopened.Close()
 	s := &testServer{DB: scoped, Origin: "http://localhost:8787", OwnerToken: random(32), PluginToken: random(32)}
-	s.handler = testserver.Start(t, u.String(), testserver.Config{Origin: s.Origin, OwnerToken: s.OwnerToken, PluginToken: s.PluginToken, WebDir: web})
+	cfg.Origin, cfg.OwnerToken, cfg.PluginToken = s.Origin, s.OwnerToken, s.PluginToken
+	s.handler = testserver.Start(t, u.String(), cfg)
 	return s
 }
 

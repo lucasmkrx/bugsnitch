@@ -11,9 +11,14 @@ import (
 	"github.com/lucasmkrx/bugsnitch/internal/audit"
 )
 
+const receiptOrder = "effective_at DESC,provider_order DESC,received_at DESC,command_key DESC"
+
 var revision = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
 type Receipt struct {
+	providerOrder    int64
+	Source           string    `json:"source,omitempty"`
+	MonitorID        string    `json:"monitorId,omitempty"`
 	CommandID        string    `json:"commandId"`
 	DeploymentID     string    `json:"deploymentId,omitempty"`
 	Version          int64     `json:"version"`
@@ -52,6 +57,9 @@ func (r Receipt) valid() bool {
 }
 func validBuild(s string) bool { return revision.MatchString(s) || label(s) != "" }
 func (s Store) RecordReceipt(ctx context.Context, w, p, id string, r Receipt) error {
+	if r.Source != "" || r.MonitorID != "" {
+		return ErrInvalid
+	}
 	r.Evidence = Redact(r.Evidence)
 	if !r.valid() {
 		return ErrInvalid
@@ -61,14 +69,27 @@ func (s Store) RecordReceipt(ctx context.Context, w, p, id string, r Receipt) er
 		return err
 	}
 	defer tx.Rollback()
-	var cur int64
-	if err = tx.QueryRowContext(ctx, `SELECT version FROM incidents WHERE workspace_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`, w, p, id).Scan(&cur); err != nil {
+	if err = recordReceipt(ctx, tx, w, p, id, r, "authenticated owner", "", 0); err != nil {
 		return err
 	}
-	raw, _ := json.Marshal(r)
+	return tx.Commit()
+}
+
+func recordReceipt(ctx context.Context, tx *sql.Tx, w, p, id string, r Receipt, source, monitor string, order int64) error {
+	var cur int64
+	if err := tx.QueryRowContext(ctx, `SELECT version FROM incidents WHERE workspace_id=$1 AND project_id=$2 AND id=$3 FOR UPDATE`, w, p, id).Scan(&cur); err != nil {
+		return err
+	}
+	hashInput := r
+	if monitor != "" {
+		hashInput.Version = 0
+		hashInput.MonitorID = monitor
+		hashInput.Source = source
+	}
+	raw, _ := json.Marshal(hashInput)
 	hash := digest(string(raw))
 	var stored string
-	err = tx.QueryRowContext(ctx, `SELECT payload_hash FROM incident_evidence WHERE workspace_id=$1 AND project_id=$2 AND incident_id=$3 AND command_key=$4`, w, p, id, r.CommandID).Scan(&stored)
+	err := tx.QueryRowContext(ctx, `SELECT payload_hash FROM incident_evidence WHERE workspace_id=$1 AND project_id=$2 AND incident_id=$3 AND command_key=$4`, w, p, id, r.CommandID).Scan(&stored)
 	if err == nil {
 		if stored == hash {
 			return nil
@@ -77,6 +98,9 @@ func (s Store) RecordReceipt(ctx context.Context, w, p, id string, r Receipt) er
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return err
+	}
+	if monitor != "" {
+		r.Version = cur
 	}
 	if cur != r.Version {
 		return ErrConflict
@@ -89,7 +113,7 @@ func (s Store) RecordReceipt(ctx context.Context, w, p, id string, r Receipt) er
 		err = tx.QueryRowContext(ctx, `SELECT command_key,build=$4 AND candidate=$5,
 			count(*) FILTER (WHERE build=$4 AND candidate=$5) OVER () > 1 FROM incident_evidence
 			WHERE workspace_id=$1 AND project_id=$2 AND incident_id=$3 AND environment=$6 AND kind='deployment' AND effective_at<=$7
-			ORDER BY effective_at DESC,received_at DESC,command_key DESC LIMIT 1`, w, p, id, r.Build, r.Candidate, r.Environment, r.At).Scan(&deployment, &sameArtifact, &repeatedArtifact)
+			ORDER BY `+receiptOrder+` LIMIT 1`, w, p, id, r.Build, r.Candidate, r.Environment, r.At).Scan(&deployment, &sameArtifact, &repeatedArtifact)
 		if errors.Is(err, sql.ErrNoRows) {
 			return ErrConflict
 		}
@@ -103,8 +127,8 @@ func (s Store) RecordReceipt(ctx context.Context, w, p, id string, r Receipt) er
 			return ErrConflict
 		}
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO incident_evidence(workspace_id,project_id,incident_id,command_key,payload_hash,kind,candidate,environment,build,evidence,effective_at,positive,coverage,exposures,monitor_seconds,minimum_exposures,deployment_key)
-	VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`, w, p, id, r.CommandID, hash, r.Kind, r.Candidate, r.Environment, r.Build, r.Evidence, r.At, r.Positive, r.Coverage, r.Exposures, r.WindowSeconds, r.MinimumExposures, deployment)
+	_, err = tx.ExecContext(ctx, `INSERT INTO incident_evidence(workspace_id,project_id,incident_id,command_key,payload_hash,kind,candidate,environment,build,evidence,effective_at,positive,coverage,exposures,monitor_seconds,minimum_exposures,deployment_key,source,monitor_id,provider_order)
+	VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,NULLIF($19,''),$20)`, w, p, id, r.CommandID, hash, r.Kind, r.Candidate, r.Environment, r.Build, r.Evidence, r.At, r.Positive, r.Coverage, r.Exposures, r.WindowSeconds, r.MinimumExposures, deployment, source, monitor, order)
 	if err != nil {
 		return err
 	}
@@ -115,17 +139,19 @@ func (s Store) RecordReceipt(ctx context.Context, w, p, id string, r Receipt) er
 	if err = event(ctx, tx, w, p, "incident."+r.Kind+"_recorded", id); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 type Verdict struct {
-	Status      string   `json:"status"`
-	Reason      string   `json:"reason"`
-	Environment string   `json:"environment"`
-	Deployment  *Receipt `json:"deployment,omitempty"`
-	Fix         *Receipt `json:"fix,omitempty"`
-	Validation  *Receipt `json:"validation,omitempty"`
-	Source      string   `json:"receiptSource"`
+	Monitor     *MonitorView     `json:"monitor,omitempty"`
+	Holds       []DeploymentHold `json:"holds,omitempty"`
+	Status      string           `json:"status"`
+	Reason      string           `json:"reason"`
+	Environment string           `json:"environment"`
+	Deployment  *Receipt         `json:"deployment,omitempty"`
+	Fix         *Receipt         `json:"fix,omitempty"`
+	Validation  *Receipt         `json:"validation,omitempty"`
+	Source      string           `json:"receiptSource"`
 }
 
 func evaluate(v Verdict, now time.Time, recurrence, unknown bool) Verdict {
@@ -166,16 +192,16 @@ func evaluate(v Verdict, now time.Time, recurrence, unknown bool) Verdict {
 }
 func loadReceipt(ctx context.Context, tx *sql.Tx, w, p, id, kind, env, deployment string) (*Receipt, error) {
 	var r Receipt
-	err := tx.QueryRowContext(ctx, `SELECT command_key,kind,candidate,environment,build,evidence,effective_at,positive,coverage,exposures,monitor_seconds,minimum_exposures,coalesce(deployment_key,'') FROM incident_evidence
+	err := tx.QueryRowContext(ctx, `SELECT command_key,kind,candidate,environment,build,evidence,effective_at,positive,coverage,exposures,monitor_seconds,minimum_exposures,coalesce(deployment_key,''),source,coalesce(monitor_id,''),provider_order FROM incident_evidence
 	WHERE workspace_id=$1 AND project_id=$2 AND incident_id=$3 AND kind=$4 AND environment=$5 AND ($6='' OR deployment_key=$6)
-	ORDER BY effective_at DESC,received_at DESC,command_key DESC LIMIT 1`, w, p, id, kind, env, deployment).Scan(&r.CommandID, &r.Kind, &r.Candidate, &r.Environment, &r.Build, &r.Evidence, &r.At, &r.Positive, &r.Coverage, &r.Exposures, &r.WindowSeconds, &r.MinimumExposures, &r.DeploymentID)
+	ORDER BY `+receiptOrder+` LIMIT 1`, w, p, id, kind, env, deployment).Scan(&r.CommandID, &r.Kind, &r.Candidate, &r.Environment, &r.Build, &r.Evidence, &r.At, &r.Positive, &r.Coverage, &r.Exposures, &r.WindowSeconds, &r.MinimumExposures, &r.DeploymentID, &r.Source, &r.MonitorID, &r.providerOrder)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	return &r, err
 }
 func (s Store) Verdict(ctx context.Context, w, p, id, env string) (Verdict, error) {
-	v := Verdict{Environment: env, Source: "authenticated owner"}
+	v := Verdict{}
 	if label(env) == "" {
 		return v, ErrInvalid
 	}
@@ -184,6 +210,19 @@ func (s Store) Verdict(ctx context.Context, w, p, id, env string) (Verdict, erro
 		return v, err
 	}
 	defer tx.Rollback()
+	v, err = readVerdict(ctx, tx, w, p, id, env)
+	if err != nil {
+		return v, err
+	}
+	if err = readMonitor(ctx, tx, w, p, id, env, &v); err != nil {
+		return v, err
+	}
+	return v, tx.Commit()
+}
+
+func readVerdict(ctx context.Context, tx *sql.Tx, w, p, id, env string) (Verdict, error) {
+	v := Verdict{Environment: env, Source: "authenticated owner"}
+	var err error
 	var group, source string
 	if err = tx.QueryRowContext(ctx, `SELECT group_key,source FROM incidents WHERE workspace_id=$1 AND project_id=$2 AND id=$3`, w, p, id).Scan(&group, &source); err != nil {
 		return v, err
@@ -206,5 +245,64 @@ func (s Store) Verdict(ctx context.Context, w, p, id, env string) (Verdict, erro
 			return v, err
 		}
 	}
-	return evaluate(v, time.Now().UTC(), recurrence, unknown), tx.Commit()
+	var provider, owner bool
+	for _, receipt := range []*Receipt{v.Fix, v.Deployment, v.Validation} {
+		if receipt == nil {
+			continue
+		}
+		if receipt.MonitorID != "" {
+			provider = true
+		} else {
+			owner = true
+		}
+	}
+	if provider {
+		v.Source = "GitHub"
+		if owner {
+			v.Source = "authenticated owner and GitHub"
+		}
+	}
+	v = evaluate(v, time.Now().UTC(), recurrence, unknown)
+	if v.Status != "Verified in environment" {
+		return v, nil
+	}
+	if d := v.Deployment; d.MonitorID != "" {
+		var active bool
+		err = tx.QueryRowContext(ctx, `SELECT coalesce((SELECT succeeded AND status_id=$2 FROM deployment_activation_states
+               WHERE monitor_id=$1 AND deployment_id=split_part($3::text,'-',3)::bigint ORDER BY effective_at DESC,status_id DESC LIMIT 1),false)`,
+			d.MonitorID, d.providerOrder, d.CommandID).Scan(&active)
+		if err != nil {
+			return v, err
+		}
+		if !active {
+			v.Status = "Awaiting deployment"
+			v.Reason = "GitHub no longer reports this deployment status as successful."
+			return v, nil
+		}
+	}
+	// Terminal runs can be updated. A contradictory redelivery or newer inconclusive
+	// run supersedes the historical receipt until a new, successful run is measured.
+	for _, r := range []*Receipt{v.Fix, v.Validation} {
+		if r.MonitorID == "" {
+			continue
+		}
+		var current bool
+		if r.Kind == "fix" {
+			err = tx.QueryRowContext(ctx, `SELECT coalesce((SELECT positive AND NOT disputed AND run_id=$2 FROM deployment_fix_checks
+                  WHERE monitor_id=$1 ORDER BY completed_at DESC,run_id DESC LIMIT 1),false)`, r.MonitorID, r.providerOrder).Scan(&current)
+		} else {
+			err = tx.QueryRowContext(ctx, `SELECT coalesce((SELECT positive AND NOT inconclusive AND NOT disputed AND run_id=$2
+                  FROM deployment_monitor_checks WHERE monitor_id=$1 AND deployment_key=$3 AND build=$4 AND started_at>=$5
+                  ORDER BY completed_at DESC,run_id DESC LIMIT 1),false)`, r.MonitorID, r.providerOrder, r.DeploymentID, r.Build, v.Deployment.At).Scan(&current)
+		}
+		if err != nil {
+			return v, err
+		}
+		if !current {
+			v.Status = "Verification inconclusive"
+			v.Reason = "A current successful GitHub check is required after a revised or inconclusive result."
+			return v, nil
+		}
+	}
+	return v, nil
 }

@@ -3,9 +3,11 @@ package integration
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"regexp"
 	"strconv"
@@ -32,19 +34,32 @@ type Evidence struct {
 	Kind      string `json:"kind"`
 	Reference string `json:"reference"`
 }
+type SignOff struct {
+	Version int64  `json:"version"`
+	Head    string `json:"head"`
+	Base    string `json:"base"`
+	Target  string `json:"target"`
+}
+type SignOffReceipt struct {
+	At time.Time `json:"at"`
+}
 type Pull struct {
 	github.PullObservation
-	ProjectID         string    `json:"projectId"`
-	Number            int64     `json:"number"`
-	IssueNumber       int64     `json:"issueNumber"`
-	Version           int64     `json:"version"`
-	PolicyVersion     int64     `json:"policyVersion"`
-	PlanVersion       int64     `json:"planVersion"`
-	ObservedAt        time.Time `json:"observedAt"`
-	Blockers          []string  `json:"blockers"`
-	AutoMerge         bool      `json:"autoMerge"`
-	Validation        string    `json:"validation,omitempty"`
-	IndependentReview string    `json:"independentReview,omitempty"`
+	ProjectID         string            `json:"projectId"`
+	Number            int64             `json:"number"`
+	IssueNumber       int64             `json:"issueNumber"`
+	Version           int64             `json:"version"`
+	PolicyVersion     int64             `json:"policyVersion"`
+	PlanVersion       int64             `json:"planVersion"`
+	ObservedAt        time.Time         `json:"observedAt"`
+	Blockers          []string          `json:"blockers"`
+	AutoMerge         bool              `json:"autoMerge"`
+	Validation        string            `json:"validation,omitempty"`
+	IndependentReview string            `json:"independentReview,omitempty"`
+	Handovers         []HandoverReceipt `json:"handovers,omitempty"`
+	Watching          bool              `json:"watching,omitempty"`
+	QueueDelivery     json.RawMessage   `json:"queueDelivery,omitempty"`
+	SignOff           *SignOffReceipt   `json:"signOff,omitempty"`
 }
 
 type scanner interface{ Scan(...any) error }
@@ -158,6 +173,28 @@ func (s Store) Record(ctx context.Context, w, p string, n int64, e Evidence) err
 	if n <= 0 || e.Version <= 0 || !digest.MatchString(e.Reference) || (e.Kind != "combined_validation" && e.Kind != "independent_review") {
 		return ErrInvalid
 	}
+	return s.record(ctx, w, p, n, e, nil)
+}
+
+func (s Store) Approve(ctx context.Context, w, p string, n int64, a SignOff) error {
+	if n < 1 || a.Version < 1 || !commitSHA.MatchString(a.Head) || !commitSHA.MatchString(a.Base) || !github.ValidBranch(a.Target) {
+		return ErrInvalid
+	}
+	subject, err := json.Marshal(a)
+	if err != nil {
+		return err
+	}
+	return s.record(ctx, w, p, n, Evidence{a.Version, "sign_off", fmt.Sprintf("%x", sha256.Sum256(subject))}, &a)
+}
+
+func (a SignOff) ready(p Pull) bool {
+	return p.Version == a.Version && p.State == "OPEN" && p.IssueState == "OPEN" &&
+		p.Head == a.Head && p.Base == a.Base && p.Target == a.Target && !p.Draft &&
+		p.Checks == "SUCCESS" && p.CheckCount > 0 && p.Review == "APPROVED" &&
+		p.Validation != "" && p.IndependentReview != ""
+}
+
+func (s Store) record(ctx context.Context, w, p string, n int64, e Evidence, approval *SignOff) error {
 	var issue int64
 	if err := s.DB.QueryRowContext(ctx, `SELECT issue_number FROM pull_observations WHERE workspace_id=$1 AND project_id=$2 AND number=$3`, w, p, n).Scan(&issue); err != nil {
 		return err
@@ -169,12 +206,22 @@ func (s Store) Record(ctx context.Context, w, p string, n int64, e Evidence) err
 	if current.Version != e.Version || current.State != "OPEN" || current.IssueState != "OPEN" || current.Base == "" {
 		return ErrConflict
 	}
+	if approval != nil && !approval.ready(current) {
+		return ErrConflict
+	}
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
 	var fresh bool
+	var stopped bool
+	if err = tx.QueryRowContext(ctx, "SELECT stopped FROM workspaces WHERE id=$1 FOR SHARE", w).Scan(&stopped); err != nil {
+		return err
+	}
+	if stopped {
+		return ErrConflict
+	}
 	err = tx.QueryRowContext(ctx, `SELECT o.version=$4 AND m.active AND NOT p.paused AND p.policy_version=o.policy_version AND o.plan_version=coalesce((SELECT max(version) FROM plan_versions WHERE workspace_id=$1 AND project_id=$2 AND approved_at IS NOT NULL),0)
 	FROM pull_observations o JOIN projects p ON (p.workspace_id,p.id)=(o.workspace_id,o.project_id)
 	JOIN github_mappings m ON (m.workspace_id,m.project_id)=(p.workspace_id,p.id)
@@ -185,7 +232,9 @@ func (s Store) Record(ctx context.Context, w, p string, n int64, e Evidence) err
 	if !fresh {
 		return ErrConflict
 	}
-	res, err := tx.ExecContext(ctx, `INSERT INTO pull_evidence(workspace_id,project_id,number,version,kind,reference) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING`, w, p, n, e.Version, e.Kind, e.Reference)
+	role, actor := audit.Actor(ctx)
+	source := role + ":" + actor
+	res, err := tx.ExecContext(ctx, `INSERT INTO pull_evidence(workspace_id,project_id,number,version,kind,reference,source) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING`, w, p, n, e.Version, e.Kind, e.Reference, source)
 	if err != nil {
 		return err
 	}

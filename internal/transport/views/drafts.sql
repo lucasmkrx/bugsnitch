@@ -1,4 +1,4 @@
-SELECT json_object('projectId' VALUE project_id, 'attemptId' VALUE attempt_id, 'issueNumber' VALUE issue_number,
+SELECT json_object('projectId' VALUE project_id, 'attemptId' VALUE attempt_id, 'policyVersion' VALUE policy_version, 'reportVersion' VALUE report_version, 'approvalVersion' VALUE approval_version, 'issueNumber' VALUE issue_number,
        'number' VALUE number, 'candidateSha' VALUE candidate_sha, 'baseSha' VALUE base_sha,
        'target' VALUE target, 'status' VALUE status, 'reason' VALUE nullif(reason,''),
        'updatedAt' VALUE updated_at ABSENT ON NULL) AS document

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"sync"
@@ -153,4 +154,80 @@ func (f *CheckoutFixture) Observe(r Receipt, want string) {
 		t.Fatalf("verdict=%s want=%s err=%v", v.Status, want, err)
 	}
 	t.Logf("Incident %s: %s", inc.ID, v.Status)
+}
+
+type checkoutMonitor struct {
+	MonitorRegistration
+	candidate string
+}
+
+func (f *CheckoutFixture) Monitor(candidate string) checkoutMonitor {
+	f.t.Helper()
+	inc := one(f.t, f.s)
+	reg, err := f.s.ConfigureMonitor(f.t.Context(), "personal", "p", inc.ID, MonitorConfig{
+		Version: inc.Version, Candidate: candidate, Environment: "bugsnitch-fixture", Check: "Chromium shipping threshold",
+		Deployer: 10, Verifier: 20,
+	})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return checkoutMonitor{reg, candidate}
+}
+
+func (f *CheckoutFixture) sendRelease(event string, delivery int, payload map[string]any) {
+	f.t.Helper()
+	payload["installation"] = map[string]int{"id": 88}
+	payload["repository"] = map[string]int{"id": 99}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	resp := post(f.s.listener, "/hooks/github", b, map[string]string{
+		"X-GitHub-Delivery": fmt.Sprintf("00000000-0000-4567-89ab-%012d", delivery),
+		"X-GitHub-Event":    event, "X-Hub-Signature-256": "sha256=" + sign("github-fixture", b),
+	})
+	if resp.Code != 202 {
+		f.t.Fatalf("%s HTTP %d: %s", event, resp.Code, resp.Body.String())
+	}
+}
+
+func (f *CheckoutFixture) Deployed(m checkoutMonitor, deployment int, build string) {
+	f.t.Helper()
+	type obj = map[string]any
+	f.sendRelease("deployment_status", deployment*2, obj{"action": "created",
+		"deployment":        obj{"id": deployment, "sha": m.candidate, "creator": obj{"id": 10}, "environment": "bugsnitch-fixture", "payload": obj{"bugsnitchBuild": build}},
+		"deployment_status": obj{"id": deployment + 100, "creator": obj{"id": 10}, "state": "success", "environment": "bugsnitch-fixture", "created_at": time.Now().UTC()},
+	})
+	f.Observe(Receipt{}, "Verification inconclusive")
+	f.CheckGate(m, deployment, build, "Verification inconclusive", false)
+}
+
+func (f *CheckoutFixture) Verified(m checkoutMonitor, deployment int, build string, started time.Time) {
+	f.t.Helper()
+	type obj = map[string]any
+	correlation, err := json.Marshal(obj{"monitor": m.ID, "deployment": deployment, "status": deployment + 100, "build": build, "exposures": 1, "coverage": true})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	f.sendRelease("check_run", deployment*2+1, obj{"action": "completed", "check_run": obj{"id": deployment + 200, "app": obj{"id": 20}, "head_sha": m.candidate,
+		"name": "Chromium shipping threshold", "conclusion": "success", "started_at": started, "completed_at": time.Now().UTC(), "external_id": "bugsnitch/v1 " + string(correlation)}})
+	f.Observe(Receipt{}, "Verified in environment")
+	f.CheckGate(m, deployment, build, "Verified in environment", true)
+}
+
+func (f *CheckoutFixture) CheckGate(m checkoutMonitor, deployment int, build, reason string, allowed bool) {
+	f.t.Helper()
+	b, err := json.Marshal(map[string]any{"candidate": m.candidate, "build": build, "deployment": deployment, "status": deployment + 100})
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	resp := post(f.s.listener, "/api/v1/deployment-gates/"+m.ID, b, map[string]string{"Content-Type": "application/json", "Authorization": "Bearer " + m.Token})
+	var result GateResult
+	want := http.StatusConflict
+	if allowed {
+		want = http.StatusOK
+	}
+	if resp.Code != want || json.Unmarshal(resp.Body.Bytes(), &result) != nil || result.Allowed != allowed || result.Reason != reason {
+		f.t.Fatalf("gate HTTP %d, %s", resp.Code, resp.Body.String())
+	}
 }

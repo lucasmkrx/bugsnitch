@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lucasmkrx/bugsnitch/internal/agent"
 	"github.com/lucasmkrx/bugsnitch/internal/journalbridge"
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 )
@@ -46,12 +47,18 @@ type StageEvidence struct {
 	MinorFindings     int    `json:"minorFindings,omitempty"`
 }
 type StageSettings struct {
+	Provider       string `json:"provider,omitempty"`
 	Model          string `json:"model,omitempty"`
 	Reasoning      string `json:"reasoning,omitempty"`
 	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"`
 }
 type Config struct {
+	ReviewDepth              string                   `json:"reviewDepth,omitempty"`
+	EditDirectories          []string                 `json:"editDirectories,omitempty"`
+	ValidationSandbox        string                   `json:"validationSandbox,omitempty"`
 	Stages                   map[string]StageSettings `json:"stages,omitempty"`
+	RequirePlanReview        bool                     `json:"requirePlanReview,omitempty"`
+	AutoCorrect              bool                     `json:"autoCorrect,omitempty"`
 	ValidationTimeoutSeconds int                      `json:"validationTimeoutSeconds,omitempty"`
 	Files                    []string                 `json:"files"`
 	Validate                 []string                 `json:"validate"`
@@ -70,8 +77,14 @@ type Finding struct {
 	Rationale string `json:"rationale"`
 }
 type Artifact struct {
-	DurationMS                                                                           *int64 `json:"durationMs,omitempty"`
-	ID                                                                                   string `json:"id,omitempty"`
+	ReviewDepth                                                                          string            `json:"reviewDepth,omitempty"`
+	ReviewBase                                                                           string            `json:"reviewBase,omitempty"`
+	ValidationID                                                                         string            `json:"validationId,omitempty"`
+	SecondReviewOf                                                                       string            `json:"secondReviewOf,omitempty"`
+	ValidationSandbox                                                                    string            `json:"validationSandbox,omitempty"`
+	Usage                                                                                *agent.ModelUsage `json:"usage,omitempty"`
+	DurationMS                                                                           *int64            `json:"durationMs,omitempty"`
+	ID                                                                                   string            `json:"id,omitempty"`
 	Phase, At, BaseSHA, CandidateSHA, IssueVersion, Policy, Thread, Turn, Model, Summary string
 	ChangedFiles, Command                                                                []string  `json:",omitempty"`
 	ExitCode                                                                             *int      `json:",omitempty"`
@@ -79,10 +92,14 @@ type Artifact struct {
 }
 type CandidateIntent struct {
 	Parent   string
-	SHA256   map[string]string
+	SHA256   map[string]string // An empty digest records a deletion.
+	Modes    map[string]string `json:",omitempty"` // Git modes of new files, including rename destinations.
 	Artifact Artifact
 }
 type Attempt struct {
+	stopAtCandidate bool // invocation-only stop requested by local-continue
+
+	Steward         *StewardSubject    `json:"steward,omitempty"`
 	LocalRunScope   *protocol.RunScope `json:"localRunScope,omitempty"`
 	OwnerAnswer     string             `json:"ownerAnswer,omitempty"`
 	OwnerQuestion   string             `json:"ownerQuestion,omitempty"`
@@ -221,7 +238,7 @@ func (a *Attempt) add(artifact Artifact) {
 	artifact.BaseSHA = a.BaseSHA
 	artifact.CandidateSHA = a.CandidateSHA
 	artifact.IssueVersion = a.Issue.UpdatedAt
-	artifact.Policy = "local-reviewed-files/v1"
+	artifact.Policy = a.Project.Config.editPolicy()
 	identity, _ := json.Marshal(artifact)
 	artifact.ID = fmt.Sprintf("%x", sha256.Sum256(identity))
 	a.Artifacts = append(a.Artifacts, artifact)

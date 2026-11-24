@@ -5,6 +5,23 @@ import "time"
 
 const Version = 1
 
+const (
+	PlanReviewRequired = "plan_review_required"
+	OwnerInputRequired = "owner_input_required"
+	ReviewCorrection   = "review_correction"
+	RecoveredCandidate = "recovered_candidate"
+	OwnerPaused        = "owner_paused"
+)
+
+// WorkflowReason identifies wait states introduced with the work board.
+func WorkflowReason(code string) bool {
+	switch code {
+	case PlanReviewRequired, OwnerInputRequired, ReviewCorrection, RecoveredCandidate, OwnerPaused:
+		return true
+	}
+	return false
+}
+
 type Pair struct {
 	Protocol   int    `json:"protocol"`
 	Code       string `json:"code"`
@@ -12,16 +29,20 @@ type Pair struct {
 	Platform   string `json:"platform"`
 }
 type Project struct {
-	ID         string `json:"id"`
-	Repository string `json:"repository"`
-	Paused     bool   `json:"paused"`
+	PolicyVersion int64  `json:"policyVersion,omitempty"`
+	PlanID        string `json:"planId,omitempty"`
+	ID            string `json:"id"`
+	Repository    string `json:"repository"`
+	Paused        bool   `json:"paused"`
 }
 type Enrollment struct {
-	StageTimings bool      `json:"stageTimings,omitempty"`
-	Commands     []Control `json:"commands,omitempty"`
-	Workspace    string    `json:"workspaceId"`
-	DeviceID     string    `json:"deviceId"`
-	Projects     []Project `json:"projects"`
+	TurnMetering    bool      `json:"turnMetering,omitempty"`
+	WorkflowReasons bool      `json:"workflowReasons,omitempty"`
+	StageTimings    bool      `json:"stageTimings,omitempty"`
+	Commands        []Control `json:"commands,omitempty"`
+	Workspace       string    `json:"workspaceId"`
+	DeviceID        string    `json:"deviceId"`
+	Projects        []Project `json:"projects"`
 }
 type StageEvidence struct {
 	DurationMS        *int64 `json:"durationMs,omitempty"`
@@ -46,9 +67,10 @@ type Attempt struct {
 	Version        int             `json:"version"`
 }
 type Sync struct {
-	Acks     []Ack     `json:"acks,omitempty"`
-	Protocol int       `json:"protocol"`
-	Attempts []Attempt `json:"attempts"`
+	Metering []TurnMeter `json:"metering,omitempty"`
+	Acks     []Ack       `json:"acks,omitempty"`
+	Protocol int         `json:"protocol"`
+	Attempts []Attempt   `json:"attempts"`
 }
 
 type Admission struct {

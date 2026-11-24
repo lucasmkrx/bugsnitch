@@ -121,6 +121,7 @@ func codexProtocolFixture(args []string) int {
 			return 1
 		}
 		if req.Method == "turn/start" {
+			encoder.Encode(object{"method": "thread/tokenUsage/updated", "params": object{"threadId": tid, "turnId": turn, "tokenUsage": object{"total": object{"inputTokens": 41, "outputTokens": 6}}}})
 			encoder.Encode(object{"method": "item/completed", "params": object{"threadId": tid, "turnId": turn, "item": object{"type": "agentMessage", "text": answer, "phase": "final_answer"}}})
 			encoder.Encode(object{"method": "turn/completed", "params": object{"threadId": tid, "turn": object{"id": turn, "status": "completed"}}})
 		}

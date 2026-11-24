@@ -51,6 +51,54 @@ func fixture(t *testing.T) (string, Issue) {
 	verifyIssue = func(context.Context, Issue) error { return nil }
 	return dir, Issue{Schema: 1, Repository: "fixture/selected", Number: 7, URL: "https://github.com/fixture/selected/issues/7", Title: "Synthetic bug", State: "open", UpdatedAt: "2026-11-21T00:00:00Z", Criteria: []string{"example.txt contains fixed"}}
 }
+func TestTrustedPolicyRunsTwoIndependentDeepReviews(t *testing.T) {
+	dir, issue := fixture(t)
+	if err := os.Mkdir(filepath.Join(dir, ".bugsnitch"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	policy := `{"schema":1,"policyOwners":["lead"],"default":{"reviewDepth":"quick","checks":[{"name":"CI","appId":19}]},"rules":[{"name":"customer behavior","paths":["example.txt"],"reviewDepth":"deep","owners":[],"checks":[]}]}`
+	if err := os.WriteFile(filepath.Join(dir, ".bugsnitch", "approvals.json"), []byte(policy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git(dir, "add", "--", ".bugsnitch/approvals.json"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := git(dir, "commit", "-m", "Require deep review for customer behavior"); err != nil {
+		t.Fatal(err)
+	}
+	reviews := 0
+	modelTurn = func(_ context.Context, a *Attempt, instruction, payload string, _ any) (agent.Result, error) {
+		out := agent.Result{Thread: a.Phase, Turn: "turn", Model: "fixture", Text: "Inspect the example."}
+		switch a.Phase {
+		case "implement":
+			out.Text = `{"summary":"Correct value","edits":[{"path":"example.txt","content":"fixed\n"}]}`
+		case "review":
+			reviews++
+			out.Thread = fmt.Sprintf("independent-%d", reviews)
+			out.Text = `{"summary":"Reviewed the threshold","findings":[]}`
+			if reviews == 2 && (!strings.Contains(instruction, "boundary inputs") || strings.Contains(payload, "Reviewed the threshold")) {
+				t.Fatal("second reviewer must receive its own assignment and the original evidence")
+			}
+		}
+		return out, nil
+	}
+	a, err := Start(t.Context(), "personal", issue.Repository, issue)
+	if err == nil {
+		a, err = Continue(t.Context(), a.ID, "Apply the fix.")
+	}
+	if err != nil || a.State != "completed" || reviews != 2 {
+		t.Fatalf("state=%s reviews=%d err=%v", a.State, reviews, err)
+	}
+	depth, id, err := a.PassingReview(a.BaseSHA)
+	if err != nil || depth != "deep" || id != a.Artifacts[len(a.Artifacts)-1].ID {
+		t.Fatal(depth, id, err)
+	}
+	a.Artifacts[len(a.Artifacts)-1].SecondReviewOf = "unrelated review"
+	if _, _, err = a.PassingReview(a.BaseSHA); err == nil {
+		t.Fatal("accepted an unrelated first review")
+	}
+}
+
 func TestIssueWorkflowReplayAndIndependentReview(t *testing.T) {
 	dir, issue := fixture(t)
 	ctx := context.Background()

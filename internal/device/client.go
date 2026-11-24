@@ -288,6 +288,10 @@ func syncOnce(ctx context.Context) error {
 		}
 		for _, i := range byRepository[strings.ToLower(pr.Repository)] {
 			a := &available[i]
+			reason := a.ReasonCode
+			if !assigned.WorkflowReasons && protocol.WorkflowReason(reason) {
+				reason = ""
+			}
 			var evidence []protocol.StageEvidence
 			for _, e := range a.Evidence {
 				var duration *int64
@@ -296,7 +300,7 @@ func syncOnce(ctx context.Context) error {
 				}
 				evidence = append(evidence, protocol.StageEvidence{DurationMS: duration, Phase: e.Phase, CandidateSHA: e.CandidateSHA, ChangedFiles: e.ChangedFiles, ExitCode: e.ExitCode, ImportantFindings: e.ImportantFindings, MinorFindings: e.MinorFindings})
 			}
-			reports = append(reports, protocol.Attempt{ReasonCode: a.ReasonCode, IssueUpdatedAt: a.IssueUpdatedAt, Evidence: evidence, ID: a.ID, ProjectID: pr.ID, IssueNumber: a.IssueNumber, BaseSHA: a.BaseSHA, CandidateSHA: a.CandidateSHA, Phase: a.Phase, State: a.State, Version: a.Version})
+			reports = append(reports, protocol.Attempt{ReasonCode: reason, IssueUpdatedAt: a.IssueUpdatedAt, Evidence: evidence, ID: a.ID, ProjectID: pr.ID, IssueNumber: a.IssueNumber, BaseSHA: a.BaseSHA, CandidateSHA: a.CandidateSHA, Phase: a.Phase, State: a.State, Version: a.Version})
 		}
 	}
 	for _, c := range assigned.Commands {
@@ -324,6 +328,9 @@ func syncOnce(ctx context.Context) error {
 			return err
 		}
 		reports = reports[n:]
+	}
+	if assigned.TurnMetering {
+		completionErr = errors.Join(completionErr, flushMetering(ctx, p, assigned))
 	}
 	return completionErr
 }

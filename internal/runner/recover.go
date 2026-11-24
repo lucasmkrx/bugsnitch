@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
+
+	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 )
 
 func attemptLock(id string) (func(), error) {
@@ -63,36 +64,19 @@ func RecoverCommit(id string) (Attempt, error) {
 	if err != nil || parents != head+" "+a.Intent.Parent {
 		return a, errors.New("candidate parent differs from the pre-commit record")
 	}
-	changed, err := changedPaths(a.Worktree, a.Intent.Parent, head)
-	if err != nil {
+	if err := a.resolvedStewardConflicts(head); err != nil {
 		return a, err
 	}
-	if len(changed) != len(a.Intent.SHA256) {
-		return a, errors.New("candidate file set differs from the pre-commit record")
+	if err := a.verifyIntent(head); err != nil {
+		return a, err
+	}
+	changed, err := changedPaths(a.Worktree, a.changeBase(), head)
+	if err != nil || len(changed) == 0 {
+		return a, errors.New("recovered candidate has no verifiable changes from base")
 	}
 	for _, p := range changed {
-		if !slices.Contains(a.Project.Config.Files, p) {
-			return a, errors.New("candidate changed an unapproved file")
-		}
-		data, err := readFile(a.Worktree, p)
-		if err != nil {
-			return a, err
-		}
-		if fmt.Sprintf("%x", sha256.Sum256([]byte(data))) != a.Intent.SHA256[p] {
-			return a, errors.New("candidate content differs from the pre-commit record")
-		}
-		// The bounded worker preserves the base file mode. Reject unrelated metadata changes.
-		baseEntry, err := git(a.Worktree, "ls-tree", a.Intent.Parent, "--", p)
-		if err != nil {
-			return a, err
-		}
-		candidateEntry, err := git(a.Worktree, "ls-tree", head, "--", p)
-		if err != nil {
-			return a, err
-		}
-		baseFields, candidateFields := strings.Fields(baseEntry), strings.Fields(candidateEntry)
-		if len(baseFields) == 0 || len(candidateFields) == 0 || baseFields[0] != candidateFields[0] {
-			return a, errors.New("candidate file mode differs from base")
+		if !a.Project.Config.allowsFile(p) {
+			return a, errors.New("recovered candidate includes unapproved path")
 		}
 	}
 	a.CandidateSHA = head
@@ -102,6 +86,7 @@ func RecoverCommit(id string) (Attempt, error) {
 	a.Intent = nil
 	a.Phase = "validate"
 	a.State = "waiting"
+	a.ReasonCode = protocol.RecoveredCandidate
 	a.Message = "Recovered the recorded candidate commit. Continue locally to validate it."
 	if _, err = settle(&a); err != nil {
 		return a, err
@@ -111,6 +96,55 @@ func RecoverCommit(id string) (Attempt, error) {
 	}
 	return a, nil
 }
+
+// Check the exact changed set and file modes as well as the content digest.
+func (a *Attempt) verifyIntent(head string) error {
+	changed, err := changedPaths(a.Worktree, a.Intent.Parent, head)
+	if err != nil {
+		return err
+	}
+	if len(changed) != len(a.Intent.SHA256) {
+		return errors.New("candidate file set differs from the pre-commit record")
+	}
+	for _, path := range changed {
+		digest, expected := a.Intent.SHA256[path]
+		if !expected || !a.Project.Config.allowsFile(path) {
+			return errors.New("candidate changed an unapproved file")
+		}
+		base, err := git(a.Worktree, "ls-tree", a.Intent.Parent, "--", path)
+		if err != nil {
+			return err
+		}
+		entry, err := git(a.Worktree, "ls-tree", head, "--", path)
+		if err != nil {
+			return err
+		}
+		baseMode, _, _ := strings.Cut(base, " ")
+		mode, _, _ := strings.Cut(entry, " ")
+		if digest == "" {
+			if entry != "" || (baseMode != "100644" && baseMode != "100755") || !a.Project.Config.inDirectory(path) {
+				return errors.New("candidate deletion differs from the pre-commit record")
+			}
+			continue
+		}
+		if base == "" {
+			if !a.Project.Config.inDirectory(path) || a.Intent.Modes[path] != mode {
+				return errors.New("candidate added an unexpected file or mode")
+			}
+		} else if baseMode != mode {
+			return errors.New("candidate file mode differs from base")
+		}
+		data, err := readFile(a.Worktree, path)
+		if err != nil {
+			return err
+		}
+		if (mode != "100644" && mode != "100755") || fmt.Sprintf("%x", sha256.Sum256([]byte(data))) != digest {
+			return errors.New("candidate content differs from the pre-commit record")
+		}
+	}
+	return nil
+}
+
 func Cleanup(id string) error {
 	unlock, err := attemptLock(id)
 	if err != nil {

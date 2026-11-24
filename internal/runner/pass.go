@@ -15,7 +15,7 @@ func StartPass(ctx context.Context, w string, i Issue, scope protocol.RunScope, 
 	if admitted == nil || BeforeStart == nil || CheckWorker == nil || BeforeTurn == nil || AfterTurn == nil || AfterFinish == nil || scope.Device == "" || scope.Project == "" || scope.Plan == "" || scope.Policy < 1 || i.GitHubID < 1 {
 		return Attempt{}, errors.New("a local run requires an enrolled device, current approved scope and verified issue")
 	}
-	return create(ctx, w, i.Repository, i, "", "", &scope, admitted)
+	return create(ctx, w, i.Repository, i, "", "", &scope, admitted, nil)
 }
 
 var passPlanSchema = obj(map[string]any{"summary": str, "disposition": map[string]any{"type": "string", "enum": []string{"ready", "needs_owner"}}, "question": str})
@@ -27,7 +27,7 @@ func workerPlan(ctx context.Context, a *Attempt, files map[string]string, ordina
 		prompt += " Return disposition ready with an empty question only for ordinary work within the approved issue. If scope, acceptance, architecture or a material choice needs the owner's judgment, return needs_owner with the smallest concrete question."
 		schema = passPlanSchema
 	}
-	r, err := turn(ctx, a, prompt, map[string]any{"issue": a.Issue, "files": files}, schema)
+	r, err := turn(ctx, a, prompt, map[string]any{"issue": a.Issue, "files": files, "editDirectories": a.Project.Config.EditDirectories, "pullFeedback": a.Steward}, schema)
 	if err != nil {
 		return err
 	}
@@ -46,12 +46,14 @@ func workerPlan(ctx context.Context, a *Attempt, files map[string]string, ordina
 	}
 	a.add(recordTurn(a, r, summary))
 	a.Phase = "implement"
-	if ordinary && a.OwnerQuestion == "" {
+	if ordinary && !a.Project.Config.RequirePlanReview && a.OwnerQuestion == "" {
 		return a.save()
 	}
 	a.State = "waiting"
+	a.ReasonCode = protocol.PlanReviewRequired
 	a.Message = "Review the plan and continue locally with any feedback."
 	if a.OwnerQuestion != "" {
+		a.ReasonCode = protocol.OwnerInputRequired
 		a.Message = "Answer the recorded owner question with local-continue --feedback."
 	}
 	return nil

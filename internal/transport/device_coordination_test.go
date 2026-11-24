@@ -59,6 +59,35 @@ func TestDevicePairingHasOneRecipientUnderContention(t *testing.T) {
 	}
 }
 
+func TestWorkflowReasonUpgradeAndLegacyReplay(t *testing.T) {
+	s := fixture(t)
+	owner := login(t, s)
+	token, _, report := runningDevice(t, owner)
+	report.State = "waiting"
+	report.Phase = "implement"
+	report.Version++
+	sync := func(want int) {
+		t.Helper()
+		status, result := owner.req(t, "POST", "/api/v1/device/sync", protocol.Sync{
+			Protocol: 1, Attempts: []protocol.Attempt{report},
+		}, token)
+		if status != want || (want == 200 && result["workflowReasons"] != true) {
+			t.Fatalf("sync: %d %v", status, result)
+		}
+	}
+	sync(200)
+	report.ReasonCode = protocol.PlanReviewRequired
+	sync(200)
+	report.ReasonCode = ""
+	sync(200)
+	report.ReasonCode = protocol.OwnerInputRequired
+	sync(409)
+	var reason string
+	if err := s.DB.QueryRow("SELECT reason_code FROM attempt_reports WHERE id=$1", report.ID).Scan(&reason); err != nil || reason != protocol.PlanReviewRequired {
+		t.Fatalf("stored reason = %q, %v", reason, err)
+	}
+}
+
 // Force a reconnect and emergency stop to reach the same pending pause.
 // The emergency owns that row first. The reconnect cannot hold the event
 // cursor lock while waiting to acknowledge the superseded pause.

@@ -28,5 +28,6 @@ export BUGSNITCH_OWNER_TOKEN BUGSNITCH_MCP_TOKEN
 npm --prefix web ci
 npm --prefix web run build
 make server
-echo "Open ${BUGSNITCH_ORIGIN:-http://localhost:8787} and use the credential in .local/dev/owner-token."
+echo "Homepage at ${BUGSNITCH_ORIGIN:-http://localhost:8787}/"
+echo "Open ${BUGSNITCH_ORIGIN:-http://localhost:8787}/app/ and use the credential in .local/dev/owner-token."
 exec bin/bugsnitch-server

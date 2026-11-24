@@ -24,7 +24,7 @@ async fn command(
     let input = json!({"workspace":o.workspace,"id":p.get("id").map(String::as_str).unwrap_or(""),
         "project":p.get("project").map(String::as_str).unwrap_or(""),"number":p.get("number").map(String::as_str).unwrap_or(""),
         "environment":env.unwrap_or_default(),"body":body});
-    let mut result = s.domain(op, ["owner".into(), o.account], input).await?;
+    let mut result = s.domain(op, o.actor(), input).await?;
     let status = result["status"]
         .as_u64()
         .and_then(|n| u16::try_from(n).ok())
@@ -72,11 +72,39 @@ pub(super) fn routes() -> Router<Shared> {
             },
         ),
     );
+    r = r.route(
+        "/api/v1/projects/{project}/review-subjects",
+        get(|State(s), Extension(o), Path(p)| {
+            command(s, o, "policy_cases.subjects", p, None, Value::Null)
+        }),
+    );
+    r = r.route(
+        "/api/v1/projects/{project}/policy-cases",
+        get(|State(s), Extension(o), Path(p)| {
+            command(s, o, "policy_cases.export", p, None, Value::Null)
+        }),
+    );
     for (path, op) in [
+        (
+            "/api/v1/projects/{project}/pulls/{number}/policy-case",
+            "policy_cases.label",
+        ),
         ("/api/v1/projects", "project.create"),
+        ("/api/v1/releases", "release.create"),
+        ("/api/v1/releases/{id}/cancel", "release.cancel"),
+        ("/api/v1/members/{id}/chat", "member.chat"),
+        (
+            "/api/v1/projects/{project}/github",
+            "project.connect_github",
+        ),
         ("/api/v1/projects/{id}/policy", "project.policy"),
+        (
+            "/api/v1/projects/{project}/issues/{number}/linear",
+            "linear.link",
+        ),
         ("/api/v1/projects/{id}/retention", "project.retention"),
         ("/api/v1/limits", "workspace.limits"),
+        ("/api/v1/budget", "workspace.budget"),
         ("/api/v1/devices/{id}/limits", "device.limits"),
         ("/api/v1/projects/{id}/dispatch", "project.dispatch"),
         ("/api/v1/decisions/{id}/answer", "decision.answer"),
@@ -95,9 +123,45 @@ pub(super) fn routes() -> Router<Shared> {
             "pull.evidence",
         ),
         (
+            "/api/v1/projects/{project}/pulls/{number}/handover",
+            "pull.handover",
+        ),
+        (
+            "/api/v1/projects/{project}/pulls/{number}/watch",
+            "pull.watch",
+        ),
+        (
+            "/api/v1/projects/{project}/pulls/{number}/queue",
+            "pull.queue",
+        ),
+        (
+            "/api/v1/projects/{project}/pulls/{number}/approve",
+            "pull.approve",
+        ),
+        (
             "/api/v1/projects/{project}/attempts/{id}/draft-pr",
             "pull.draft",
         ),
+        (
+            "/api/v1/projects/{project}/incidents/{id}/deployment-monitor",
+            "deployment.configure",
+        ),
+        (
+            "/api/v1/projects/{project}/incidents/{id}/deployment-holds/clear",
+            "deployment.clear",
+        ),
+        (
+            "/api/v1/projects/{project}/incidents/{id}/deployment-monitor/disable",
+            "deployment.disable",
+        ),
+        ("/api/v1/usage", "usage.report"),
+        ("/api/v1/usage/prices", "usage.price"),
+        ("/api/v1/usage/threshold", "usage.threshold"),
+        (
+            "/api/v1/projects/{project}/usage/threshold",
+            "usage.threshold",
+        ),
+        ("/api/v1/projects/{project}/usage", "usage.report"),
         ("/api/v1/incidents", "incident.report"),
         (
             "/api/v1/projects/{project}/incidents/{id}/promote",

@@ -35,7 +35,7 @@ func failureCode(err error) string {
 		return "allowance_exhausted"
 	case errors.Is(err, agent.RateLimit):
 		return "provider_rate_limited"
-	case errors.Is(err, agent.Provider):
+	case errors.Is(err, agent.Provider), errors.Is(err, agent.ClaudeKeyRequired):
 		return "provider_unavailable"
 	case errors.Is(err, errModelCapacity), errors.Is(err, ErrHostedTurnCapacity):
 		return "local_capacity"

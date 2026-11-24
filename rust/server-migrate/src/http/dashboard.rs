@@ -122,7 +122,12 @@ impl Dashboard {
             if path.rsplit('/').next().unwrap_or("").contains('.') {
                 None
             } else {
-                self.0.get("/index.html")
+                let homepage = self.0.get("/index.html");
+                if path == "/" {
+                    homepage
+                } else {
+                    self.0.get("/app/index.html").or(homepage)
+                }
             }
         });
         match asset {
@@ -305,6 +310,31 @@ mod tests {
     }
 
     const ASSET: &str = "/asset%20with%20space.js";
+
+    #[tokio::test]
+    async fn serves_public_home_and_workspace_from_the_same_bundle() {
+        let (root, legacy) = fixture();
+        assert_eq!(
+            body(request(&legacy, Method::GET, "/app/", &[])).await,
+            "dashboard"
+        );
+        fs::write(root.path().join("index.html"), "homepage").unwrap();
+        fs::create_dir(root.path().join("app")).unwrap();
+        fs::write(root.path().join("app/index.html"), "dashboard").unwrap();
+        let bundle = Dashboard::load(root.path());
+        for (path, expected) in [
+            ("/", "homepage"),
+            ("/app", "dashboard"),
+            ("/app/", "dashboard"),
+        ] {
+            let response = request(&bundle, Method::GET, path, &[]);
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(body(response).await, expected);
+        }
+        let alias = request(&bundle, Method::GET, "/app/index.html?keep=1", &[]);
+        assert_eq!(alias.status(), StatusCode::MOVED_PERMANENTLY);
+        assert_eq!(alias.headers()[header::LOCATION], "./?keep=1");
+    }
 
     #[tokio::test]
     async fn serves_byte_ranges_and_conditional_requests() {

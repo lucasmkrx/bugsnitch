@@ -17,6 +17,7 @@ import (
 var errValidationUnconfirmed = errors.New("validator termination unconfirmed; inspect the retained worktree and local processes before recovery")
 
 type validationLaunch struct {
+	Sandbox        string               `json:"sandbox,omitempty"`
 	Version        int                  `json:"version"`
 	Worktree       string               `json:"worktree"`
 	Project        string               `json:"project"`
@@ -47,7 +48,7 @@ func validateCombined(ctx context.Context, a *Attempt, check *IntegrationCheck) 
 	if err != nil {
 		return nil, err
 	}
-	params := validationLaunch{Version: 1, Worktree: a.Worktree, Project: attempt.Project,
+	params := validationLaunch{Version: 1, Sandbox: a.Project.Config.ValidationSandbox, Worktree: a.Worktree, Project: attempt.Project,
 		Argv: a.Project.Config.Validate, TimeoutSeconds: secs, Home: attempt.Home, Repository: attempt.Repository}
 	if check == nil {
 		params.Attempt, params.CandidateSHA = &attempt, a.CandidateSHA

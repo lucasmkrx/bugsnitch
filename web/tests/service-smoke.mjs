@@ -18,7 +18,7 @@ try {
     const page = await browser.newPage({ viewport });
     const errors = [];
     page.on("pageerror", (error) => errors.push(error.message));
-    await page.goto(origin);
+    await page.goto(origin + "/app/");
     await page.getByLabel("Owner token").fill(token);
     await page
       .locator('form button[type="submit"],form button.primary')

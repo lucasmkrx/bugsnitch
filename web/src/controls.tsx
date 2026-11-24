@@ -212,28 +212,37 @@ export function DraftPR({
   project,
   state,
   locked,
+  canInspect = !locked,
   run,
 }: {
   attempt: Attempt;
   project?: Project;
   state: State;
   locked: boolean;
+  canInspect?: boolean;
   run: Run;
 }) {
   const [draft, setDraft] = useState<{
     target: string;
     summary: string;
     behavior: string;
+    delivery: string;
+    candidateSha: string;
+    approvalVersion: number;
     version: number;
     policyVersion: number;
   } | null>(null);
   const current = (state.draftPRs || []).find(
-    (d) =>
-      d.attemptId === attempt.id && d.candidateSha === attempt.candidateSha,
+    (d) => d.attemptId === attempt.id,
   );
   const previous = (state.draftPRs || []).filter(
     (d) => d.attemptId === attempt.id && d !== current,
   );
+  const pull =
+    current?.number &&
+    state.pullRequests.find(
+      (p) => p.projectId === attempt.projectId && p.number === current.number,
+    );
   function prepare(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (!project) return;
@@ -242,6 +251,12 @@ export function DraftPR({
       target: String(f.get("target")).trim(),
       summary: String(f.get("summary")).trim(),
       behavior: String(f.get("behavior")).trim(),
+      delivery:
+        current?.status === "withdrawn" || f.get("localShip") === "on"
+          ? "local_ship"
+          : "",
+      approvalVersion: current?.approvalVersion ?? 0,
+      candidateSha: attempt.candidateSha || "",
       version: attempt.version,
       policyVersion: project.policyVersion,
     });
@@ -249,31 +264,114 @@ export function DraftPR({
   return (
     <Panel title="Draft pull request">
       <div className="panel-body">
-        {current ? (
+        {current && current.status !== "withdrawn" ? (
           <>
             <Badge>{human(current.status)}</Badge>
             <p>{current.reason || "Target branch · " + current.target}</p>
+            {current.status === "awaiting_publication" && project && (
+              <>
+                {current.reportVersion === attempt.version &&
+                current.candidateSha === attempt.candidateSha ? (
+                  <>
+                    <p>Run this on the original paired computer.</p>
+                    <code>
+                      bugsnitch local-ship --id {attempt.id} --version{" "}
+                      {current.reportVersion} --candidate {current.candidateSha}{" "}
+                      --target {current.target}
+                    </code>
+                  </>
+                ) : (
+                  <p>
+                    The attempt version changed. Withdraw this approval before
+                    reviewing the current attempt.
+                  </p>
+                )}
+                <button
+                  disabled={locked}
+                  onClick={() =>
+                    void run(
+                      () =>
+                        post(
+                          "projects/" +
+                            enc(project.id) +
+                            "/attempts/" +
+                            enc(attempt.id) +
+                            "/draft-pr",
+                          {
+                            delivery: "withdraw",
+                            approvalVersion: current.approvalVersion,
+                            candidateSha: current.candidateSha,
+                            target: current.target,
+                            version: current.reportVersion ?? attempt.version,
+                            policyVersion: current.policyVersion,
+                          },
+                        ),
+                      "Local publication approval withdrawn.",
+                    )
+                  }
+                >
+                  Withdraw publication approval
+                </button>
+              </>
+            )}
             {current.number && project && (
-              <a
-                href={
-                  "https://github.com/" +
-                  project.repository +
-                  "/pull/" +
-                  current.number
-                }
-              >
-                Open pull request #{current.number}
-              </a>
+              <div className="actions">
+                <a
+                  href={
+                    "https://github.com/" +
+                    project.repository +
+                    "/pull/" +
+                    current.number
+                  }
+                >
+                  Open pull request #{current.number}
+                </a>
+                <button
+                  disabled={!canInspect}
+                  onClick={() =>
+                    void run(
+                      () =>
+                        post(
+                          "projects/" +
+                            enc(project.id) +
+                            "/pulls/" +
+                            current.number +
+                            "/refresh",
+                          {
+                            issueNumber: attempt.issueNumber,
+                            version: pull ? pull.version : 0,
+                          },
+                        ),
+                      "Pull request inspection refreshed.",
+                    )
+                  }
+                >
+                  {pull
+                    ? "Refresh pull request inspection"
+                    : "Inspect pull request"}
+                </button>
+              </div>
             )}
           </>
         ) : attempt.state === "completed" && project?.allowDraftPR ? (
           <form onSubmit={prepare}>
+            {current?.status === "withdrawn" && (
+              <p>
+                Publication approval was withdrawn. Review the current candidate
+                and target to authorize a new draft.
+              </p>
+            )}
             <p>
-              Push the reviewed candidate to <code>bugsnitch/{attempt.id}</code>{" "}
-              in {project.repository} before requesting a draft.
+              The source branch is <code>bugsnitch/{attempt.id}</code> in{" "}
+              {project.repository}.
             </p>
             <Field title="Target branch">
-              <input name="target" required placeholder="main" />
+              <input
+                name="target"
+                required
+                placeholder="main"
+                defaultValue={current?.target}
+              />
             </Field>
             <Field title="Change summary">
               <textarea name="summary" maxLength={1500} />
@@ -281,6 +379,12 @@ export function DraftPR({
             <Field title="Resulting behavior">
               <textarea name="behavior" maxLength={1500} />
             </Field>
+            {current?.status !== "withdrawn" && (
+              <label>
+                <input name="localShip" type="checkbox" /> Publish the branch
+                with local-ship on the paired computer
+              </label>
+            )}
             <button disabled={locked}>Review draft request</button>
           </form>
         ) : (
@@ -302,6 +406,12 @@ export function DraftPR({
             Create a draft pull request from the reviewed candidate into{" "}
             <strong>{draft.target}</strong> in {project.repository}.
           </p>
+          {draft.delivery === "local_ship" && (
+            <p>
+              The paired computer must confirm publication before Bugsnitch
+              opens the draft.
+            </p>
+          )}
           <p>
             Candidate <code>{attempt.candidateSha}</code>
           </p>
@@ -311,6 +421,7 @@ export function DraftPR({
               className="primary"
               disabled={
                 locked ||
+                (current?.approvalVersion ?? 0) !== draft.approvalVersion ||
                 project.policyVersion !== draft.policyVersion ||
                 attempt.version !== draft.version
               }

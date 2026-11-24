@@ -2,6 +2,18 @@
 
 The rebuild started on `rebuild/bugsnitch-v2` from clean main at `833637906ffc7d7de633b0de64e58c0636cd3bfd` in lucasmkrx/bugsnitch. The previous application was a TypeScript VS Code extension. Its history, MPL-2.0 license, trademarks and brand assets are preserved. [Implementation PR](https://github.com/lucasmkrx/bugsnitch/pull/24)
 
+## Factory acceptance · November 24, 2026
+
+| Exercise | Observed result |
+| --- | --- |
+| Checkout repair | Chromium reproduced the shipping error. The local runner made a candidate with scripted model responses. The validator passed, an independent review completed, and the staging fixture accepted signed deployment and behavior events for the served asset digest. Redeployment required a fresh browser check. A simulated recurrence on that digest held promotion. |
+| Pull-request delivery | A disposable bare Git remote exercised initial publication, exact-head repair and undo receipts. Draft delivery recovered from a lost create response. A withdrawn approval could be renewed for a newer report, and delayed requests from the original approval were rejected. A loopback GitHub App exercised queue admission, retargeting, revocation, and refused merge groups. A two-thread deep review produced separate artifacts bound to the same validation and candidate. |
+| Team controls | Packaged HTTP and PostgreSQL tests exercised project-scoped credentials, signed chat decisions, release ordering, monthly turn admission and estimated spend thresholds. A paired worker, planner and manager reported five provider-fixture turns through the normal device sync. Historical policy export preserved the pre-merge base and upgraded a clean label after an attributed recurrence. |
+| Bugsnitch and Zero | With the same validator permission and scripted workers, both delivered feature and incident commits that passed held-out checks. Bugsnitch also passed the interrupted validation trial at the original SHA. The Zero driver lacks an equivalent tested checkpoint. |
+| Installation and recovery | Two independent runner processes paired and synchronized. The packaged server survived restart and database restoration with session records intact. Chrome exercised the desktop and mobile workspace flows. |
+
+Live GitHub rules, a real staging deployment, paid-model quality and comparative performance require trials with the intended provider configuration. [Queue enrollment](INTEGRATION_QUEUE.md) · [Provider setup](PROVIDERS.md) · [Factory evaluation and results](FACTORY_EVAL.md)
+
 ## Standalone single-owner acceptance · November 23, 2026
 
 `make checkout-acceptance` starts its own PostgreSQL instance, runs the packaged service and local runner, and serves the bundled checkout on loopback. In the standalone run, Chromium reproduced the $5 charge at the free-shipping threshold. Two distinct SDK events and a replay produced one incident and one fixture issue. The runner used scripted model responses, applied the repair in a temporary Git worktree and ran the unchanged Node validator. Chromium confirmed free shipping on the served candidate. Redeploying identical bytes returned the incident to **Verification inconclusive** until a second browser check passed. An injected recurrence on the current build returned the incident to **Needs triage**. The previous live-model exercise is recorded below. [Reproduce the exercise](../examples/checkout/README.md)

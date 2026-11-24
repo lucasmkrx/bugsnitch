@@ -12,12 +12,14 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"github.com/lucasmkrx/bugsnitch/internal/incidents"
+	"github.com/lucasmkrx/bugsnitch/internal/linear"
 	"github.com/lucasmkrx/bugsnitch/internal/storage"
 	"github.com/lucasmkrx/bugsnitch/internal/transport"
 )
@@ -56,7 +58,13 @@ func run() error {
 		}
 	}
 	store := incidents.Store{DB: db}
-	service := transport.Server{GitHubApp: app, DB: db, Incidents: store, Origin: os.Getenv("BUGSNITCH_ORIGIN")}
+	service := transport.Server{GitHubApp: app, DB: db, Incidents: store, Origin: os.Getenv("BUGSNITCH_ORIGIN"), Linear: linear.New(os.Getenv("BUGSNITCH_LINEAR_API_KEY"))}
+	if raw := os.Getenv("BUGSNITCH_GITHUB_INSTALLATION_ID"); raw != "" {
+		service.GitHubInstallation, err = strconv.ParseInt(raw, 10, 64)
+		if err != nil || service.GitHubInstallation <= 0 {
+			return errors.New("set a positive BUGSNITCH_GITHUB_INSTALLATION_ID")
+		}
+	}
 	listener, err := net.Listen("unix", os.Args[1])
 	if err != nil {
 		return errors.New("private domain socket unavailable")
@@ -67,6 +75,10 @@ func run() error {
 	}
 	var work sync.WaitGroup
 	defer func() { stop(); work.Wait() }()
+	if token := os.Getenv("BUGSNITCH_LINEAR_AGENT_TOKEN"); token != "" {
+		service.LinearAgent = linear.New("Bearer " + token)
+		work.Go(func() { service.ProcessLinearSessions(ctx) })
+	}
 	work.Go(func() { storage.Maintain(ctx, db) })
 	work.Go(func() { runBackground(ctx, db, dsn, app) })
 	go func() { <-ctx.Done(); _ = listener.Close() }()

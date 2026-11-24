@@ -6,7 +6,7 @@ Register an App and install it on a deliberately selected test repository with i
 
 The service signs RS256 JWTs, requests one installation token for precisely the configured repository ID, and checks that ID against its current full name before issuing a write. Installation tokens live in process memory. REST requests pin version `2026-03-10`. The receiver validates the HMAC-SHA256 signature on the original bytes and records the delivery ID in PostgreSQL. Issue webhooks schedule a fresh read. Polling also refreshes linked issues every 15 minutes when the provider is healthy. Installation suspension, deletion, and repository removal disable the affected mappings. An owner must review access before re-enabling them. [JWT claims](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app) · [Signature validation](https://docs.github.com/en/webhooks/using-webhooks/validating-webhook-deliveries) · [Issue API](https://docs.github.com/en/rest/issues/issues)
 
-After registering a project in the dashboard, bind it to its provider identities using an operator PostgreSQL session. Replace all example values, check the query's row count, and keep these tables inaccessible to runners.
+For dashboard setup, set `BUGSNITCH_GITHUB_INSTALLATION_ID` to the installation trusted by this workspace. In Settings, choose **Connect repository** for the project. Bugsnitch requests a metadata-only token for the selected repository name, verifies its full name and numeric identity with GitHub and records the mapping. A disabled mapping requires explicit reconnection. For operator-managed installations, bind provider identities using a PostgreSQL session. Replace all example values, check the query's row count, and keep these tables inaccessible to runners.
 
 ```sql
 INSERT INTO github_mappings(workspace_id, project_id, installation_id, repository_id)
@@ -48,7 +48,46 @@ The authenticated owner may attest check results and deployments using `POST /ap
 
 Each validation is bound to the deployment in effect at the observation time. Supply that deployment’s `commandId` as `deploymentId`. An older client can omit the ID when the artifact identifies a single deployment in that environment. Redeploying the same artifact requires both a fresh validation and its explicit deployment ID. The verdict returns the bound ID with the validation. After upgrading, older validations with an ambiguous deployment history also require a fresh observation.
 
-Read `GET /api/v1/projects/{project}/incidents/{id}/verification?environment=production` for the verdict and its supporting receipts. A verified verdict requires a validated fix, a current deployment of that exact revision, and a successful observation of the affected behavior on that build. Monitoring policies additionally require an attestation of functioning application instrumentation, enough observed exposures, and an observation covering the end of the configured window. A newer rollback changes the current verdict. A recurrence on an older identified build is distinct from contradictory evidence on the fixed build. Missing release or environment can make verification inconclusive. This version accepts owner attestations. CI-provider receipt adapters, source-map lookups, and ancestry proofs for descendant builds still need implementation.
+Read `GET /api/v1/projects/{project}/incidents/{id}/verification?environment=production` for the verdict and its supporting receipts. A verified verdict requires a validated fix, a current deployment of that exact revision, and a successful observation of the affected behavior on that build. Monitoring policies additionally require an attestation of functioning application instrumentation, enough observed exposures, and an observation covering the end of the configured window. A newer rollback changes the current verdict. A recurrence on an older identified build is distinct from contradictory evidence on the fixed build. Missing release or environment can make verification inconclusive. The owner can attest receipts directly or connect the GitHub deployment monitor below for deployment and behavior evidence. Source-map lookups and ancestry proofs for descendant builds still need implementation.
+
+## GitHub deployment monitor
+
+In an incident’s **Environment verification** panel, select the canary environment and check its verdict. After recording a validated fix or inspecting a merged PR for the incident’s linked GitHub issue, open **Connect a GitHub deployment monitor**. Supply the numeric GitHub user ID of the trusted deployment publisher, the dedicated behavior verifier’s GitHub App ID, and its check name for the original defect. Set the minimum observation window and number of measured exposures. Save the one-time read-only gate credential in the promotion job. You can disable the monitor there and revoke its credential. The equivalent owner API is `POST /api/v1/projects/{project}/incidents/{id}/deployment-monitor` with `environment`, `candidate`, `version`, `check`, `deployerId`, `verifierAppId`, `windowSeconds` and `minimumExposures`.
+
+For a merged PR, select its inspected revision in **Fix revision** and supply the trusted GitHub App ID and check name for the original regression test on the integrated code. The API takes additional `pullNumber`, `pullVersion`, `fixCheck` and `fixVerifierAppId` fields. Set `candidate` to the inspected **merge SHA**. Bugsnitch checks the PR’s canonical issue, repository, inspection version and merge commit at registration. It holds promotion pending a fresh independent check on that commit. A change to the issue requirements invalidates this registration. The following is an example for the trusted integrated-regression job, with an exact checkout and a separately maintained test harness matching the owner-selected defect. The publisher uses a Checks-write installation token for the selected verifier App.
+
+```sh
+test "$(git rev-parse HEAD)" = "$MERGE_SHA" &&
+  "$TRUSTED_CHECKS/checkout-shipping-regression" "$PWD" &&
+  jq -n --arg name "$FIX_CHECK_NAME" --arg sha "$MERGE_SHA" --arg id "bugsnitch/fix/v1 $MONITOR" \
+    '{name:$name,head_sha:$sha,status:"completed",conclusion:"success",external_id:$id}' \
+    > "$RUNNER_TEMP/bugsnitch-integrated-fix.json" &&
+  gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" --input "$RUNNER_TEMP/bugsnitch-integrated-fix.json"
+```
+
+1. Subscribe the mapped Bugsnitch GitHub App to **Deployment status** and **Check run** with repository Deployments and Checks read permissions. The receiver authenticates GitHub's signature and installation and repository IDs. The separate verifier App needs Checks write access. Keep its token in a trusted job controlled outside the candidate change. Give the deployment publisher exclusive control of the monitored environment. [GitHub webhooks](https://docs.github.com/en/webhooks/webhook-events-and-payloads#deployment_status) · [Check runs](https://docs.github.com/en/rest/checks/runs#create-a-check-run)
+2. Have the publisher create a new GitHub deployment **for every activation**, including redeployments and rollbacks, with the exact commit as `ref`, `auto_merge: false`, the monitored `environment` and `payload: {"bugsnitchBuild":"<artifact SHA-256>"}`. Deploy those bytes and mark the deployment successful using the same publisher identity. Retain both GitHub IDs, the deployment and the successful status. Configure the application’s Sentry release as the artifact digest. Set its served manifest to `{"build":"<artifact SHA-256>","candidate":"<full commit>","deployment":123}`. The trusted probe and this uncached manifest must target the same canary instance or revision-specific endpoint. [GitHub deployments](https://docs.github.com/en/rest/deployments/deployments#create-a-deployment)
+3. Run the trusted regression check in the canary environment. The supplied adapter checks the manifest before and after the observation and emits a check-run document. The probe command returns 0 for a passed behavior check, 1 for an observed failure, or another exit status for an unavailable probe. It outputs a small JSON object, for example `{"coverage":true,"exposures":42}` when healthy instrumentation counted 42 actual exposures, or `{}` for behavior-only checks. The publisher authenticates to GitHub as the registered verifier App. The following two commands run sequentially after setting the named workflow variables.
+
+```sh
+python3 scripts/github-deployment-probe.py --monitor "$MONITOR" --name "$CHECK_NAME" \
+  --manifest "$CANARY_MANIFEST" --candidate "$COMMIT" --build "$ARTIFACT_SHA256" \
+  --deployment "$DEPLOYMENT_ID" --status "$DEPLOYMENT_STATUS_ID" -- ./check-shipping \
+  > "$RUNNER_TEMP/bugsnitch-check.json" &&
+gh api --method POST "repos/$GITHUB_REPOSITORY/check-runs" --input "$RUNNER_TEMP/bugsnitch-check.json"
+```
+
+4. Immediately before advancing the rollout, submit the actual current deployment to the gate. Continue on HTTP 200 with `allowed: true`. HTTP 409 includes a reason such as insufficient exposure, a mismatched deployment, or a held environment. A transport failure leaves the decision pending. The CI/CD system executes the rollout. The workspace emergency stop and a later inactive or unsuccessful GitHub status for the same deployment also close the gate. A revised or inconclusive terminal check requires a new successful run. A confirmed behavior failure on the active deployment adds a hold that an owner must acknowledge.
+
+```sh
+jq -n --arg candidate "$COMMIT" --arg build "$ARTIFACT_SHA256" \
+  --argjson deployment "$DEPLOYMENT_ID" --argjson status "$DEPLOYMENT_STATUS_ID" \
+  '{candidate:$candidate,build:$build,deployment:$deployment,status:$status}' |
+  curl --fail-with-body --silent --show-error --json @- \
+    -H "Authorization: Bearer $BUGSNITCH_GATE_TOKEN" "$BUGSNITCH_ORIGIN/api/v1/deployment-gates/$MONITOR"
+```
+
+Each monitor covers its configured incident, fix revision and environment. The gate requires provider-authenticated deployment and validation, functioning instrumentation when requested, adequate exposure, and a matching deployment identity. A confirmed Sentry recurrence on the active build or a failed behavior check places a durable hold on promotion gates for the project and environment. A later redeployment still needs its own passing check. The incident panel lists holds and lets the owner acknowledge an individual hold after review. Removing a hold still requires fresh matching evidence before the gate passes. The gate evaluates recorded observations at request time. The deployment job must read the actual serving identity and serialize competing promotions. The GitHub and Sentry webhook delivery exercises use signed local fixtures.
 
 ## Test boundary
 

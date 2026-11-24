@@ -83,6 +83,9 @@ func TestPairedWorkerAndDashboardEvidence(t *testing.T) {
 		t.Fatal(err)
 	}
 	testcodex.Install(t)
+	priorWorkerMeter, priorGeneralMeter := runner.MeasureWorker, runner.MeasureGeneral
+	runner.MeasureWorker, runner.MeasureGeneral = device.MeasureWorker, device.MeasureGeneral
+	defer func() { runner.MeasureWorker, runner.MeasureGeneral = priorWorkerMeter, priorGeneralMeter }()
 	previousCheck := runner.CheckWorker
 	runner.CheckWorker = device.CheckWorker
 	defer func() { runner.CheckWorker = previousCheck }()
@@ -113,6 +116,12 @@ func TestPairedWorkerAndDashboardEvidence(t *testing.T) {
 	reply, err := runner.Manager(ctx, "personal", repo, random(16), "Private fixture manager question", "", "")
 	if err != nil || reply.Status != "completed" {
 		t.Fatal("paired manager", err)
+	}
+	cli("sync")
+	usage := owner.post(t, "usage", object{}, 200)
+	modelRows, ok := usage["models"].([]any)
+	if !ok || len(modelRows) != 1 || usage["admittedTurns"] != float64(5) || usage["unmeteredTurns"] != float64(0) || modelRows[0].(map[string]any)["inputTokens"] != float64(205) {
+		t.Fatalf("worker, planner and manager metering: %#v", usage)
 	}
 	var ended int
 	if err = s.DB.QueryRow("SELECT count(*) FROM general_model_turns WHERE version=2").Scan(&ended); err != nil || ended != 2 {

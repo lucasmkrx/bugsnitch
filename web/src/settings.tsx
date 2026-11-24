@@ -2,6 +2,9 @@
 import { useState, type FormEvent } from "react";
 import { enc, post, type Project, type State, type Policy } from "./api";
 import { Panel, Field, Badge, Modal } from "./ui";
+import { ModelCosts } from "./model-costs";
+import { PolicyCases } from "./policy-cases";
+import { Releases } from "./releases";
 import type { Run } from "./actions";
 
 const policyLabels: Record<keyof Policy, string> = {
@@ -306,6 +309,88 @@ export function Settings({
             locked={locked}
           />
         ))}
+      {(!state.viewer || state.viewer.role === "owner") &&
+        projects.map((project) => (
+          <Panel key={project.id} title={project.repository + " on GitHub"}>
+            <div className="panel-body">
+              {project.githubConnected ? (
+                <p>Installation connected.</p>
+              ) : (
+                <>
+                  <p>
+                    Verify this repository against the workspace’s configured
+                    GitHub App installation.
+                  </p>
+                  <button
+                    disabled={locked}
+                    onClick={() =>
+                      void run(
+                        () =>
+                          post("projects/" + enc(project.id) + "/github", {
+                            version: project.version,
+                          }),
+                        "GitHub installation verified and connected.",
+                      )
+                    }
+                  >
+                    {project.githubConnected === false
+                      ? "Verify and reconnect"
+                      : "Connect repository"}
+                  </button>
+                </>
+              )}
+            </div>
+          </Panel>
+        ))}
+      {state.viewer?.role === "owner" &&
+        projects.map((p) => (
+          <PolicyCases key={p.id} project={p} locked={locked} run={run} />
+        ))}
+      {state.viewer?.role === "owner" && (
+        <Releases state={state} run={run} locked={locked} />
+      )}
+      <ModelCosts
+        key={state.viewer?.projectId || "workspace"}
+        projects={projects}
+        scope={state.viewer?.projectId}
+      />
+      {state.budget && (
+        <Panel title="Monthly workspace turn budget">
+          <form
+            className="panel-body"
+            key={limits.version}
+            onSubmit={(e) => {
+              e.preventDefault();
+              const raw = String(
+                new FormData(e.currentTarget).get("monthlyTurns") || "",
+              );
+              void run(
+                () =>
+                  post("budget", {
+                    monthlyTurns: raw === "" ? null : Number(raw),
+                    version: limits.version,
+                  }),
+                "Monthly turn budget saved.",
+              );
+            }}
+          >
+            <p>
+              {state.budget.usedTurns} model turns authorized this UTC month
+              across paired runners.
+            </p>
+            <Field title="Monthly turns (leave blank for unlimited)">
+              <input
+                type="number"
+                min="0"
+                max="10000000"
+                name="monthlyTurns"
+                defaultValue={state.budget.monthlyTurns ?? ""}
+              />
+            </Field>
+            <button disabled={locked}>Save turn budget</button>
+          </form>
+        </Panel>
+      )}
       {limits && (
         <Panel title="Workspace capacity">
           <form key={limits.version} className="panel-body" onSubmit={save}>

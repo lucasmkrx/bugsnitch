@@ -72,3 +72,74 @@ func (s *Server) requestDraft(call *domainCall) error {
 	}
 	return call.reply(202, d)
 }
+
+func (s *Server) recordHandover(call *domainCall) error {
+	n, err := strconv.ParseInt(call.Number, 10, 64)
+	if err != nil {
+		return bad("Invalid PR number")
+	}
+	var b integration.Handover
+	if err = call.decode(&b); err != nil {
+		return err
+	}
+	if err = s.pulls().Handover(call.ctx, call.Workspace, call.Project, n, b); err != nil {
+		return pullError(err)
+	}
+	return call.reply(201, object{"accepted": true})
+}
+
+func (s *Server) watchPull(call *domainCall) error {
+	n, err := strconv.ParseInt(call.Number, 10, 64)
+	if err != nil {
+		return bad("Invalid PR number")
+	}
+	var b struct {
+		Version  int64
+		Watching *bool
+	}
+	if err := call.decode(&b); err != nil {
+		return err
+	}
+	if b.Watching == nil {
+		return bad("Choose whether to watch this pull request")
+	}
+	if err := s.pulls().Watch(call.ctx, call.Workspace, call.Project, n, b.Version, *b.Watching); err != nil {
+		return pullError(err)
+	}
+	return call.reply(200, object{"watching": *b.Watching})
+}
+
+func (s *Server) approvePull(call *domainCall) error {
+	n, err := strconv.ParseInt(call.Number, 10, 64)
+	if err != nil {
+		return bad("Invalid PR number")
+	}
+	var b integration.SignOff
+	if err = call.decode(&b); err != nil {
+		return err
+	}
+	err = s.pulls().Approve(call.ctx, call.Workspace, call.Project, n, b)
+	if errors.Is(err, integration.ErrConflict) {
+		return conflict("Sign-off requires the current head and target, passing checks, GitHub approval and recorded review and validation evidence.")
+	}
+	if err != nil {
+		return pullError(err)
+	}
+	return call.reply(201, object{"approved": true})
+}
+
+func (s *Server) queuePull(call *domainCall) error {
+	n, err := strconv.ParseInt(call.Number, 10, 64)
+	if err != nil {
+		return bad("Invalid PR number")
+	}
+	var b integration.QueueRequest
+	if err = call.decode(&b); err != nil {
+		return err
+	}
+	decision, err := s.pulls().Queue(call.ctx, call.Workspace, call.Project, n, b)
+	if err != nil {
+		return pullError(err)
+	}
+	return call.reply(200, decision)
+}

@@ -32,6 +32,11 @@ func (b *capped) Write(data []byte) (int, error) {
 	return n, err
 }
 func git(dir string, args ...string) (string, error) {
+	return gitAllowStatus(dir, 0, args...)
+}
+
+// merge-tree exits 1 for a real merge result containing unresolved conflicts.
+func gitAllowStatus(dir string, allowed int, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"--literal-pathspecs", "-c", "core.hooksPath=" + os.DevNull, "-c", "commit.gpgsign=false", "-c", "user.name=Bugsnitch", "-c", "user.email=runner@bugsnitch.invalid", "-C", dir}, args...)...)
@@ -40,7 +45,10 @@ func git(dir string, args ...string) (string, error) {
 	out.max = 512 << 10
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git %s failed", args[0])
+		var failed *exec.ExitError
+		if allowed == 0 || !errors.As(err, &failed) || failed.ExitCode() != allowed {
+			return "", fmt.Errorf("git %s failed: %w", args[0], err)
+		}
 	}
 	if out.overflow {
 		return "", errors.New("Git output exceeds artifact limit")
@@ -148,7 +156,11 @@ func (a *Attempt) cleanAt(sha string) error { return a.worktreeOp("clean", sha) 
 func (a *Attempt) contextFiles() (map[string]string, error) {
 	files := map[string]string{}
 	total := 0
-	for _, p := range a.Project.Config.Files {
+	names, err := a.discoverFiles()
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range names {
 		tracked, err := git(a.Worktree, "ls-files", "-z", "--error-unmatch", "--", p)
 		if err != nil || tracked != p+"\x00" {
 			return nil, errors.New("approved source must be tracked in the recorded revision")
@@ -194,9 +206,37 @@ func AddProject(w, r, path string, config Config) error {
 		if settings.TimeoutSeconds < 0 || settings.TimeoutSeconds > 3600 {
 			return errors.New("model stage timeout must be within one hour")
 		}
+		switch settings.Provider {
+		case "", "codex":
+		case "claude":
+			if strings.TrimSpace(settings.Model) == "" || len(settings.Model) > 160 {
+				return errors.New("a Claude stage requires an explicit model")
+			}
+			switch settings.Reasoning {
+			case "", "low", "medium", "high", "xhigh", "max":
+			default:
+				return errors.New("unsupported Claude stage effort")
+			}
+		default:
+			return errors.New("unknown model stage provider")
+		}
 	}
-	if len(config.Files) == 0 || len(config.Files) > 32 || len(config.Validate) == 0 || len(config.Validate) > 48 {
-		return errors.New("choose 1–32 tracked files and a validation argument vector")
+	if len(config.Files)+len(config.EditDirectories) == 0 || len(config.Files) > 32 || len(config.EditDirectories) > 16 || len(config.Validate) == 0 || len(config.Validate) > 48 {
+		return errors.New("choose approved files or edit directories and a validation argument vector")
+	}
+	if config.ReviewDepth != "" && reviewLevel(config.ReviewDepth) == 0 {
+		return errors.New("reviewDepth must be quick, standard or deep")
+	}
+	if config.ValidationSandbox != "" && config.ValidationSandbox != "isolated" {
+		return errors.New("unknown validation sandbox")
+	}
+	for _, scope := range config.EditDirectories {
+		if !safeRelative(scope) {
+			return errors.New("invalid edit directory")
+		}
+		if err := checkDirectory(dir, scope); err != nil {
+			return err
+		}
 	}
 	if !filepath.IsAbs(config.Validate[0]) {
 		return errors.New("validation executable must be an absolute path")

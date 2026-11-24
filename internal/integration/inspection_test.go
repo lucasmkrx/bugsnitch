@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"github.com/lucasmkrx/bugsnitch/internal/storage"
 )
@@ -129,5 +130,65 @@ func TestQueueAndPassingChecksCannotReplaceDecisionForTarget(t *testing.T) {
 		if p.AutoMerge || !strings.Contains(strings.Join(p.Blockers, " "), "approved target") {
 			t.Fatalf("accepted a queue without a target-bound decision for %s", target)
 		}
+	}
+}
+
+func TestHandoverRequiresExactMergedSubjectAndReplaysOnce(t *testing.T) {
+	db, _ := scratchDB(t)
+	s := Store{DB: db}
+	ctx := audit.WithActor(t.Context(), audit.Owner, "owner")
+	observation := github.PullObservation{State: "OPEN", Target: "main"}
+	pull, err := s.save(ctx, "personal", "p", 9, 7, 0, 10, 11, "example/test", observation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := Handover{
+		Version: pull.Version, Target: "main", MergedSHA: strings.Repeat("a", 40), Environment: "staging",
+		Build: "build-7", Digest: strings.Repeat("b", 64), Summary: "Shipping threshold corrected.", TestSteps: "Check a $50 order.",
+	}
+	if err := s.Handover(ctx, "personal", "p", 9, h); !errors.Is(err, ErrConflict) {
+		t.Fatal("open PR accepted", err)
+	}
+	observation.State, observation.MergedSHA = "MERGED", h.MergedSHA
+	pull, err = s.save(ctx, "personal", "p", 9, 7, pull.Version, 10, 11, "example/test", observation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Handover(ctx, "personal", "p", 9, h); !errors.Is(err, ErrConflict) {
+		t.Fatal("stale inspection accepted", err)
+	}
+	h.Version = pull.Version
+	for range 2 {
+		if err := s.Handover(ctx, "personal", "p", 9, h); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pulls, err := s.List(ctx, "personal")
+	if err != nil || len(pulls) != 1 || len(pulls[0].Handovers) != 1 || pulls[0].Handovers[0].Digest != h.Digest {
+		t.Fatal("handover projection", pulls, err)
+	}
+	h.TestSteps = "Changed"
+	if err := s.Handover(ctx, "personal", "p", 9, h); !errors.Is(err, ErrConflict) {
+		t.Fatal("handover overwritten", err)
+	}
+}
+
+func TestWatchSchedulerIgnoresUnwatchedAndClosedPulls(t *testing.T) {
+	db, run := scratchDB(t)
+	s := Store{DB: db}
+	ctx := t.Context()
+	for n, state := range map[int64]string{5: "OPEN", 6: "OPEN", 7: "MERGED"} {
+		observation := github.PullObservation{State: state, Target: "main"}
+		if _, err := s.save(ctx, "personal", "p", n, 4, 0, 10, 11, "example/test", observation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	run("UPDATE pull_observations SET watching=true WHERE number IN (6,7)")
+	job, err := storage.ClaimJob(ctx, db, "pull_watch")
+	if err != nil || job.Number != 6 {
+		t.Fatal("wrong watch job", job, err)
+	}
+	if _, err := storage.ClaimJob(ctx, db, "pull_watch"); !errors.Is(err, sql.ErrNoRows) {
+		t.Fatal("another watch job was due", err)
 	}
 }

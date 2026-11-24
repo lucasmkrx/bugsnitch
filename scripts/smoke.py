@@ -6,6 +6,7 @@ import http.cookiejar
 import json
 import os
 import secrets
+import shutil
 import socket
 import subprocess
 import tempfile
@@ -104,8 +105,18 @@ def check(tmp, mcp_bridge, runner, initial_server=None):
     run("git", "init", "-q", str(checkout))
     run("git", "-C", str(checkout), "remote", "add", "origin", "https://github.com/example/fixture.git")
     homes = []
-    with server(base, initial_server):
-        with browser.open(origin) as response:
+    initial = base
+    if initial_server is not None:
+        # The previous listener expects the workspace at the bundle root.
+        bundle = Path(base.get("BUGSNITCH_WEB_DIR", ROOT / "web/dist"))
+        workspace = bundle / "app/index.html"
+        if workspace.is_file():
+            legacy_bundle = tmp / "legacy-web"
+            shutil.copytree(bundle, legacy_bundle)
+            shutil.copyfile(workspace, legacy_bundle / "index.html")
+            initial = {**base, "BUGSNITCH_WEB_DIR": str(legacy_bundle)}
+    with server(initial, initial_server):
+        with browser.open(origin + "/app/") as response:
             assert 'id="root"' in response.read().decode()
         api("login", {"token": base["BUGSNITCH_OWNER_TOKEN"]})
         project = api("projects", {"name": "Smoke project", "repository": "example/fixture"})["id"]

@@ -122,6 +122,8 @@ func (s backgroundStores) consume(ctx context.Context, job selectedJob) (bool, e
 		return true, s.plans.SyncIssue(task, s.app, job.JobClaim)
 	case "drift":
 		return true, s.plans.SyncDrift(task, s.app, job.JobClaim)
+	case "pull_watch":
+		return true, s.drafts.SyncWatch(task, job.JobClaim)
 	default:
 		return false, errors.New("unknown private background queue")
 	}
@@ -135,7 +137,7 @@ func runBackground(ctx context.Context, db *sql.DB, dsn string, app *github.App)
 	stores := backgroundStores{db, app, incidents.Store{DB: db}, integration.Store{DB: db, App: app}, planning.Store{DB: db}}
 	lanes := []string{"inbox"}
 	if app != nil {
-		lanes = append(lanes, "triage", "incident_issue", "draft", "planned_issue", "drift")
+		lanes = append(lanes, "triage", "incident_issue", "draft", "planned_issue", "drift", "pull_watch")
 	}
 	busy := make(map[string]bool, len(lanes))
 	retryAfter := map[string]time.Time{}

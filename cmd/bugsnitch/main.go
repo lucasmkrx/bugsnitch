@@ -26,6 +26,10 @@ import (
 const usage = `Usage: bugsnitch COMMAND [OPTIONS]
 
   share-diff             Preview or share an approved candidate diff
+  approval-check         Evaluate repository policy on an exact base and candidate
+  approval-github        Evaluate authenticated GitHub PR or merge-group observations
+  approval-review-receipt Prepare a check-run body for an independently reviewed candidate
+  approval-preview       Replay repository policy against labeled historical changes
   doctor                 Check Git, native runner capabilities and Codex
   models                 List models and reasoning settings on this runtime
   usage                  Read available ChatGPT allowance windows
@@ -47,6 +51,10 @@ const usage = `Usage: bugsnitch COMMAND [OPTIONS]
   local-verification     Inspect a saved verification receipt
   local-continue         Approve a plan or request a bounded correction
   local-show             Inspect the complete local stage evidence
+  local-usage            Read metered model usage for an attempt
+  local-ship             Publish an exact reviewed branch and open its owner-approved draft PR
+  local-steward          Repair failed CI or open review feedback on a published candidate
+  local-publish          Publish the reviewed candidate to its exact attempt branch
   local-integrate-check  Validate a reviewed candidate with a selected target
   local-integrations     Inspect combined-check receipts
   local-list             Show local attempt summaries
@@ -59,15 +67,17 @@ func printJSON(v any) error {
 	e.SetIndent("", "  ")
 	return e.Encode(v)
 }
-func readJSON(path string, v any) error {
+func readJSON(path string, v any) error { return readJSONLimit(path, v, 128<<10) }
+
+func readJSONLimit(path string, v any, maxBytes int64) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 128<<10 {
-		return errors.New("input must be a regular JSON file under 128 KiB")
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxBytes {
+		return fmt.Errorf("input must be a regular JSON file no larger than %d bytes", maxBytes)
 	}
 	dec := json.NewDecoder(f)
 	dec.DisallowUnknownFields()
@@ -90,10 +100,20 @@ func run(ctx context.Context, args []string) error {
 		return device.LocalRun(ctx, args[1:], os.Stdout)
 	case "local-limits":
 		return device.LocalLimits(args[1:], os.Stdout)
+	case "local-usage":
+		return localUsage(args[1:])
 	case "share-diff":
 		return device.Share(args[1:])
 	case "next", "pair", "rotate", "unpair", "register", "sync", "status":
 		return device.RunCLIContext(ctx, args)
+	case "approval-github":
+		return approvalGitHub(ctx, args[1:])
+	case "approval-review-receipt":
+		return approvalReceipt(ctx, args[1:])
+	case "approval-check":
+		return approvalCheck(ctx, args[1:])
+	case "approval-preview":
+		return approvalPreview(ctx, args[1:])
 	case "doctor":
 		fmt.Printf("Platform %s/%s\n", runtime.GOOS, runtime.GOARCH)
 		if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
@@ -264,6 +284,56 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 		return runner.AddProject(*w, *r, *p, conf)
+	case "local-ship":
+		id := fs.String("id", "", "completed local attempt")
+		version := fs.Int("version", 0, "completed attempt version")
+		candidate := fs.String("candidate", "", "exact reviewed candidate SHA")
+		target := fs.String("target", "", "owner-approved target branch")
+		wait := fs.Duration("wait", 10*time.Minute, "time to wait for approval and GitHub (up to one hour)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		receipt, err := device.Ship(ctx, *id, *version, *candidate, *target, *wait, func(state string) {
+			if state == "awaiting_approval" {
+				fmt.Fprintln(os.Stderr, "Awaiting owner approval. Open this attempt in the dashboard, select the target and choose publication with local-ship.")
+			} else {
+				fmt.Fprintln(os.Stderr, "Draft delivery:", state)
+			}
+		})
+		if err != nil {
+			return err
+		}
+		return printJSON(receipt)
+	case "local-steward":
+		id := fs.String("id", "", "completed local attempt")
+		version := fs.Int("version", 0, "reviewed attempt version")
+		candidate := fs.String("candidate", "", "reviewed candidate SHA")
+		n := fs.Int("pr", 0, "published pull request")
+		watch := fs.Duration("watch", 0, "monitor this PR in the foreground for the duration")
+		publish := fs.Bool("publish", false, "publish independently reviewed corrections with a PR undo note")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		return steward(ctx, *id, *version, *candidate, *n, *watch, *publish)
+	case "local-publish":
+		id := fs.String("id", "", "completed attempt")
+		note := fs.Bool("post-note", false, "post change and undo instructions on the corrected PR")
+		version := fs.Int("version", 0, "reviewed attempt version")
+		candidate := fs.String("candidate", "", "reviewed commit SHA")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		receipt, err := runner.PublishCandidate(ctx, *id, *version, *candidate)
+		if err != nil {
+			return err
+		}
+		if err = printJSON(receipt); err != nil {
+			return err
+		}
+		if *note {
+			return runner.PostStewardNote(ctx, *id, receipt)
+		}
+		return nil
 	case "local-integrate-check", "local-integrations":
 		id := fs.String("id", "", "reviewed local attempt")
 		target := fs.String("target", "", "full local branch or origin tracking ref")
@@ -333,8 +403,13 @@ func run(ctx context.Context, args []string) error {
 	case "local-continue", "local-show", "local-recover":
 		id := fs.String("id", "", "local attempt id")
 		feedback := fs.String("feedback", "", "feedback for the worker")
+		version := fs.Int("version", 0, "reviewed attempt version for local-continue")
+		until := fs.Bool("until-candidate", false, "pause after committing the candidate and before validation")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
+		}
+		if *until && args[0] != "local-continue" {
+			return errors.New("--until-candidate applies to local-continue")
 		}
 		if args[0] == "local-recover" {
 			a, e := runner.RecoverCommit(*id)
@@ -350,7 +425,15 @@ func run(ctx context.Context, args []string) error {
 			}
 			return printJSON(a)
 		}
-		a, err := runner.Continue(ctx, *id, *feedback)
+		var a runner.Attempt
+		var err error
+		if *until {
+			a, err = runner.ContinueToCandidate(ctx, *id, *feedback, *version)
+		} else if *version != 0 {
+			a, err = runner.ContinueAt(ctx, *id, *feedback, *version)
+		} else {
+			a, err = runner.Continue(ctx, *id, *feedback)
+		}
 		if a.ID != "" {
 			if e := printJSON(a.Summary); e != nil {
 				return e
@@ -367,7 +450,8 @@ func run(ctx context.Context, args []string) error {
 	return fmt.Errorf("unknown command %q; run bugsnitch help", args[0])
 }
 func main() {
-	runner.CheckWorker = device.CheckWorker
+	runner.MeasureWorker, runner.MeasureGeneral = device.MeasureWorker, device.MeasureGeneral
+	runner.CheckWorker, runner.CheckPublication = device.CheckWorker, device.CheckPublication
 	runner.BindGeneral, runner.SubmitGeneral = device.BindGeneral, device.SubmitGeneral
 	runner.BeforeStart, runner.AfterFinish = device.Admit, device.Finish
 	runner.BeforeTurn, runner.AfterTurn = device.TurnStart, device.TurnEnd

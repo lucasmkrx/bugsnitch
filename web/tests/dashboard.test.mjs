@@ -208,6 +208,169 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
     },
   );
   await t.test(
+    "owner connects a repository, scopes access, budgets turns and orders releases",
+    async (t) => {
+      const page = await browser.newPage({
+        viewport: { width: 390, height: 844 },
+      });
+      t.after(() => page.close());
+      const state = fixture();
+      state.viewer = { id: "owner", role: "owner", name: "Owner" };
+      state.budget = { usedTurns: 2, monthlyTurns: null };
+      state.projects.push({
+        ...project,
+        id: "p2",
+        name: "Payments",
+        repository: "example/payments",
+      });
+      state.pullRequests = state.projects.map((p, i) => ({
+        projectId: p.id,
+        number: i + 10,
+        state: "OPEN",
+        head: String(i + 1).repeat(40),
+        target: "main",
+      }));
+      const members = [],
+        writes = [];
+      await page.route("**/api/v1/**", (r) => {
+        const path = new URL(r.request().url()).pathname.slice(
+          "/api/v1/".length,
+        );
+        if (path === "state") return r.fulfill({ json: state });
+        if (path === "members" && r.request().method() === "GET")
+          return r.fulfill({ json: members });
+        if (path.endsWith("/review-subjects")) return r.fulfill({ json: [] });
+        const budget = {
+          projectId: "p2",
+          version: 0,
+          mode: "off",
+          thresholdUSD: null,
+          month: "2026-11-01",
+          estimatedUSD: 2,
+          admittedTurns: 2,
+          meteredTurns: 1,
+          pricedTurns: 1,
+          reached: false,
+        };
+        if (path === "projects/p2/usage")
+          return r.fulfill({
+            json: {
+              monthlyThreshold: budget,
+              admittedTurns: 2,
+              unmeteredTurns: 1,
+              unpricedMeteredTurns: 0,
+              turnsOnFailedOrCancelledAttempts: 0,
+              models: [
+                {
+                  model: "test",
+                  turns: 1,
+                  pricedTurns: 1,
+                  inputTokens: 10,
+                  outputTokens: 4,
+                  estimatedUSD: 2,
+                },
+              ],
+            },
+          });
+        const data = r.request().postDataJSON();
+        writes.push([path, data]);
+        if (path === "projects/p2/usage/threshold")
+          return r.fulfill({
+            json: { ...budget, ...data, version: 1, reached: true },
+          });
+        if (path === "projects/p1/github")
+          state.projects[0].githubConnected = true;
+        if (path === "members") {
+          members.push({ id: "approver", ...data, revokedAt: null });
+          return r.fulfill({ json: { credential: "test-access-key" } });
+        }
+        if (path === "budget") state.budget.monthlyTurns = data.monthlyTurns;
+        if (path === "releases")
+          state.releases = [
+            {
+              id: data.requestId,
+              name: data.name,
+              environment: data.environment,
+              stages: data.stages.map((s) => ({
+                projectId: s.projectId,
+                number: s.pullNumber,
+                status: "pending_merge",
+              })),
+            },
+          ];
+        return r.fulfill({ json: { ok: true } });
+      });
+      await page.goto(url + "/#/settings");
+      await page
+        .getByRole("button", { name: "Connect repository" })
+        .first()
+        .click();
+      await page.getByText("Installation connected.").waitFor();
+      await page.getByLabel("Name", { exact: true }).fill("Release lead");
+      await page
+        .getByRole("combobox", { name: /^Role/ })
+        .selectOption("approver");
+      await page.getByLabel("Project access").selectOption("p2");
+      await page.getByRole("button", { name: "Create access key" }).click();
+      await page
+        .getByRole("dialog")
+        .getByRole("button", { name: "Done" })
+        .click();
+      await page.getByLabel(/Monthly turns/).fill("20");
+      await page.getByRole("button", { name: "Save turn budget" }).click();
+      await page.getByText("Monthly turn budget saved.").waitFor();
+      await page.getByLabel("Release name").fill("Payments then storefront");
+      await page.getByLabel("Environment", { exact: true }).fill("staging");
+      for (const ref of ["p2/11", "p1/10"]) {
+        await page
+          .getByLabel("Next pull request in release order")
+          .selectOption(ref);
+        await page.getByRole("button", { name: "Add stage" }).click();
+      }
+      await page.getByRole("button", { name: "Create release plan" }).click();
+      await page
+        .getByRole("heading", { name: "Payments then storefront · staging" })
+        .waitFor();
+      assert.deepEqual(writes.slice(0, 3), [
+        ["projects/p1/github", { version: 4 }],
+        [
+          "members",
+          { name: "Release lead", role: "approver", projectId: "p2" },
+        ],
+        ["budget", { monthlyTurns: 20, version: 1 }],
+      ]);
+      assert.equal(writes[3][0], "releases");
+      assert.deepEqual(writes[3][1].stages, [
+        {
+          projectId: "p2",
+          pullNumber: 11,
+          head: "2".repeat(40),
+          target: "main",
+        },
+        {
+          projectId: "p1",
+          pullNumber: 10,
+          head: "1".repeat(40),
+          target: "main",
+        },
+      ]);
+      await page.getByLabel("Usage scope").selectOption("p2");
+      await page.getByRole("button", { name: "Read usage" }).click();
+      await page
+        .getByLabel("When the threshold is reached")
+        .selectOption("stop");
+      await page.getByLabel("Estimated USD per UTC month").fill("1");
+      await page.getByRole("button", { name: "Save cost threshold" }).click();
+      await page
+        .getByText("New paired turns are paused for this scope.")
+        .waitFor();
+      assert.deepEqual(writes[4], [
+        "projects/p2/usage/threshold",
+        { mode: "stop", thresholdUSD: 1, version: 0 },
+      ]);
+    },
+  );
+  await t.test(
     "homepage works on desktop and mobile and opens the workspace",
     async (t) => {
       for (const width of [1440, 360]) {

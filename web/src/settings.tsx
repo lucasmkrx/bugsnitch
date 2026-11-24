@@ -2,6 +2,7 @@
 import { useState, type FormEvent } from "react";
 import { enc, post, type Project, type State, type Policy } from "./api";
 import { Panel, Field, Badge, Modal } from "./ui";
+import { ModelCosts } from "./model-costs";
 import { PolicyCases } from "./policy-cases";
 import { Releases } from "./releases";
 import type { Run } from "./actions";
@@ -347,6 +348,48 @@ export function Settings({
         ))}
       {state.viewer?.role === "owner" && (
         <Releases state={state} run={run} locked={locked} />
+      )}
+      <ModelCosts
+        key={state.viewer?.projectId || "workspace"}
+        projects={projects}
+        scope={state.viewer?.projectId}
+      />
+      {state.budget && (
+        <Panel title="Monthly workspace turn budget">
+          <form
+            className="panel-body"
+            key={limits.version}
+            onSubmit={(e) => {
+              e.preventDefault();
+              const raw = String(
+                new FormData(e.currentTarget).get("monthlyTurns") || "",
+              );
+              void run(
+                () =>
+                  post("budget", {
+                    monthlyTurns: raw === "" ? null : Number(raw),
+                    version: limits.version,
+                  }),
+                "Monthly turn budget saved.",
+              );
+            }}
+          >
+            <p>
+              {state.budget.usedTurns} model turns authorized this UTC month
+              across paired runners.
+            </p>
+            <Field title="Monthly turns (leave blank for unlimited)">
+              <input
+                type="number"
+                min="0"
+                max="10000000"
+                name="monthlyTurns"
+                defaultValue={state.budget.monthlyTurns ?? ""}
+              />
+            </Field>
+            <button disabled={locked}>Save turn budget</button>
+          </form>
+        </Panel>
       )}
       {limits && (
         <Panel title="Workspace capacity">

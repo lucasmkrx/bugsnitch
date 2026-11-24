@@ -26,6 +26,7 @@ import (
 const usage = `Usage: bugsnitch COMMAND [OPTIONS]
 
   share-diff             Preview or share an approved candidate diff
+  approval-check         Evaluate repository policy on an exact base and candidate
   doctor                 Check Git, native runner capabilities and Codex
   models                 List models and reasoning settings on this runtime
   usage                  Read available ChatGPT allowance windows
@@ -97,6 +98,8 @@ func run(ctx context.Context, args []string) error {
 		return device.Share(args[1:])
 	case "next", "pair", "rotate", "unpair", "register", "sync", "status":
 		return device.RunCLIContext(ctx, args)
+	case "approval-check":
+		return approvalCheck(ctx, args[1:])
 	case "doctor":
 		fmt.Printf("Platform %s/%s\n", runtime.GOOS, runtime.GOARCH)
 		if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {

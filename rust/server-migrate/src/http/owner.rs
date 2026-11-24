@@ -111,6 +111,10 @@ pub(super) fn routes() -> Router<Shared> {
             "pull.watch",
         ),
         (
+            "/api/v1/projects/{project}/pulls/{number}/queue",
+            "pull.queue",
+        ),
+        (
             "/api/v1/projects/{project}/pulls/{number}/approve",
             "pull.approve",
         ),

@@ -284,6 +284,28 @@ pub(super) async fn github(
         "sha256=",
         &body,
     )?;
+    if header(&headers, "x-github-event") == Some("merge_group") {
+        let delivery = header(&headers, "x-github-delivery").unwrap_or("");
+        let v: Value = serde_json::from_slice(&body)
+            .map_err(|_| fail(StatusCode::UNPROCESSABLE_ENTITY, "Invalid merge group"))?;
+        if v["action"] != "checks_requested" {
+            return Ok(StatusCode::ACCEPTED);
+        }
+        let group = queue_group(delivery, &v)
+            .ok_or_else(|| fail(StatusCode::UNPROCESSABLE_ENTITY, "Invalid merge group"))?;
+        state
+            .coord(
+                "hooks.merge_group",
+                [
+                    "provider".into(),
+                    format!("github/{}", group["installation"]),
+                ],
+                group,
+            )
+            .await
+            .map_err(intake_error)?;
+        return Ok(StatusCode::ACCEPTED);
+    }
     let p = github_signal(
         header(&headers, "x-github-delivery").unwrap_or(""),
         header(&headers, "x-github-event").unwrap_or(""),
@@ -306,8 +328,59 @@ pub(super) async fn github(
     Ok(StatusCode::ACCEPTED)
 }
 
+fn queue_group(delivery: &str, v: &Value) -> Option<Value> {
+    let g = &v["merge_group"];
+    let head = g["head_sha"].as_str()?;
+    let base = g["base_sha"].as_str()?;
+    let target = g["base_ref"].as_str()?.strip_prefix("refs/heads/")?;
+    let head_ref = g["head_ref"].as_str()?.strip_prefix("refs/heads/")?;
+    let oid = |s: &str| {
+        [40, 64].contains(&s.len())
+            && s.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    };
+    let branch = |s: &str| {
+        !s.is_empty()
+            && s.len() <= 240
+            && !s.contains("..")
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b"._/-".contains(&b))
+    };
+    if !UUID.is_match(delivery)
+        || !oid(head)
+        || !oid(base)
+        || head == base
+        || !branch(target)
+        || !branch(head_ref)
+        || !head_ref.starts_with("gh-readonly-queue/")
+    {
+        return None;
+    }
+    Some(
+        json!({"installation":numeric_id(&v["installation"]["id"])?,"repository":numeric_id(&v["repository"]["id"])?,
+        "head":head,"base":base,"target":target,"headRef":head_ref,"delivery":delivery}),
+    )
+}
+
+fn record_merge_group(db: &Db<'_>, g: Value) -> Result<Value> {
+    let id = |name: &str| {
+        g[name]
+            .as_i64()
+            .map(|x| x.to_string())
+            .ok_or_else(|| Error::bad("Invalid merge group"))
+    };
+    let (installation, repository) = (id("installation")?, id("repository")?);
+    let mapping = db.optional("SELECT workspace_id,project_id FROM github_mappings WHERE installation_id=$1 AND repository_id=$2 AND active FOR SHARE",&[&installation,&repository])?.ok_or_else(Error::denied)?;
+    let (w, p) = (mapping.text(0)?, mapping.text(1)?);
+    db.exec("INSERT INTO github_merge_groups(workspace_id,project_id,installation_id,repository_id,delivery,head,base,head_ref,target)
+      SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9 WHERE EXISTS (SELECT FROM pull_queue_permits WHERE workspace_id=$1 AND project_id=$2 AND target=$9 AND base=$7 AND state IN ('requested','submitting','awaiting_queue','queued','checking') AND expires_at>now())
+      ON CONFLICT DO NOTHING", &[w,p,&installation,&repository,text(&g,"delivery"),text(&g,"head"),text(&g,"base"),text(&g,"headRef"),text(&g,"target")])?;
+    Ok(Value::Null)
+}
+
 pub(crate) fn apply(db: &Db<'_>, op: &str, input: Value) -> Result<Value> {
     match op {
+        "hooks.merge_group" => record_merge_group(db, input),
         "hooks.sentry" => record_observation(db, serde_json::from_value(input)?),
         "hooks.github" => record_github(db, serde_json::from_value(input)?),
         _ => Err(Error::bad("Unknown webhook operation")),
@@ -386,6 +459,19 @@ mod tests {
         );
     }
 
+    #[test]
+    fn signed_group_subject_requires_real_refs_and_distinct_commits() {
+        let delivery = "00112233-aabb-ccdd-eeff-001122334455";
+        let mut e = json!({"installation":{"id":10},"repository":{"id":11},"merge_group":{
+            "head_sha":"a".repeat(40),"base_sha":"b".repeat(40),"base_ref":"refs/heads/main","head_ref":"refs/heads/gh-readonly-queue/main/pr-12-example"}});
+        let group = queue_group(delivery, &e).unwrap();
+        assert_eq!(group["target"], "main");
+        e["merge_group"]["base_sha"] = e["merge_group"]["head_sha"].clone();
+        assert!(queue_group(delivery, &e).is_none());
+        e["merge_group"]["base_sha"] = json!("b".repeat(40));
+        e["merge_group"]["head_ref"] = json!("refs/heads/bugsnitch/user");
+        assert!(queue_group(delivery, &e).is_none());
+    }
     #[test]
     fn sentry_keeps_only_authorized_fields_and_uses_tag_fallbacks() {
         let event = json!({"action":"created","installation":{"uuid":"00112233-aabb-ccdd-eeff-001122334455"},

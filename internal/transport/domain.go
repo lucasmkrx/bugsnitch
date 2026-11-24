@@ -105,7 +105,7 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 		"project.dispatch": s.dispatch, "decision.answer": s.answer, "message.create": s.message,
 		"plan.propose": s.proposePlan, "plan.approve": s.approvePlan, "plan.evidence": s.attestPrerequisite,
 		"publication.propose": s.publication, "publication.approve": s.publish,
-		"pull.refresh": s.refreshPull, "pull.evidence": s.recordPull, "pull.draft": s.requestDraft,
+		"pull.queue": s.queuePull, "pull.refresh": s.refreshPull, "pull.evidence": s.recordPull, "pull.draft": s.requestDraft,
 		"incident.report": s.report, "incident.promote": s.promote,
 		"incident.verdict": s.incidentVerdict, "incident.receipt": s.incidentReceipt,
 		"linear.link":   s.linkLinear,

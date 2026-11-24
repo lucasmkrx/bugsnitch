@@ -13,6 +13,8 @@ type Source string
 
 const (
 	Owner    Source = "owner"
+	Operator Source = "operator"
+	Approver Source = "approver"
 	Plugin   Source = "plugin"
 	Device   Source = "device"
 	Service  Source = "service"

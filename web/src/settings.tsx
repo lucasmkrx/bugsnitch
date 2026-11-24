@@ -3,6 +3,7 @@ import { useState, type FormEvent } from "react";
 import { enc, post, type Project, type State, type Policy } from "./api";
 import { Panel, Field, Badge, Modal } from "./ui";
 import { PolicyCases } from "./policy-cases";
+import { Releases } from "./releases";
 import type { Run } from "./actions";
 
 const policyLabels: Record<keyof Policy, string> = {
@@ -344,6 +345,9 @@ export function Settings({
         projects.map((p) => (
           <PolicyCases key={p.id} project={p} locked={locked} run={run} />
         ))}
+      {state.viewer?.role === "owner" && (
+        <Releases state={state} run={run} locked={locked} />
+      )}
       {limits && (
         <Panel title="Workspace capacity">
           <form key={limits.version} className="panel-body" onSubmit={save}>

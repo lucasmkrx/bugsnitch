@@ -2,6 +2,7 @@
 import { useState, type FormEvent } from "react";
 import { enc, post, type Project, type State, type Policy } from "./api";
 import { Panel, Field, Badge, Modal } from "./ui";
+import { PolicyCases } from "./policy-cases";
 import type { Run } from "./actions";
 
 const policyLabels: Record<keyof Policy, string> = {
@@ -338,6 +339,10 @@ export function Settings({
               )}
             </div>
           </Panel>
+        ))}
+      {state.viewer?.role === "owner" &&
+        projects.map((p) => (
+          <PolicyCases key={p.id} project={p} locked={locked} run={run} />
         ))}
       {limits && (
         <Panel title="Workspace capacity">

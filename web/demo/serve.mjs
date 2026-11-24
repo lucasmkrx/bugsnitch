@@ -7,13 +7,21 @@ import { fileURLToPath } from "node:url";
 
 const dist = resolve(dirname(fileURLToPath(import.meta.url)), "../dist");
 const data = await readFile(new URL("./workspace.json", import.meta.url));
-const index = await readFile(resolve(dist, "index.html"));
+const index = await readFile(resolve(dist, "app/index.html"));
 const types = {
   ".html": "text/html",
   ".css": "text/css",
   ".js": "text/javascript",
   ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+  ".woff2": "font/woff2",
 };
+const previewIcons = new Set([
+  "/favicon.ico",
+  "/brand/favicon.svg",
+  "/brand/apple-touch-icon.png",
+]);
 const port = 4174;
 const origin = "http://127.0.0.1:" + port;
 createServer(async (req, res) => {
@@ -37,7 +45,8 @@ createServer(async (req, res) => {
     } else if (pathname === "/") {
       res.writeHead(200, { "Content-Type": "text/html" }).end(index);
     } else if (
-      /^\/assets\/[A-Za-z0-9._-]+$/.test(pathname) &&
+      (previewIcons.has(pathname) ||
+        /^\/assets\/[A-Za-z0-9._-]+$/.test(pathname)) &&
       types[extname(pathname)]
     ) {
       const bytes = await readFile(resolve(dist, "." + pathname));

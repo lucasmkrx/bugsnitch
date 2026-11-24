@@ -13,14 +13,20 @@ const types = {
   ".js": "text/javascript",
   ".css": "text/css",
   ".svg": "image/svg+xml",
+  ".jpg": "image/jpeg",
+  ".png": "image/png",
+  ".woff2": "font/woff2",
 };
 async function staticHost() {
   const server = createServer(async (req, res) => {
     const path = new URL(req.url, "http://local").pathname;
-    const file = resolve(
-      staticRoot,
-      "." + (path === "/" ? "/index.html" : path),
-    );
+    const entry =
+      path === "/"
+        ? "/index.html"
+        : path === "/app" || path === "/app/"
+          ? "/app/index.html"
+          : path;
+    const file = resolve(staticRoot, "." + entry);
     if (!file.startsWith(staticRoot + "/")) {
       res.writeHead(404).end();
       return;
@@ -104,7 +110,8 @@ function fixture() {
   };
 }
 test("desktop and mobile approval, stale state, replay and owner navigation", async (t) => {
-  const { server, url } = await staticHost();
+  const { server, url: origin } = await staticHost();
+  const url = origin + "/app";
   t.after(() => server.close());
   const browser = await chromium.launch(
     process.env.BUGSNITCH_TEST_CHROME
@@ -112,6 +119,126 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
       : { channel: "chrome", headless: true },
   );
   t.after(() => browser.close());
+  await t.test(
+    "homepage works on desktop and mobile and opens the workspace",
+    async (t) => {
+      for (const width of [1440, 360]) {
+        const page = await browser.newPage({
+          viewport: { width, height: 900 },
+          colorScheme: "dark",
+          permissions: ["clipboard-read", "clipboard-write"],
+        });
+        t.after(() => page.close());
+        await page.route("**/api/v1/state", (route) =>
+          route.fulfill({ json: fixture() }),
+        );
+        await page.goto(origin);
+        await page
+          .getByRole("heading", { name: "Know the bug is fixed." })
+          .waitFor();
+        await page.evaluate(() => document.fonts.ready);
+        assert.deepEqual(
+          await page.locator(".site-header .wordmark").evaluate((wordmark) => {
+            const style = getComputedStyle(wordmark);
+            return [
+              style.fontFamily,
+              style.fontWeight,
+              style.colorScheme,
+              style.getPropertyValue("--brand-accent").trim(),
+              document.fonts.check('700 24px "IBM Plex Mono"'),
+            ];
+          }),
+          [
+            '"IBM Plex Mono", ui-monospace, monospace',
+            "700",
+            "light",
+            "#d40000",
+            true,
+          ],
+        );
+        const favicon = await page
+          .locator('link[rel="icon"][type="image/svg+xml"]')
+          .getAttribute("href");
+        const icon = await page
+          .locator(".site-header .wordmark img")
+          .getAttribute("src");
+        assert.equal(favicon, "/brand/favicon.svg");
+        if (width === 1440) {
+          const [faviconArt, canonicalArt] = await page.evaluate(
+            (urls) =>
+              Promise.all(
+                urls.map(async (url) => {
+                  const svg = new DOMParser().parseFromString(
+                    await (await fetch(url)).text(),
+                    "image/svg+xml",
+                  );
+                  return [...svg.querySelectorAll("path")].map((path) =>
+                    path.getAttribute("d"),
+                  );
+                }),
+              ),
+            [favicon, icon],
+          );
+          assert.equal(canonicalArt.length, 2);
+          assert.deepEqual(faviconArt, canonicalArt);
+          const cardURL = await page
+            .locator('meta[property="og:image"]')
+            .getAttribute("content");
+          assert.equal(cardURL, "https://bugsnitch.com/brand/social-share.png");
+          assert.deepEqual(
+            await page.evaluate(async (path) => {
+              const response = await fetch(path);
+              const bitmap = await createImageBitmap(await response.blob());
+              return [
+                response.headers.get("content-type"),
+                bitmap.width,
+                bitmap.height,
+              ];
+            }, new URL(cardURL).pathname),
+            ["image/png", 1200, 630],
+          );
+        }
+        assert.ok(
+          await page
+            .locator(".dashboard-image")
+            .evaluate((image) => image.naturalWidth > 0),
+        );
+        assert.ok(
+          await page.evaluate(
+            () => document.documentElement.scrollWidth <= innerWidth,
+          ),
+        );
+        await page.getByRole("link", { name: "Try the checkout demo" }).click();
+        assert.equal(new URL(page.url()).hash, "#quickstart");
+        await page.getByRole("button", { name: "Copy command" }).click();
+        assert.equal(
+          await page.evaluate(() => navigator.clipboard.readText()),
+          "make checkout-acceptance",
+        );
+        await page.getByRole("link", { name: "Open workspace" }).click();
+        await page
+          .getByRole("heading", { name: "Overview", exact: true })
+          .waitFor();
+        assert.equal(new URL(page.url()).pathname, "/app/");
+        assert.equal(
+          await page.locator("html").getAttribute("data-theme"),
+          "light",
+        );
+        assert.equal(
+          await page
+            .locator('link[rel="icon"][type="image/svg+xml"]')
+            .getAttribute("href"),
+          favicon,
+        );
+        await page.goto(origin + "/#/plans?project=p1");
+        await page
+          .getByRole("heading", { name: "Plans", exact: true })
+          .first()
+          .waitFor();
+        assert.equal(new URL(page.url()).hash, "#/plans?project=p1");
+      }
+    },
+  );
   await t.test(
     "slow workspace reads survive the next polling interval",
     async (t) => {
@@ -365,6 +492,7 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
           .getByRole("heading", { name: "Overview", exact: true })
           .waitFor();
         if (process.env.BUGSNITCH_SCREENSHOTS) {
+          await page.evaluate(() => document.fonts.ready);
           await mkdir(process.env.BUGSNITCH_SCREENSHOTS, { recursive: true });
           await page.screenshot({
             path: resolve(
@@ -572,11 +700,9 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
         };
         state.plans = [plan];
         await page.reload();
-        const planPanel = page
-          .locator("section")
-          .filter({
-            has: page.getByRole("heading", { name: plan.title, exact: true }),
-          });
+        const planPanel = page.locator("section").filter({
+          has: page.getByRole("heading", { name: plan.title, exact: true }),
+        });
         await planPanel
           .getByText("Completion evidence spans only one day.")
           .waitFor();

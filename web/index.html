@@ -3,11 +3,217 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Bugsnitch</title>
-    <meta name="color-scheme" content="light dark" />
+    <meta name="color-scheme" content="light" />
+    <meta name="theme-color" content="#faf9f6" />
+    <meta
+      name="description"
+      content="Take a bug from report to verified fix with Bugsnitch. Triage the issue, run the repair on your Mac, and verify the build you shipped."
+    />
+    <title>Bugsnitch — From bug report to verified fix</title>
+    <link rel="canonical" href="https://bugsnitch.com/" />
+    <meta property="og:site_name" content="Bugsnitch" />
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://bugsnitch.com/" />
+    <meta
+      property="og:title"
+      content="Bugsnitch — From bug report to verified fix"
+    />
+    <meta
+      property="og:description"
+      content="Approve the work, run the repair on your Mac, and verify the build you shipped."
+    />
+    <meta
+      property="og:image"
+      content="https://bugsnitch.com/brand/social-share.png"
+    />
+    <meta property="og:image:type" content="image/png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="Bugsnitch. Know the bug is fixed. The black and red Bugsnitch icon on a light circuit board."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:image"
+      content="https://bugsnitch.com/brand/social-share.png"
+    />
+    <meta
+      name="twitter:image:alt"
+      content="Bugsnitch. Know the bug is fixed. The black and red Bugsnitch icon on a light circuit board."
+    />
+    <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
+    <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" />
+    <link
+      rel="apple-touch-icon"
+      href="/brand/apple-touch-icon.png"
+      sizes="180x180"
+    />
+    <link rel="stylesheet" href="/src/home/home.css" />
+    <script type="module" src="/src/home/home.js"></script>
   </head>
   <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
+    <a class="skip" href="#content">Skip to content</a>
+    <header class="site-header">
+      <div class="frame nav-bar">
+        <a class="wordmark" href="/" aria-label="Bugsnitch home">
+          <img
+            src="../assets/brand/bugsnitch-logo.svg"
+            alt=""
+            width="28"
+            height="25"
+          />
+          Bugsnitch
+        </a>
+        <nav aria-label="Main navigation">
+          <a href="#workflow">How it works</a>
+          <a href="#quickstart">Quickstart</a>
+        </nav>
+        <a class="button outline nav-action" href="/app/"
+          >Open workspace <span aria-hidden="true">→</span></a
+        >
+      </div>
+    </header>
+
+    <main id="content">
+      <section class="hero frame" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="eyebrow">
+            <span class="signal" aria-hidden="true"></span> Developer preview
+          </p>
+          <h1 id="hero-title">
+            Know the bug is fixed<span class="accent">.</span>
+          </h1>
+          <p class="hero-description">
+            Take a bug from report to verified fix. Approve the work, run the
+            repair on your Mac, and check the build you actually shipped.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#quickstart"
+              >Try the checkout demo <span aria-hidden="true">↓</span></a
+            >
+            <a class="button text-button" href="#workflow"
+              >How it works <span aria-hidden="true">↓</span></a
+            >
+          </div>
+        </div>
+
+        <figure class="hero-visual">
+          <div class="window">
+            <div class="window-bar">
+              <span class="window-dots" aria-hidden="true"
+                ><i></i><i></i><i></i
+              ></span>
+              <span>Bugsnitch workspace</span>
+            </div>
+            <img
+              class="dashboard-image"
+              src="../docs/screenshots/fixture-overview-1440.png"
+              alt="Bugsnitch dashboard with project activity, work in progress, and a pending owner decision"
+              width="1440"
+              height="900"
+              fetchpriority="high"
+            />
+          </div>
+          <figcaption>Dashboard with sample data</figcaption>
+        </figure>
+      </section>
+
+      <section
+        class="workflow frame"
+        id="workflow"
+        aria-labelledby="workflow-title"
+      >
+        <p class="eyebrow">The workflow</p>
+        <h2 id="workflow-title">
+          From first report to<br class="wide-only" />
+          the build you shipped.
+        </h2>
+        <ol class="steps">
+          <li>
+            <span class="step-name"
+              ><span class="step-icon" aria-hidden="true">↳</span> Triage</span
+            >
+            <h3>Decide what to fix.</h3>
+            <p>
+              Capture what happened and what should have happened. Link the
+              incident to a GitHub issue with criteria you can check.
+            </p>
+          </li>
+          <li>
+            <span class="step-name"
+              ><span class="step-icon" aria-hidden="true">⌘</span> Repair</span
+            >
+            <h3>Review work on your Mac.</h3>
+            <p>
+              The runner works in a separate Git worktree, runs your validation
+              command, and records an independent review of the candidate.
+            </p>
+          </li>
+          <li>
+            <span class="step-name"
+              ><span class="step-icon" aria-hidden="true">✓</span> Verify</span
+            >
+            <h3>Check the deployed build.</h3>
+            <p>
+              Attach evidence to the exact deployment. A redeploy needs a fresh
+              check, and a recurrence returns the incident to triage.
+            </p>
+          </li>
+        </ol>
+      </section>
+
+      <section
+        class="local-section"
+        id="quickstart"
+        aria-labelledby="quickstart-title"
+      >
+        <div class="frame quickstart">
+          <div>
+            <p class="eyebrow">Run it locally</p>
+            <h2 id="quickstart-title">Try a complete repair.</h2>
+            <p>
+              The bundled demo reproduces a checkout bug in Chromium, applies a
+              scripted repair, then checks the served build from the browser.
+              The exercise runs with local fixtures.
+            </p>
+            <a
+              class="inline-link"
+              href="https://github.com/lucasmkrx/bugsnitch#try-it-locally"
+              >Read the setup guide <span aria-hidden="true">↗</span></a
+            >
+          </div>
+          <div class="terminal">
+            <div class="terminal-bar">
+              <span>From the repository root</span>
+              <button class="copy-button" type="button" hidden>
+                Copy command
+              </button>
+            </div>
+            <pre><span aria-hidden="true">$ </span><code id="checkout-command">make checkout-acceptance</code></pre>
+            <p>Hosted access is invite-only during the pilot.</p>
+            <span class="visually-hidden" id="copy-status" role="status"></span>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="frame footer">
+      <a class="wordmark" href="/" aria-label="Bugsnitch home">
+        <img
+          src="../assets/brand/bugsnitch-logo.svg"
+          alt=""
+          width="28"
+          height="25"
+        />
+        Bugsnitch
+      </a>
+      <nav aria-label="Footer navigation">
+        <a href="https://github.com/lucasmkrx/bugsnitch"
+          >GitHub <span aria-hidden="true">↗</span></a
+        >
+        <a href="/app/">Workspace <span aria-hidden="true">→</span></a>
+      </nav>
+    </footer>
   </body>
 </html>

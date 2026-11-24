@@ -120,45 +120,46 @@ func (s *Server) answer(call *domainCall) error {
 	return call.reply(200, object{"id": id, "answer": b.Answer})
 }
 func (s *Server) applyAnswer(ctx context.Context, ws, id string, b decisionAnswer) error {
+	return transaction(ctx, s.DB, func(tx *sql.Tx) error { return applyAnswerTx(ctx, tx, ws, id, b) })
+}
+func applyAnswerTx(ctx context.Context, tx *sql.Tx, ws, id string, b decisionAnswer) error {
 	if (b.Answer != "Resume dispatch" && b.Answer != "Keep paused") || !keyPattern.MatchString(b.RequestID) || b.Version < 1 {
 		return bad("Provide a valid choice, version, and request ID")
 	}
-	return transaction(ctx, s.DB, func(tx *sql.Tx) error {
-		var project string
-		var subject, version, current int64
-		var prev, key sql.NullString
-		var active bool
-		err := tx.QueryRowContext(ctx, `SELECT d.project_id,d.subject_version,d.version,d.answer,d.request_id,d.expires_at>now(),p.version FROM decisions d JOIN projects p ON p.id=d.project_id WHERE d.workspace_id=$1 AND d.id=$2 FOR UPDATE OF p,d`, ws, id).Scan(&project, &subject, &version, &prev, &key, &active, &current)
-		if err != nil {
+	var project string
+	var subject, version, current int64
+	var prev, key sql.NullString
+	var active bool
+	err := tx.QueryRowContext(ctx, `SELECT d.project_id,d.subject_version,d.version,d.answer,d.request_id,d.expires_at>now(),p.version FROM decisions d JOIN projects p ON p.id=d.project_id WHERE d.workspace_id=$1 AND d.id=$2 FOR UPDATE OF p,d`, ws, id).Scan(&project, &subject, &version, &prev, &key, &active, &current)
+	if err != nil {
+		return err
+	}
+	if prev.Valid {
+		if key.String == b.RequestID && prev.String == b.Answer && b.Version+1 == version {
+			return nil
+		}
+		return conflict("This decision already has an answer")
+	}
+	if b.Answer == "Resume dispatch" {
+		var stopped bool
+		if err = tx.QueryRowContext(ctx, "SELECT stopped FROM workspaces WHERE id=$1", ws).Scan(&stopped); err != nil {
 			return err
 		}
-		if prev.Valid {
-			if key.String == b.RequestID && prev.String == b.Answer && b.Version+1 == version {
-				return nil
-			}
-			return conflict("This decision already has an answer")
+		if stopped {
+			return conflict("Unlock workspace dispatch first")
 		}
-		if b.Answer == "Resume dispatch" {
-			var stopped bool
-			if err = tx.QueryRowContext(ctx, "SELECT stopped FROM workspaces WHERE id=$1", ws).Scan(&stopped); err != nil {
-				return err
-			}
-			if stopped {
-				return conflict("Unlock workspace dispatch first")
-			}
-		}
-		if !active || current != subject || version != b.Version {
-			return conflict("Decision is stale. Review the latest project and evidence.")
-		}
-		if _, err = tx.ExecContext(ctx, "UPDATE projects SET paused=$1,version=version+1 WHERE id=$2 AND workspace_id=$3", b.Answer == "Keep paused", project, ws); err != nil {
-			return err
-		}
-		if _, err = tx.ExecContext(ctx, "UPDATE decisions SET answer=$1,request_id=$2,version=version+1 WHERE id=$3", b.Answer, b.RequestID, id); err != nil {
-			return err
-		}
-		ctx = audit.WithDetails(ctx, audit.Details{Reason: b.Answer, SubjectVersion: subject, EvidenceRef: id})
-		return event(ctx, tx, ws, project, "decision.answered", id)
-	})
+	}
+	if !active || current != subject || version != b.Version {
+		return conflict("Decision is stale. Review the latest project and evidence.")
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE projects SET paused=$1,version=version+1 WHERE id=$2 AND workspace_id=$3", b.Answer == "Keep paused", project, ws); err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, "UPDATE decisions SET answer=$1,request_id=$2,version=version+1 WHERE id=$3", b.Answer, b.RequestID, id); err != nil {
+		return err
+	}
+	ctx = audit.WithDetails(ctx, audit.Details{Reason: b.Answer, SubjectVersion: subject, EvidenceRef: id})
+	return event(ctx, tx, ws, project, "decision.answered", id)
 }
 
 type messageInput struct {

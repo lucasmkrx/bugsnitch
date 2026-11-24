@@ -3,3 +3,5 @@
 Use a single Go service and PostgreSQL transactions for authoritative desired state, event history, idempotency and integration intents. Each runner owns a durable SQLite journal and isolated Git worktrees. Device snapshots carry bounded execution metadata. Transport never accepts shell commands or arbitrary paths from the service.
 
 This permits useful coordination without transferring model credentials or assuming a hosted service is eligible for local plan authorization. Direct local execution remains explicitly initiated on the computer. Integration writes require separate authority and attributable evidence.
+
+The split between hosted authority and local execution remains in place. Later migration stages moved the public HTTP service, selected PostgreSQL transactions, and SQLite journal operations into Rust. Go still owns the local CLI and private application worker. [Architecture](../ARCHITECTURE.md)

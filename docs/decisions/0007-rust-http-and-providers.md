@@ -9,3 +9,5 @@ Planning, decisions, dashboard projections and outbox scheduling keep their exis
 The Go worker asks the Rust GitHub executable for typed operations on one installation and repository. The Rust client owns RSA signing, token exchange, TLS, pagination and rate-limit handling. It checks identity before acting and uses the applicable read or write grant. PostgreSQL remains the source of authority for fencing, external-write intent and reconciliation. No public listener is exposed by either helper. [GitHub App installation authentication](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-an-installation-access-token-for-a-github-app)
 
 The release keeps the existing API and database schema. Operators upgrade the four hosted binaries together. The runner and desktop bridge can be upgraded separately. [Installation and recovery](../OPERATIONS.md#hosted-coordination-and-recovery)
+
+The subsequent performance stage moved the dashboard and MCP list projections and provider queue reservations into Rust. Go retains the application worker and the provider-job consumers. [Measured follow-up](0008-performance-driven-rust.md)

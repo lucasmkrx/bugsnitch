@@ -1,5 +1,7 @@
 # Implementation and acceptance
 
+These milestones describe the rebuild's original acceptance criteria. The November 24 factory checkpoint records which workflows ran with packaged software, which used provider fixtures, and which still need a live organization or deployment. [Factory acceptance](PROGRESS.md#factory-acceptance--november-24-2026)
+
 |Milestone|Exit evidence|
 |---|---|
 |0. Replacement and proof|Clean startup, migrated durable stores, real local account turn and versioned protocol|
@@ -13,6 +15,8 @@
 A provider fixture verifies a protocol contract. Live service acceptance requires a deliberately configured test project and separately recorded evidence. Work that needs a provider account may proceed independently of storage, local execution, dashboard and recovery checks.
 
 ## Rust migration
+
+Stages 1 through 4b have recorded checkpoints. The installed HTTP server, GitHub App client, journal and validator supervisor run in Rust. The local CLI and the private hosted application worker run in Go. Stage 4c requires a measured workload before a further cutover. [Architecture](ARCHITECTURE.md) · [Performance measurements](PROGRESS.md#rust-performance-work)
 
 |Stage|Scope and evidence required|
 |---|---|

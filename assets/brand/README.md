@@ -6,4 +6,4 @@
 
 These files are brand assets. They are **not licensed under MPL-2.0 merely because they are stored in this public repository**. The software license covers source code, not the Bugsnitch name, logo, visual identity, or derived brand images.
 
-The official extension and README may display this logo. Forks should provide their own identity unless permission is granted. See [TRADEMARKS.md](../../TRADEMARKS.md).
+Official Bugsnitch releases and documentation may display this logo. Forks should provide their own identity unless permission is granted. See [TRADEMARKS.md](../../TRADEMARKS.md).

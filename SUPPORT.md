@@ -1,8 +1,6 @@
 # Support
 
-- Bugs: [GitHub Issues](https://github.com/lucasmkrx/bugsnitch/issues), using the bug template.
-- Feature proposals: GitHub Issues, or Discussions if enabled.
-- General questions: Discussions if enabled; otherwise use an issue with a clear question.
-- Security vulnerabilities: private reporting as described in [SECURITY.md](SECURITY.md). Do not publish exploitable details in issues.
+- Use [GitHub Issues](https://github.com/lucasmkrx/bugsnitch/issues/new/choose) for reproducible bugs and feature proposals. For setup questions, start with the [local guide](README.md#try-it-locally) or [operations guide](docs/OPERATIONS.md).
+- Report suspected vulnerabilities through [private security reporting](SECURITY.md).
 
-Include the Bugsnitch, runner and Git versions, OS, and concise reproduction steps. Do not paste secrets, tokens, or unnecessary proprietary code. This is a community project in early development; no response-time SLA is offered.
+For a bug, include the Bugsnitch commit or version, affected component, operating system and concise reproduction steps. Redact credentials and private repository content. Support is best-effort during the developer preview.

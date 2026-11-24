@@ -1,24 +1,47 @@
 # Bugsnitch
 
-Bugsnitch coordinates development across your GitHub projects and your own computers. The hosted service keeps project state in PostgreSQL. The public HTTP server, dashboard queries, device coordination, provider job selection, GitHub App client, webhooks and hosted MCP transport run in Rust. A private Go worker handles planning, decisions and background jobs. On the runner, Rust manages worktrees, SQLite and validation, and Go runs the CLI and model adapter. A macOS runner executes locally initiated work in a separate Git worktree, stores its evidence in SQLite, and reports bounded metadata to a React dashboard. An authenticated MCP server exposes the same workspace to compatible clients.
+Bugsnitch helps an individual developer take a bug from report to verified fix. Triage the report in the dashboard, approve work on a GitHub issue, and run the repair in a separate Git worktree on your Mac. The runner validates the candidate and records review evidence. Bugsnitch tracks verification against the specific deployed build.
 
-The rebuild is an unreleased single-owner application. Run `make checkout-acceptance` to exercise incident intake, a local repair and verification of the deployed result using Bugsnitch's bundled checkout. It runs on your machine without another repository or a provider account. [Checkout exercise](examples/checkout/README.md) · [Verification ledger](docs/PROGRESS.md)
+**Developer preview.** Run Bugsnitch from source with one owner per workspace. Managed hosting is available through invitation-only pilots. The [v0.2.0 release](https://github.com/lucasmkrx/bugsnitch/releases/tag/v0.2.0) is for the earlier VS Code extension.
 
-## Start the dashboard
+The macOS runner keeps worktrees and detailed execution evidence on your machine. It runs the approved validation command with your local user's permissions. The server receives status and bounded metadata. You can approve sharing a specific candidate diff. For live repairs, Codex receives the selected task context and handles its own local sign-in. [Architecture](docs/ARCHITECTURE.md) · [Local model authorization](docs/CODEX.md)
 
-Install Git, Go (tested with 1.27.4), rustup, Node 26.13.1 with npm, PostgreSQL 17 with libpq development headers, libclang, a C compiler and OpenSSL. Cargo selects the pinned Rust 1.100.0 toolchain. Put Cargo and `pg_config` on PATH. On macOS with Homebrew and Xcode Command Line Tools, run
+## Try it locally
+
+Install Git, Go (tested with 1.27.4), rustup, Node 26.13.1 with npm, PostgreSQL 17 with libpq development headers, libclang, a C compiler and OpenSSL. Cargo selects the pinned Rust 1.100.0 toolchain. Put Cargo and `pg_config` on `PATH`. On macOS with Homebrew and Xcode Command Line Tools, run
 
 ```sh
 export PATH="$(brew --prefix rustup)/bin:$(brew --prefix postgresql@17)/bin:$PATH"
 ```
 
-Start the dashboard from the repository root with
+Clone the repository and run the following commands from its root.
+
+```sh
+git clone https://github.com/lucasmkrx/bugsnitch.git
+cd bugsnitch
+```
+
+### Try the bundled checkout repair
+
+Install Chrome or set `BUGSNITCH_TEST_CHROME` to your Chromium executable, then run
+
+```sh
+make checkout-acceptance
+```
+
+The exercise reproduces a checkout bug in Chromium, promotes the incident to a fixture GitHub issue, applies a scripted repair in a temporary worktree and verifies the deployed result in the browser. It starts a disposable database by default and runs without GitHub, Sentry or ChatGPT accounts. [Checkout walkthrough](examples/checkout/README.md) · [Verification ledger](docs/PROGRESS.md)
+
+## Start the dashboard
 
 ```sh
 make dev
 ```
 
 Open **http://localhost:8787**. Sign in using the high-entropy credential saved in **.local/dev/owner-token**. The script creates a private Unix-socket PostgreSQL cluster, applies migrations, installs the locked web dependencies, builds the dashboard and starts the service. Stop the foreground service with Ctrl-C. Use `scripts/dev stop` to stop its database. The next start reuses the data. To choose a PostgreSQL installation, set PGBIN to its bin directory.
+
+You can also [self-host with Docker Compose](docs/OPERATIONS.md#hosted-service). [Dashboard walkthrough and screenshots](docs/DASHBOARD.md)
+
+### Connect a macOS runner
 
 In Settings, register a project by its GitHub owner/repository name. In Devices, issue a ten-minute pairing code for the specific computer and projects. Build and connect a runner on that computer.
 
@@ -61,4 +84,8 @@ On macOS, install both compilation targets with `rustup target add aarch64-apple
 
 [Operations guide](docs/OPERATIONS.md) · [Provider configuration](docs/INTEGRATIONS.md) · [Architecture](docs/ARCHITECTURE.md) · [Implementation plan](docs/IMPLEMENTATION_PLAN.md) · [Product brief](docs/PRODUCT.md)
 
-Bugsnitch retains the [Mozilla Public License 2.0](LICENSE). The existing [trademark terms](TRADEMARKS.md) apply to its name and brand assets.
+## Contributing and license
+
+[Contributing guide](CONTRIBUTING.md) · [Support](SUPPORT.md) · [Private security reporting](SECURITY.md)
+
+The source is licensed under the [Mozilla Public License 2.0](LICENSE). The [trademark terms](TRADEMARKS.md) apply to the Bugsnitch name and brand assets.

@@ -74,6 +74,10 @@ pub(super) fn routes() -> Router<Shared> {
     );
     for (path, op) in [
         ("/api/v1/projects", "project.create"),
+        (
+            "/api/v1/projects/{project}/github",
+            "project.connect_github",
+        ),
         ("/api/v1/projects/{id}/policy", "project.policy"),
         (
             "/api/v1/projects/{project}/issues/{number}/linear",

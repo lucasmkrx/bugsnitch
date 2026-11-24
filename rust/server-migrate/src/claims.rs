@@ -265,7 +265,7 @@ fn admit(db: &Db<'_>, token: &str, a: Admission) -> Result<Value> {
             if !capacity(db, ws, dev, limits.i64(1)?, actor.i64(2)?)? {
                 return Err(Error::model_turn_capacity());
             }
-            charge_turn(db, ws)?;
+            charge_turn(db, ws, &a.project_id)?;
             in_turn = true;
         }
         "turn_end" | "turn_abandon" => {
@@ -309,7 +309,10 @@ fn admit(db: &Db<'_>, token: &str, a: Admission) -> Result<Value> {
 }
 
 // Call only for a fresh acquisition while holding the workspace admission lock.
-fn charge_turn(db: &Db<'_>, workspace: &str) -> Result<()> {
+fn charge_turn(db: &Db<'_>, workspace: &str, project: &str) -> Result<()> {
+    if db.optional("SELECT 1 FROM monthly_cost_status WHERE workspace_id=$1 AND scope IN ('',$2) AND mode='stop' AND reached LIMIT 1", &[workspace,project])?.is_some() {
+        return Err(Error::conflict("Monthly estimated model cost threshold reached"));
+    }
     let accepted = db.optional("INSERT INTO monthly_model_usage(workspace_id,month,turns)
         SELECT id,date_trunc('month',now() AT TIME ZONE 'UTC')::date,1 FROM workspaces
         WHERE id=$1 AND coalesce(monthly_turn_limit,1)>0
@@ -378,7 +381,7 @@ fn permit(db: &Db<'_>, token: &str, a: Permit) -> Result<Value> {
             ));
         }
         if a.version == 1 {
-            charge_turn(db, ws)?;
+            charge_turn(db, ws, &a.project_id)?;
         }
         // An end arriving before an acquisition creates a durable tombstone.
         db.exec("INSERT INTO general_model_turns(workspace_id,device_id,permit_id,role,project_id,version,ended_at)

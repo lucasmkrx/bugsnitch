@@ -3,6 +3,7 @@
 //! Only hashes of pairing codes and bearer credentials cross the local protocol.
 mod artifacts;
 mod controls;
+mod draft_delivery;
 mod metering;
 mod sync;
 
@@ -46,6 +47,7 @@ struct Rotate {
 
 pub fn handle(db: &Db<'_>, op: &str, input: Value) -> Result<Value> {
     match op {
+        "device.draft_delivery" => draft_delivery::handle(db, input),
         "device.share_diff" => artifacts::share(db, input),
         "device.read_diff" => artifacts::read(db, input),
         "device.pairing" => pairing(db, serde_json::from_value(input)?),

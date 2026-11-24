@@ -11,14 +11,20 @@ import (
 	"github.com/lucasmkrx/bugsnitch/internal/audit"
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 	"github.com/lucasmkrx/bugsnitch/internal/incidents"
+	"github.com/lucasmkrx/bugsnitch/internal/linear"
 )
 
 // Server implements application operations on the private domain socket.
 type Server struct {
-	DB        *sql.DB
-	Origin    string
-	GitHubApp *github.App
-	Incidents incidents.Store
+	DB                 *sql.DB
+	Origin             string
+	GitHubApp          *github.App
+	GitHubInstallation int64
+	Incidents          incidents.Store
+	Linear             *linear.Client
+	LinearAgent        interface {
+		Activity(context.Context, string, string, string, string) error
+	}
 }
 type problem struct {
 	code    int

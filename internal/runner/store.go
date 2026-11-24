@@ -47,6 +47,7 @@ type StageEvidence struct {
 	MinorFindings     int    `json:"minorFindings,omitempty"`
 }
 type StageSettings struct {
+	Provider       string `json:"provider,omitempty"`
 	Model          string `json:"model,omitempty"`
 	Reasoning      string `json:"reasoning,omitempty"`
 	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"`

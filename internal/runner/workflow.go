@@ -218,7 +218,7 @@ func (c Config) forStage(phase string) StageSettings {
 	if s.Model == "" {
 		s.Model = c.Model
 	}
-	if s.Reasoning == "" {
+	if s.Reasoning == "" && s.Provider != "claude" {
 		s.Reasoning = c.Reasoning
 	}
 	if s.TimeoutSeconds == 0 {
@@ -231,6 +231,9 @@ var modelTurn = func(ctx context.Context, a *Attempt, directive, prompt string, 
 	settings := a.Project.Config.forStage(a.Phase)
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(settings.TimeoutSeconds)*time.Second)
 	defer cancel()
+	if settings.Provider == "claude" {
+		return agent.Claude(ctx, directive, prompt, settings.Model, settings.Reasoning, schema)
+	}
 	c, err := agent.Open(ctx)
 	if err != nil {
 		return agent.Result{}, err

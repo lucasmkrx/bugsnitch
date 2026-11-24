@@ -194,6 +194,20 @@ func AddProject(w, r, path string, config Config) error {
 		if settings.TimeoutSeconds < 0 || settings.TimeoutSeconds > 3600 {
 			return errors.New("model stage timeout must be within one hour")
 		}
+		switch settings.Provider {
+		case "", "codex":
+		case "claude":
+			if strings.TrimSpace(settings.Model) == "" || len(settings.Model) > 160 {
+				return errors.New("a Claude stage requires an explicit model")
+			}
+			switch settings.Reasoning {
+			case "", "low", "medium", "high", "xhigh", "max":
+			default:
+				return errors.New("unsupported Claude stage effort")
+			}
+		default:
+			return errors.New("unknown model stage provider")
+		}
 	}
 	if len(config.Files) == 0 || len(config.Files) > 32 || len(config.Validate) == 0 || len(config.Validate) > 48 {
 		return errors.New("choose 1–32 tracked files and a validation argument vector")

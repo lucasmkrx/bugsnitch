@@ -226,7 +226,11 @@ async fn ready(State(s): State<Shared>) -> Response {
 }
 fn router(s: Shared) -> Router {
     let owner = owner::routes()
-        .merge(devices::owner())
+        .merge(
+            devices::owner()
+                .merge(session::member_routes())
+                .route_layer(middleware::from_fn(session::require_owner)),
+        )
         .route("/api/v1/logout", post(session::logout))
         .route_layer(middleware::from_fn_with_state(
             s.clone(),

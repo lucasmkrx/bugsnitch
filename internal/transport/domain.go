@@ -86,19 +86,16 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 	if r.Actor[0] == "plugin" && (r.Actor[1] == "local-grant" || r.Actor[1] == "oauth-owner-grant") {
 		return s.integrationDomain(audit.WithActor(ctx, audit.Plugin, r.Actor[1]), r.Operation, r.Actor, r.Input)
 	}
-	if r.Actor[0] != "owner" || r.Actor[1] == "" {
+	if r.Actor[1] == "" {
 		return nil, denied
 	}
-	call := domainCall{ctx: audit.WithActor(ctx, audit.Owner, r.Actor[1])}
+	role := audit.Source(r.Actor[0])
+	call := domainCall{ctx: audit.WithActor(ctx, role, r.Actor[1])}
 	if json.Unmarshal(r.Input, &call) != nil {
 		return nil, bad("Invalid command")
 	}
-	var owned bool
-	if err := s.DB.QueryRowContext(ctx, "SELECT EXISTS(SELECT FROM workspaces WHERE id=$1 AND account_id=$2)", call.Workspace, r.Actor[1]).Scan(&owned); err != nil {
+	if err := s.authorizeActor(&call, r.Actor[1], role, r.Operation); err != nil {
 		return nil, err
-	}
-	if !owned {
-		return nil, denied
 	}
 	op := map[string]func(*domainCall) error{
 		"project.create": s.createProject,
@@ -118,6 +115,54 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 		return nil, err
 	}
 	return call.result, nil
+}
+
+func (s *Server) authorizeActor(call *domainCall, id string, role audit.Source, op string) error {
+	ctx, workspace := call.ctx, call.Workspace
+	query := "SELECT EXISTS(SELECT FROM workspaces WHERE id=$1 AND account_id=$2)"
+	args := []any{workspace, id}
+	if role != audit.Owner {
+		allowed := op == "incident.verdict" || op == "pull.refresh" || op == "incident.report"
+		switch role {
+		case audit.Operator:
+		case audit.Approver:
+			allowed = allowed || op == "decision.answer" || op == "plan.approve" ||
+				op == "pull.evidence"
+		default:
+			return denied
+		}
+		if !allowed {
+			return denied
+		}
+		// Object-only routes resolve their project from durable state. A caller
+		// cannot grant itself access by supplying a second project ID.
+		subject := call.Project
+		scope := "$4"
+		switch op {
+		case "incident.report":
+			var b struct{ ProjectID string }
+			if json.Unmarshal(call.Body, &b) != nil {
+				return bad("Invalid incident report")
+			}
+			subject = b.ProjectID
+		case "plan.approve":
+			scope = "(SELECT project_id FROM plan_versions WHERE workspace_id=$1 AND id=$4)"
+			subject = call.ID
+		case "decision.answer":
+			scope = "(SELECT project_id FROM decisions WHERE workspace_id=$1 AND id=$4)"
+			subject = call.ID
+		}
+		query = "SELECT EXISTS(SELECT FROM workspace_members WHERE workspace_id=$1 AND id=$2 AND role=$3 AND revoked_at IS NULL AND (project_id IS NULL OR project_id=" + scope + "))"
+		args = append(args, role, subject)
+	}
+	var authorized bool
+	if err := s.DB.QueryRowContext(ctx, query, args...).Scan(&authorized); err != nil {
+		return err
+	}
+	if !authorized {
+		return denied
+	}
+	return nil
 }
 func (s *Server) incidentVerdict(c *domainCall) error {
 	v, err := s.Incidents.Verdict(c.ctx, c.Workspace, c.Project, c.ID, c.Environment)

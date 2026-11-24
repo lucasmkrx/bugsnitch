@@ -24,7 +24,7 @@ async fn command(
     let input = json!({"workspace":o.workspace,"id":p.get("id").map(String::as_str).unwrap_or(""),
         "project":p.get("project").map(String::as_str).unwrap_or(""),"number":p.get("number").map(String::as_str).unwrap_or(""),
         "environment":env.unwrap_or_default(),"body":body});
-    let mut result = s.domain(op, ["owner".into(), o.account], input).await?;
+    let mut result = s.domain(op, o.actor(), input).await?;
     let status = result["status"]
         .as_u64()
         .and_then(|n| u16::try_from(n).ok())

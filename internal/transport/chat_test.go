@@ -46,8 +46,8 @@ func TestChatDecisionAcrossSignedEndpoints(t *testing.T) {
 	if !strings.Contains(slack("TABC", "list", "test-slack", now, 200), id) {
 		t.Fatal("no scoped ask")
 	}
-	tele := func(chat int, want int) string {
-		raw := fmt.Sprintf(`{"message":{"chat":{"id":%d,"type":"private"},"date":%d,"from":{"id":100,"is_bot":false},"text":"/bugsnitch resume %s 1"}}`, chat, now, id)
+	telegram := func(raw string, want int) string {
+		t.Helper()
 		r := httptest.NewRequest("POST", "/hooks/telegram", strings.NewReader(raw))
 		r.Header.Set("X-Telegram-Bot-Api-Secret-Token", "test-telegram")
 		w := httptest.NewRecorder()
@@ -57,9 +57,15 @@ func TestChatDecisionAcrossSignedEndpoints(t *testing.T) {
 		}
 		return w.Body.String()
 	}
-	tele(101, 403)
+	message := func(chat int, content string) string {
+		return fmt.Sprintf(`{"message":{"chat":{"id":%d,"type":"private"},"date":%d,"from":{"id":100,"is_bot":false},%s}}`, chat, now, content)
+	}
+	command := fmt.Sprintf(`"text":"/bugsnitch resume %s 1"`, id)
+	telegram(message(101, command), 403)
+	telegram(message(100, `"text":42`), 403)
+	telegram(message(100, `"photo":[{"file_id":"sample"}]`), 200)
 	for range 2 {
-		if !strings.Contains(tele(100, 200), "Resume dispatch recorded") {
+		if !strings.Contains(telegram(message(100, command), 200), "Resume dispatch recorded") {
 			t.Fatal("did not confirm decision")
 		}
 	}

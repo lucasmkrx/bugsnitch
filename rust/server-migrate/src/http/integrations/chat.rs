@@ -7,6 +7,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
 };
 use hmac::{Hmac, Mac};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
@@ -73,6 +74,32 @@ pub(super) async fn slack(
     let msg=dispatch(&s,json!({"provider":"slack","tenant":form.get("team_id"),"user":form.get("user_id"),"text":form.get("text")})).await?;
     Ok(Json(json!({"response_type":"ephemeral","text":msg})))
 }
+#[derive(Deserialize)]
+struct TelegramUpdate {
+    message: TelegramMessage,
+}
+
+#[derive(Deserialize)]
+struct TelegramMessage {
+    from: TelegramUser,
+    chat: TelegramChat,
+    date: i64,
+    text: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct TelegramUser {
+    id: i64,
+    is_bot: bool,
+}
+
+#[derive(Deserialize)]
+struct TelegramChat {
+    id: i64,
+    #[serde(rename = "type")]
+    kind: String,
+}
+
 pub(super) async fn telegram(
     State(s): State<Shared>,
     h: HeaderMap,
@@ -88,18 +115,18 @@ pub(super) async fn telegram(
     {
         return Err(denied());
     }
-    let update: Value = serde_json::from_slice(&body).map_err(|_| denied())?;
-    let msg = &update["message"];
-    let user = msg["from"]["id"].as_i64().ok_or_else(denied)?;
+    let Json(update) = Json::<TelegramUpdate>::from_bytes(&body).map_err(|_| denied())?;
+    let msg = update.message;
+    let user = msg.from.id;
     if user <= 0
-        || msg["from"]["is_bot"] != false
-        || msg["chat"]["type"] != "private"
-        || msg["chat"]["id"] != user
-        || !msg["date"].as_i64().is_some_and(fresh)
+        || msg.from.is_bot
+        || msg.chat.kind != "private"
+        || msg.chat.id != user
+        || !fresh(msg.date)
     {
         return Err(denied());
     }
-    let Some(t) = msg["text"].as_str() else {
+    let Some(t) = msg.text else {
         return Ok(Json(json!({})));
     };
     let Some(args) = t.strip_prefix("/bugsnitch") else {

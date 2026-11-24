@@ -7,6 +7,7 @@ export interface Policy {
   autoTriage: boolean;
 }
 export interface Project extends Policy {
+  githubConnected?: boolean | null;
   retentionDays: number;
   preset: string;
   policyVersion: number;
@@ -59,6 +60,7 @@ export interface Decision {
   expiresAt: string;
 }
 export interface StageEvidence {
+  durationMs?: number;
   phase: string;
   candidateSha?: string;
   changedFiles: number;
@@ -77,6 +79,7 @@ export interface Attempt {
   evidence?: StageEvidence[];
   id: string;
   projectId: string;
+  deviceId?: string;
   machine: string;
   repository: string;
   issueNumber: number;
@@ -96,6 +99,17 @@ export interface Ticket {
   repository: string;
   title: string;
   state: string;
+  source?: string;
+  reason?: string;
+  linear?: {
+    delegated?: boolean;
+    id: string;
+    identifier: string;
+    title: string;
+    url: string;
+    state: string;
+    checkedAt: string;
+  } | null;
 }
 export interface Message {
   id: string;
@@ -166,10 +180,38 @@ export interface Pull {
   state: string;
   version: number;
   observedAt: string;
+  issueState?: string;
+  draft?: boolean;
+  signOff?: { at: string } | null;
+  queueDelivery?: {
+    state: string;
+    reason: string;
+    groupSha: string;
+    version: number;
+    head: string;
+    base: string;
+    target: string;
+    environment: string;
+    expiresAt: string;
+  };
   blockers: string[];
   autoMerge: boolean;
+  watching?: boolean;
   validation?: string;
   independentReview?: string;
+  mergedSha?: string;
+  handovers?:
+    | {
+        mergedSha: string;
+        environment: string;
+        build: string;
+        evidenceDigest: string;
+        summary: string;
+        testSteps: string;
+        recordedAt: string;
+        recordedBy: string;
+      }[]
+    | null;
 }
 export interface Publication {
   id: string;
@@ -186,6 +228,9 @@ export interface Publication {
   }[];
 }
 export interface Draft {
+  approvalVersion?: number;
+  reportVersion?: number;
+  policyVersion?: number;
   projectId: string;
   attemptId: string;
   candidateSha: string;
@@ -197,8 +242,27 @@ export interface Draft {
   updatedAt: string;
 }
 export interface State {
+  viewer?: {
+    name: string;
+    role: "owner" | "operator" | "approver";
+    projectId?: string | null;
+  };
   draftPRs: Draft[];
   publications: Publication[];
+  releases?: {
+    id: string;
+    name: string;
+    environment: string;
+    cancelledAt: string | null;
+    stages: {
+      projectId: string;
+      number: number;
+      status: string;
+      head: string;
+      target: string;
+    }[];
+  }[];
+  budget?: { monthlyTurns: number | null; usedTurns: number } | null;
   limits: { tickets: number; turns: number; version: number };
   workspace: {
     id: string;

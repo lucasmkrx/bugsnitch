@@ -116,7 +116,8 @@ pub(super) fn execute(db: &mut Connection, control: Control) -> Result<Vec<u8>, 
             let mut status = receipt(&tx, &id, &command, op.name(), version)?;
             if status == "apply_waiting" {
                 tx.execute("UPDATE journal_attempts SET version=version+1,
-                    data=json_set(data,'$.version',version+1,'$.state',?1,'$.reasonCode','','$.Message','Owner control applied','$.UpdatedAt',?2)
+                    data=json_set(data,'$.version',version+1,'$.state',?1,'$.reasonCode',
+                    CASE ?1 WHEN 'waiting' THEN 'owner_paused' ELSE '' END,'$.Message','Owner control applied','$.UpdatedAt',?2)
                     WHERE id=?3 AND version=?4", params![op.state(),at,id,version])?;
                 status = match op {
                     Operation::Stop => "finish_pending",
@@ -148,7 +149,7 @@ pub(super) fn execute(db: &mut Connection, control: Control) -> Result<Vec<u8>, 
             let op = pending(&tx, &id)?;
             let changed = tx.execute("UPDATE journal_attempts SET version=version+1,
                 data=CASE WHEN ?1 IS NULL THEN ?2 ELSE json_set(?2,'$.state',CASE ?1 WHEN 'stop' THEN 'cancelled'
-                ELSE 'waiting' END,'$.reasonCode','','$.Message','Owner control applied') END
+                ELSE 'waiting' END,'$.reasonCode',CASE ?1 WHEN 'pause' THEN 'owner_paused' ELSE '' END,'$.Message','Owner control applied') END
                 WHERE id=?3 AND version=?4 AND json_extract(?2,'$.id')=id AND json_extract(?2,'$.version')=version+1",
                 params![op,data,id,version])?;
             if changed == 0 {

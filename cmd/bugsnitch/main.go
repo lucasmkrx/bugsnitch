@@ -52,6 +52,7 @@ const usage = `Usage: bugsnitch COMMAND [OPTIONS]
   local-continue         Approve a plan or request a bounded correction
   local-show             Inspect the complete local stage evidence
   local-usage            Read metered model usage for an attempt
+  local-ship             Publish an exact reviewed branch and open its owner-approved draft PR
   local-steward          Repair failed CI or open review feedback on a published candidate
   local-publish          Publish the reviewed candidate to its exact attempt branch
   local-integrate-check  Validate a reviewed candidate with a selected target
@@ -283,6 +284,26 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 		return runner.AddProject(*w, *r, *p, conf)
+	case "local-ship":
+		id := fs.String("id", "", "completed local attempt")
+		version := fs.Int("version", 0, "completed attempt version")
+		candidate := fs.String("candidate", "", "exact reviewed candidate SHA")
+		target := fs.String("target", "", "owner-approved target branch")
+		wait := fs.Duration("wait", 10*time.Minute, "time to wait for approval and GitHub (up to one hour)")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		receipt, err := device.Ship(ctx, *id, *version, *candidate, *target, *wait, func(state string) {
+			if state == "awaiting_approval" {
+				fmt.Fprintln(os.Stderr, "Awaiting owner approval. Open this attempt in the dashboard, select the target and choose publication with local-ship.")
+			} else {
+				fmt.Fprintln(os.Stderr, "Draft delivery:", state)
+			}
+		})
+		if err != nil {
+			return err
+		}
+		return printJSON(receipt)
 	case "local-steward":
 		id := fs.String("id", "", "completed local attempt")
 		version := fs.Int("version", 0, "reviewed attempt version")

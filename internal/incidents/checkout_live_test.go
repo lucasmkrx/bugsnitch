@@ -85,14 +85,24 @@ func (site checkoutSite) deploy(t *testing.T, repo, sha, release string) string 
 			if withDSN == source {
 				t.Fatal("checkout fixture requires a blank DSN")
 			}
-			asset = []byte(strings.Replace(withDSN, "checkout-v1", release, 1))
+			if release == "" {
+				// Keep the bundle digest outside the files it identifies.
+				withDSN = strings.Replace(withDSN, `"checkout-v1"`, `(await (await fetch("/build.json")).json()).build`, 1)
+			} else {
+				withDSN = strings.Replace(withDSN, "checkout-v1", release, 1)
+			}
+			asset = []byte(withDSN)
 		default:
 			asset = checkoutGit(t, repo, "show", sha+":"+name)
 		}
 		write(t, filepath.Join(site.dir, name), asset)
 		fmt.Fprintf(sum, "%s %x\n", name, sha256.Sum256(asset))
 	}
-	return fmt.Sprintf("%x", sum.Sum(nil))
+	build := fmt.Sprintf("%x", sum.Sum(nil))
+	if release == "" {
+		write(t, filepath.Join(site.dir, "build.json"), []byte(fmt.Sprintf(`{"build":%q}`, build)))
+	}
+	return build
 }
 
 func browser(t *testing.T, origin, behavior, release string) map[string]any {
@@ -216,18 +226,17 @@ func checkoutIncidentRepair(t *testing.T) {
 	}
 	t.Logf("Local attempt %s: baseline %s failed; candidate %s passed node verify.mjs and independent review turn", a.ID, base, a.CandidateSHA)
 	fixture.Observe(incidents.Receipt{Kind: "fix", Candidate: a.CandidateSHA, Evidence: "Runner validation and independent review turn, attempt " + a.ID}, "Awaiting deployment")
-	build := "checkout-" + a.CandidateSHA[:12]
+	monitor := fixture.Monitor(a.CandidateSHA)
 	site := newCheckoutSite(t)
-	hash := site.deploy(t, a.Worktree, a.CandidateSHA, build)
-	const environment = "bugsnitch-fixture"
-	yes := true
-	for i, deploymentID := range []string{"checkout-deploy-1", "checkout-deploy-2"} {
-		if i == 1 && site.deploy(t, a.Worktree, a.CandidateSHA, build) != hash {
+	build := site.deploy(t, a.Worktree, a.CandidateSHA, "")
+	for deployment := 1; deployment <= 2; deployment++ {
+		if deployment == 2 && site.deploy(t, a.Worktree, a.CandidateSHA, "") != build {
 			t.Fatal("redeployed candidate has a different asset manifest")
 		}
-		fixture.Observe(incidents.Receipt{CommandID: deploymentID, Kind: "deployment", Environment: environment, Build: build, Candidate: a.CandidateSHA, Evidence: "Loopback static deployment manifest SHA-256 " + hash}, "Verification inconclusive")
+		fixture.Deployed(monitor, deployment, build)
+		started := time.Now().UTC()
 		browser(t, site.origin, "fixed", build)
-		fixture.Observe(incidents.Receipt{CommandID: deploymentID + "-validate", DeploymentID: deploymentID, Kind: "validation", Environment: environment, Build: build, Candidate: a.CandidateSHA, Positive: &yes, Evidence: "Chromium clicked Calculate shipping on the served build. The checkout displayed Free shipping applied. Manifest SHA-256 " + hash}, "Verified in environment")
+		fixture.Verified(monitor, deployment, build, started)
 	}
 	oldReport := browser(t, oldSite.origin, "broken", oldBuild)
 	fixture.Deliver(oldReport, false, 3)
@@ -238,5 +247,6 @@ func checkoutIncidentRepair(t *testing.T) {
 	oldReport["release"] = build
 	fixture.Deliver(oldReport, false, 4)
 	fixture.Observe(incidents.Receipt{}, "Needs triage")
-	t.Logf("Browser-validated deployment %s (%s), followed by fixture fixed-build recurrence", build, hash)
+	fixture.CheckGate(monitor, 2, build, "current-build recurrence", false)
+	t.Logf("Signed deployment evidence and browser-validated bundle %s, followed by fixture current-build recurrence", build)
 }

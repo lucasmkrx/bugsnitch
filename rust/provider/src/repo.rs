@@ -9,8 +9,11 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 pub enum Scope {
     Issues,
     ReadIssue,
+    Discover,
     Draft,
     Inspection,
+    QueueRead,
+    Queue,
 }
 
 pub struct Repository {
@@ -20,7 +23,8 @@ pub struct Repository {
     pub path: String,
     pub id: i64,
     pub scope: Scope,
-    app_id: i64,
+    pub installation: i64,
+    pub(crate) app_id: i64,
     bot: String,
 }
 
@@ -102,13 +106,27 @@ impl Repository {
         name: String,
         scope: Scope,
     ) -> Result<Self> {
-        if installation < 1 || id < 1 || !valid_name(&name) {
+        if installation < 1
+            || (if scope == Scope::Discover {
+                id != 0
+            } else {
+                id < 1
+            })
+            || !valid_name(&name)
+        {
             return Err(Error::Invalid);
         }
         let permissions = match scope {
+            Scope::Discover => json!({"metadata":"read"}),
             Scope::Issues => json!({"issues":"write"}),
             Scope::ReadIssue => json!({"issues":"read"}),
             Scope::Draft => json!({"contents":"read","issues":"read","pull_requests":"write"}),
+            Scope::QueueRead => {
+                json!({"contents":"read","pull_requests":"read","administration":"read","merge_queues":"read","checks":"read"})
+            }
+            Scope::Queue => {
+                json!({"contents":"read","pull_requests":"read","administration":"read","merge_queues":"write","checks":"write"})
+            }
             Scope::Inspection => {
                 json!({"contents":"read","issues":"read","pull_requests":"read","checks":"read","statuses":"read"})
             }
@@ -127,10 +145,22 @@ impl Repository {
         struct Auth {
             token: String,
         }
+        let (scope_request, identity_route) = if scope == Scope::Discover {
+            let (_, short_name) = name.split_once('/').ok_or(Error::Invalid)?;
+            (
+                json!({"repositories":[short_name],"permissions":permissions}),
+                format!("/repos/{name}"),
+            )
+        } else {
+            (
+                json!({"repository_ids":[id],"permissions":permissions}),
+                format!("/repositories/{id}"),
+            )
+        };
         let auth: Auth = client.request(
             &jwt,
             &format!("/app/installations/{installation}/access_tokens"),
-            Some(&json!({"repository_ids":[id],"permissions":permissions})),
+            Some(&scope_request),
             201,
         )?;
         if auth.token.is_empty() {
@@ -141,9 +171,11 @@ impl Repository {
             id: i64,
             full_name: String,
         }
-        let identity: Identity =
-            client.request(&auth.token, &format!("/repositories/{id}"), None, 200)?;
-        if identity.id != id || !identity.full_name.eq_ignore_ascii_case(&name) {
+        let identity: Identity = client.request(&auth.token, &identity_route, None, 200)?;
+        if identity.id <= 0
+            || (id != 0 && identity.id != id)
+            || !identity.full_name.eq_ignore_ascii_case(&name)
+        {
             return Err(Error::Response);
         }
         Ok(Self {
@@ -151,8 +183,9 @@ impl Repository {
             token: auth.token,
             path: format!("/repos/{name}"),
             name,
-            id,
+            id: identity.id,
             scope,
+            installation,
             app_id: app.id,
             bot: format!("{}[bot]", app.slug),
         })

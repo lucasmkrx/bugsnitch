@@ -85,6 +85,18 @@ type Issue struct {
 func (a *App) Repository(ctx context.Context, installation, repository int64, name string) (*Repository, error) {
 	return a.open(ctx, installation, repository, name, "issues")
 }
+
+// RepositoryID verifies the configured installation can see this exact repository name.
+func (a *App) RepositoryID(ctx context.Context, installation int64, name string) (int64, error) {
+	r, err := a.open(ctx, installation, 0, name, "discover")
+	if err != nil {
+		return 0, err
+	}
+	defer r.Close()
+	var id int64
+	err = r.call(ctx, fields{"op": "identity"}, &id)
+	return id, err
+}
 func (r *Repository) Create(ctx context.Context, title, body string) (Issue, error) {
 	var i Issue
 	err := r.call(ctx, fields{"op": "create", "title": title, "body": body}, &i)

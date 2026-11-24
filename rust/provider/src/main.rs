@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 mod client;
 mod pulls;
+mod queue;
 mod repo;
 
 use client::{Client, Error, Result};
@@ -28,6 +29,7 @@ enum Command {
         name: String,
         scope: Scope,
     },
+    Identity,
     Get {
         number: i64,
     },
@@ -58,6 +60,27 @@ enum Command {
         title: String,
         body: String,
     },
+    QueueSubject {
+        number: i64,
+        target: String,
+    },
+    QueueGroup {
+        group: String,
+        group_ref: String,
+        base: String,
+        head: String,
+    },
+    QueueCheck {
+        label: String,
+        sha: String,
+        request: String,
+    },
+    Enqueue {
+        number: i64,
+        base: String,
+        target: String,
+        head: String,
+    },
     Inspect {
         number: i64,
         issue: i64,
@@ -66,6 +89,7 @@ enum Command {
 
 fn call(r: &Repository, cmd: Command) -> Result<Value> {
     match cmd {
+        Command::Identity if r.scope == Scope::Discover => Ok(json!(r.id)),
         Command::Get { number } if matches!(r.scope, Scope::Issues | Scope::ReadIssue) => {
             Ok(json!(r.get(number)?))
         }
@@ -97,6 +121,36 @@ fn call(r: &Repository, cmd: Command) -> Result<Value> {
             title,
             body,
         } if r.scope == Scope::Draft => Ok(json!(r.create_draft(&head, &target, &title, &body)?)),
+        Command::QueueSubject { number, target }
+            if matches!(r.scope, Scope::QueueRead | Scope::Queue) =>
+        {
+            r.queue_subject(number, &target)
+        }
+        Command::QueueGroup {
+            group,
+            group_ref,
+            base,
+            head,
+        } if matches!(r.scope, Scope::QueueRead | Scope::Queue) => {
+            Ok(json!(r.queue_group(&group, &group_ref, &base, &head)?))
+        }
+        Command::QueueCheck {
+            sha,
+            request,
+            label,
+        } if r.scope == Scope::Queue => {
+            r.queue_check(&sha, &request, &label)?;
+            Ok(Value::Null)
+        }
+        Command::Enqueue {
+            number,
+            base,
+            target,
+            head,
+        } if r.scope == Scope::Queue => {
+            r.enqueue(number, &base, &target, &head)?;
+            Ok(Value::Null)
+        }
         Command::Inspect { number, issue } if r.scope == Scope::Inspection => {
             r.inspect(number, issue)
         }

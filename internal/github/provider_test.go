@@ -150,3 +150,44 @@ func TestProviderJWTScopedAuthRateLimitAndRedirect(t *testing.T) {
 		t.Fatal("pull request accepted as canonical issue", err)
 	}
 }
+
+func TestDiscoverRepositoryInConfiguredInstallation(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wrong atomic.Bool
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/app":
+			fmt.Fprint(w, `{"id":8,"slug":"fixture"}`)
+		case "/app/installations/2/access_tokens":
+			body, _ := io.ReadAll(r.Body)
+			if string(body) != `{"permissions":{"metadata":"read"},"repositories":["project"]}` {
+				t.Errorf("token scope: %s", body)
+			}
+			w.WriteHeader(201)
+			fmt.Fprint(w, `{"token":"local-fixture"}`)
+		case "/repos/org/project":
+			if wrong.Load() {
+				fmt.Fprint(w, `{"id":31,"full_name":"other/project"}`)
+			} else {
+				fmt.Fprint(w, `{"id":31,"full_name":"ORG/project"}`)
+			}
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer api.Close()
+	app, err := NewLoopbackFixture("fixture", fixtureKey(t, key, true), api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id, err := app.RepositoryID(t.Context(), 2, "org/project"); id != 31 || err != nil {
+		t.Fatal(id, err)
+	}
+	wrong.Store(true)
+	if _, err := app.RepositoryID(t.Context(), 2, "org/project"); err == nil {
+		t.Fatal("accepted wrong repository")
+	}
+}

@@ -44,12 +44,6 @@ type Client struct {
 	dir          string
 	next         int
 }
-
-type ModelUsage struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
-}
-
 type Result struct {
 	Usage      *ModelUsage `json:"usage,omitempty"`
 	DurationMS *int64      `json:"-"`

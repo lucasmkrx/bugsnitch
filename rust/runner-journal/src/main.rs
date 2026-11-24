@@ -19,6 +19,8 @@ mod macos_group;
 mod operations;
 mod schema;
 mod validation;
+#[cfg(any(target_os = "macos", target_os = "linux"))]
+mod validation_sandbox;
 mod worktree;
 
 const PROTOCOL: u8 = 1;

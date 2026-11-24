@@ -52,6 +52,7 @@ const usage = `Usage: bugsnitch COMMAND [OPTIONS]
   local-continue         Approve a plan or request a bounded correction
   local-show             Inspect the complete local stage evidence
   local-usage            Read metered model usage for an attempt
+  local-publish          Publish the reviewed candidate to its exact attempt branch
   local-integrate-check  Validate a reviewed candidate with a selected target
   local-integrations     Inspect combined-check receipts
   local-list             Show local attempt summaries
@@ -281,6 +282,25 @@ func run(ctx context.Context, args []string) error {
 			return err
 		}
 		return runner.AddProject(*w, *r, *p, conf)
+	case "local-publish":
+		id := fs.String("id", "", "completed attempt")
+		note := fs.Bool("post-note", false, "post change and undo instructions on the corrected PR")
+		version := fs.Int("version", 0, "reviewed attempt version")
+		candidate := fs.String("candidate", "", "reviewed commit SHA")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		receipt, err := runner.PublishCandidate(ctx, *id, *version, *candidate)
+		if err != nil {
+			return err
+		}
+		if err = printJSON(receipt); err != nil {
+			return err
+		}
+		if *note {
+			return runner.PostStewardNote(ctx, *id, receipt)
+		}
+		return nil
 	case "local-integrate-check", "local-integrations":
 		id := fs.String("id", "", "reviewed local attempt")
 		target := fs.String("target", "", "full local branch or origin tracking ref")
@@ -398,7 +418,7 @@ func run(ctx context.Context, args []string) error {
 }
 func main() {
 	runner.MeasureWorker, runner.MeasureGeneral = device.MeasureWorker, device.MeasureGeneral
-	runner.CheckWorker = device.CheckWorker
+	runner.CheckWorker, runner.CheckPublication = device.CheckWorker, device.CheckPublication
 	runner.BindGeneral, runner.SubmitGeneral = device.BindGeneral, device.SubmitGeneral
 	runner.BeforeStart, runner.AfterFinish = device.Admit, device.Finish
 	runner.BeforeTurn, runner.AfterTurn = device.TurnStart, device.TurnEnd

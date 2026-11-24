@@ -53,6 +53,7 @@ type StageSettings struct {
 	TimeoutSeconds int    `json:"timeoutSeconds,omitempty"`
 }
 type Config struct {
+	ValidationSandbox        string                   `json:"validationSandbox,omitempty"`
 	Stages                   map[string]StageSettings `json:"stages,omitempty"`
 	ValidationTimeoutSeconds int                      `json:"validationTimeoutSeconds,omitempty"`
 	Files                    []string                 `json:"files"`
@@ -72,6 +73,7 @@ type Finding struct {
 	Rationale string `json:"rationale"`
 }
 type Artifact struct {
+	ValidationSandbox                                                                    string            `json:"validationSandbox,omitempty"`
 	Usage                                                                                *agent.ModelUsage `json:"usage,omitempty"`
 	DurationMS                                                                           *int64            `json:"durationMs,omitempty"`
 	ID                                                                                   string            `json:"id,omitempty"`

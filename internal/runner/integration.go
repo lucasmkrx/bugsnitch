@@ -9,24 +9,25 @@ import (
 )
 
 type IntegrationCheck struct {
-	ID              string   `json:"id"`
-	Attempt         string   `json:"attemptId"`
-	Workspace       string   `json:"workspace"`
-	Repository      string   `json:"repository"`
-	TargetRef       string   `json:"targetRef"`
-	TargetSHA       string   `json:"targetSha"`
-	CandidateSHA    string   `json:"candidateSha"`
-	CombinedSHA     string   `json:"combinedSha,omitempty"`
-	CriteriaVersion string   `json:"criteriaVersion"`
-	Policy          string   `json:"policy"`
-	Worktree        string   `json:"worktree"`
-	Status          string   `json:"status"`
-	ExitCode        *int     `json:"exitCode,omitempty"`
-	Command         []string `json:"command"`
-	CreatedAt       string   `json:"createdAt"`
-	UpdatedAt       string   `json:"updatedAt"`
-	CleanedAt       string   `json:"cleanedAt,omitempty"`
-	ArchiveRef      string   `json:"archiveRef,omitempty"`
+	ValidationSandbox string   `json:"validationSandbox,omitempty"`
+	ID                string   `json:"id"`
+	Attempt           string   `json:"attemptId"`
+	Workspace         string   `json:"workspace"`
+	Repository        string   `json:"repository"`
+	TargetRef         string   `json:"targetRef"`
+	TargetSHA         string   `json:"targetSha"`
+	CandidateSHA      string   `json:"candidateSha"`
+	CombinedSHA       string   `json:"combinedSha,omitempty"`
+	CriteriaVersion   string   `json:"criteriaVersion"`
+	Policy            string   `json:"policy"`
+	Worktree          string   `json:"worktree"`
+	Status            string   `json:"status"`
+	ExitCode          *int     `json:"exitCode,omitempty"`
+	Command           []string `json:"command"`
+	CreatedAt         string   `json:"createdAt"`
+	UpdatedAt         string   `json:"updatedAt"`
+	CleanedAt         string   `json:"cleanedAt,omitempty"`
+	ArchiveRef        string   `json:"archiveRef,omitempty"`
 }
 
 const integrationTable = "CREATE TABLE IF NOT EXISTS integration_checks(id TEXT PRIMARY KEY,attempt_id TEXT NOT NULL REFERENCES journal_attempts(id),data TEXT NOT NULL); "
@@ -139,7 +140,7 @@ func CheckCombined(ctx context.Context, id, ref string) (IntegrationCheck, error
 		return c, err
 	}
 	c = IntegrationCheck{ID: checkID, Attempt: id, Workspace: a.Workspace, Repository: a.Repository,
-		TargetRef: ref, CandidateSHA: a.CandidateSHA, CriteriaVersion: a.Issue.UpdatedAt, Policy: "local-reviewed-files/v1",
+		TargetRef: ref, CandidateSHA: a.CandidateSHA, CriteriaVersion: a.Issue.UpdatedAt, Policy: "local-reviewed-files/v1", ValidationSandbox: a.Project.Config.ValidationSandbox,
 		Worktree: filepath.Join(dir, "integration", checkID), Status: "requested", Command: a.Project.Config.Validate, CreatedAt: now()}
 	resolved, err := integrationGit(ctx, "resolve", c, a)
 	if err != nil {

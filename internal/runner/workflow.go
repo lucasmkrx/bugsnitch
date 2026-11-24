@@ -498,7 +498,7 @@ func validateCandidate(ctx context.Context, a *Attempt) error {
 		duration = activityDuration(started)
 		return validationErr
 	})
-	a.add(Artifact{Phase: "validate", DurationMS: duration, Command: a.Project.Config.Validate, ExitCode: code})
+	a.add(Artifact{Phase: "validate", ValidationSandbox: a.Project.Config.ValidationSandbox, DurationMS: duration, Command: a.Project.Config.Validate, ExitCode: code})
 	if err != nil {
 		return err
 	}

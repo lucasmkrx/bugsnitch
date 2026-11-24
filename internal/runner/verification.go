@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/lucasmkrx/bugsnitch/internal/github"
@@ -55,18 +54,8 @@ func verificationIssue(ctx context.Context, selected Issue) (Issue, error) {
 	if errors.As(err, &status) && (status.Status == 401 || status.Status == 403 || status.Status == 404) && os.Getenv("BUGSNITCH_GITHUB_READ_TOKEN") == "" {
 		// gh can read private issues with the operator's existing login. Keep
 		// credential material inside gh and restrict the request to GitHub.
-		if gh, lookupErr := exec.LookPath("gh"); lookupErr == nil {
-			read, cancel := context.WithTimeout(ctx, 20*time.Second)
-			defer cancel()
-			path := fmt.Sprintf("repos/%s/issues/%d", selected.Repository, selected.Number)
-			cmd := exec.CommandContext(read, gh, "api", "--hostname", "github.com", "--method", "GET", path)
-			cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1")
-			output := &capped{max: 1 << 20}
-			cmd.Stdout = output
-			if cmd.Run() != nil || output.overflow || json.Unmarshal(output.buffer.Bytes(), &record) != nil {
-				return Issue{}, errors.New("unable to read the selected GitHub issue with gh")
-			}
-			err = nil
+		if _, lookupErr := exec.LookPath("gh"); lookupErr == nil {
+			record, err = readIssueWithCLI(ctx, selected.Repository, selected.Number)
 		}
 	}
 	if err != nil {

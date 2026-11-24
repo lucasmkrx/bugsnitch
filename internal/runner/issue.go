@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -59,8 +60,29 @@ type githubIssueRecord struct {
 	URL string `json:"html_url"`
 }
 
+func readIssueWithCLI(ctx context.Context, repository string, number int) (githubIssueRecord, error) {
+	var record githubIssueRecord
+	if !repoPattern.MatchString(repository) || number < 1 {
+		return record, errors.New("invalid GitHub issue identity")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	route := fmt.Sprintf("repos/%s/issues/%d", repository, number)
+	cmd := exec.CommandContext(ctx, "gh", "api", "--hostname", "github.com", "--method", "GET", route)
+	cmd.Env = append(os.Environ(), "GH_PROMPT_DISABLED=1")
+	output := &capped{max: 1 << 20}
+	cmd.Stdout = output
+	if cmd.Run() != nil || output.overflow || json.Unmarshal(output.buffer.Bytes(), &record) != nil {
+		return record, errors.New("unable to read the selected GitHub issue with gh")
+	}
+	return record, nil
+}
+
 func fetchGitHubIssue(ctx context.Context, repository string, number int) (githubIssueRecord, error) {
 	var record githubIssueRecord
+	if os.Getenv("BUGSNITCH_GITHUB_AUTH") == "gh" && os.Getenv("BUGSNITCH_GITHUB_READ_TOKEN") == "" {
+		return readIssueWithCLI(ctx, repository, number)
+	}
 	req, err := http.NewRequestWithContext(ctx, "GET", fmt.Sprintf("https://api.github.com/repos/%s/issues/%d", repository, number), nil)
 	if err != nil {
 		return record, err

@@ -72,7 +72,23 @@ pub(super) fn routes() -> Router<Shared> {
             },
         ),
     );
+    r = r.route(
+        "/api/v1/projects/{project}/review-subjects",
+        get(|State(s), Extension(o), Path(p)| {
+            command(s, o, "policy_cases.subjects", p, None, Value::Null)
+        }),
+    );
+    r = r.route(
+        "/api/v1/projects/{project}/policy-cases",
+        get(|State(s), Extension(o), Path(p)| {
+            command(s, o, "policy_cases.export", p, None, Value::Null)
+        }),
+    );
     for (path, op) in [
+        (
+            "/api/v1/projects/{project}/pulls/{number}/policy-case",
+            "policy_cases.label",
+        ),
         ("/api/v1/projects", "project.create"),
         ("/api/v1/releases", "release.create"),
         ("/api/v1/releases/{id}/cancel", "release.cancel"),

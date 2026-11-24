@@ -212,6 +212,9 @@ func AddProject(w, r, path string, config Config) error {
 	if len(config.Files) == 0 || len(config.Files) > 32 || len(config.Validate) == 0 || len(config.Validate) > 48 {
 		return errors.New("choose 1–32 tracked files and a validation argument vector")
 	}
+	if config.ReviewDepth != "" && reviewLevel(config.ReviewDepth) == 0 {
+		return errors.New("reviewDepth must be quick, standard or deep")
+	}
 	if config.ValidationSandbox != "" && config.ValidationSandbox != "isolated" {
 		return errors.New("unknown validation sandbox")
 	}

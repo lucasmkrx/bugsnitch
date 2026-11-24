@@ -537,26 +537,10 @@ func reviewCandidate(ctx context.Context, a *Attempt) error {
 	if err != nil {
 		return err
 	}
-	reviewer, err := turn(ctx, a, directive+" Independently inspect the actual diff against the issue and the validation command and exit result. Identify defects and unverified acceptance criteria. Report important findings that should block readiness.", map[string]any{"issue": a.Issue, "diff": diff, "evidence": verification}, reviewSchema)
+	v, important, err := inspectCandidate(ctx, a, a.BaseSHA, diff, verification)
 	if err != nil {
 		return err
 	}
-	var v review
-	if json.Unmarshal([]byte(reviewer.Text), &v) != nil || v.Summary == "" || len(v.Findings) > 64 {
-		return errors.New("invalid review artifact")
-	}
-	important := false
-	for _, f := range v.Findings {
-		if f.Location == "" || f.Rationale == "" || (f.Severity != "important" && f.Severity != "minor") {
-			return errors.New("incomplete review finding")
-		}
-		if f.Severity == "important" {
-			important = true
-		}
-	}
-	rev := recordTurn(a, reviewer, v.Summary)
-	rev.Findings = v.Findings
-	a.add(rev)
 	if important {
 		if a.Rounds >= 2 {
 			return errors.New("important review findings remain after two revisions; owner intervention required")

@@ -60,6 +60,17 @@ const DRIFT: &str = "
     WHERE (z.workspace_id,z.project_id,z.number)=(ready.workspace_id,ready.project_id,ready.number)
     RETURNING z.workspace_id,z.project_id,''::text,z.number,z.next_check::text";
 
+const PULL_WATCH: &str = "
+    WITH ready AS (
+        SELECT o.workspace_id,o.project_id,o.number FROM pull_observations o
+        JOIN github_mappings m USING(workspace_id,project_id)
+        WHERE m.active AND o.watching AND o.snapshot->>'state'='OPEN' AND o.next_watch<=now()
+        ORDER BY o.next_watch,o.workspace_id,o.project_id,o.number FOR UPDATE OF o SKIP LOCKED LIMIT 1
+    )
+    UPDATE pull_observations o SET next_watch=clock_timestamp()+interval '2 minutes' FROM ready
+    WHERE (o.workspace_id,o.project_id,o.number)=(ready.workspace_id,ready.project_id,ready.number)
+    RETURNING o.workspace_id,o.project_id,''::text,o.number,o.next_watch::text";
+
 // The same eligibility query drives both the cheap readiness hint and the locked
 // qualification operation. Another server may consume a hinted row first.
 macro_rules! qualifying {
@@ -87,6 +98,7 @@ enum Lane {
     Draft,
     PlannedIssue,
     Drift,
+    PullWatch,
 }
 
 impl Lane {
@@ -105,13 +117,14 @@ impl Lane {
             Self::Draft => ("draft", DRAFT),
             Self::PlannedIssue => ("planned_issue", PLANNED_ISSUE),
             Self::Drift => ("drift", DRIFT),
+            Self::PullWatch => ("pull_watch", PULL_WATCH),
         }
     }
 }
 
 fn schedule(db: &Db<'_>, input: Value) -> Result<Value> {
     let lanes: Vec<Lane> = serde_json::from_value(input)?;
-    if lanes.len() > 6 {
+    if lanes.len() > 7 {
         return Err(Error::bad("Too many background queues"));
     }
     if lanes.is_empty() {
@@ -166,6 +179,7 @@ pub fn handle(db: &Db<'_>, op: &str, input: Value) -> Result<Value> {
         "jobs.claim_draft" => DRAFT,
         "jobs.claim_planned_issue" => PLANNED_ISSUE,
         "jobs.claim_drift" => DRIFT,
+        "jobs.claim_pull_watch" => PULL_WATCH,
         "jobs.process_incident" => return process_incident(db),
         "jobs.qualify_incident" => return qualify_incident(db),
         _ => return Err(Error::bad("Unknown background job")),

@@ -47,6 +47,7 @@ const usage = `Usage: bugsnitch COMMAND [OPTIONS]
   local-verification     Inspect a saved verification receipt
   local-continue         Approve a plan or request a bounded correction
   local-show             Inspect the complete local stage evidence
+  local-usage            Read metered model usage for an attempt
   local-integrate-check  Validate a reviewed candidate with a selected target
   local-integrations     Inspect combined-check receipts
   local-list             Show local attempt summaries
@@ -90,6 +91,8 @@ func run(ctx context.Context, args []string) error {
 		return device.LocalRun(ctx, args[1:], os.Stdout)
 	case "local-limits":
 		return device.LocalLimits(args[1:], os.Stdout)
+	case "local-usage":
+		return localUsage(args[1:])
 	case "share-diff":
 		return device.Share(args[1:])
 	case "next", "pair", "rotate", "unpair", "register", "sync", "status":
@@ -380,6 +383,7 @@ func run(ctx context.Context, args []string) error {
 	return fmt.Errorf("unknown command %q; run bugsnitch help", args[0])
 }
 func main() {
+	runner.MeasureWorker, runner.MeasureGeneral = device.MeasureWorker, device.MeasureGeneral
 	runner.CheckWorker = device.CheckWorker
 	runner.BindGeneral, runner.SubmitGeneral = device.BindGeneral, device.SubmitGeneral
 	runner.BeforeStart, runner.AfterFinish = device.Admit, device.Finish

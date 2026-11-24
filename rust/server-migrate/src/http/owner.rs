@@ -85,6 +85,7 @@ pub(super) fn routes() -> Router<Shared> {
         ),
         ("/api/v1/projects/{id}/retention", "project.retention"),
         ("/api/v1/limits", "workspace.limits"),
+        ("/api/v1/budget", "workspace.budget"),
         ("/api/v1/devices/{id}/limits", "device.limits"),
         ("/api/v1/projects/{id}/dispatch", "project.dispatch"),
         ("/api/v1/decisions/{id}/answer", "decision.answer"),

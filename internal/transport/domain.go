@@ -104,6 +104,7 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 		"project.create":         s.createProject,
 		"project.connect_github": s.connectGitHub,
 		"project.policy":         s.policy, "project.retention": s.retention, "workspace.limits": s.limits,
+		"workspace.budget": s.budget,
 		"device.limits":    s.deviceLimits,
 		"project.dispatch": s.dispatch, "decision.answer": s.answer, "message.create": s.message,
 		"plan.propose": s.proposePlan, "plan.approve": s.approvePlan, "plan.evidence": s.attestPrerequisite,

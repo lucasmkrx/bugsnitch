@@ -173,3 +173,31 @@ func TestGeneralAndWorkerTurnsShareOneBudget(t *testing.T) {
 		t.Fatal("revoked computer admitted")
 	}
 }
+
+func TestWorkspaceMonthlyTurnBudget(t *testing.T) {
+	s := fixture(t)
+	owner := login(t, s)
+	token, device, _ := runningDevice(t, owner)
+	owner.post(t, "budget", object{"monthlyTurns": 1, "version": 1}, 200)
+	send := func(o turns.Operation, want int) {
+		t.Helper()
+		code, r := owner.req(t, "POST", "/api/v1/device/model-permit", o, token)
+		if code != want {
+			t.Fatal(code, r)
+		}
+	}
+	turn := turns.Operation{Protocol: 1, ID: random(16), Workspace: "personal", Device: device, Role: "planner", Version: 1}
+	send(turn, 200)
+	send(turn, 200)
+	turn.Version = 2
+	send(turn, 200)
+	turn.ID = random(16)
+	turn.Version = 1
+	send(turn, 409)
+	_, state := owner.req(t, "GET", "/api/v1/state", nil, "")
+	if state["budget"].(object)["usedTurns"] != float64(1) {
+		t.Fatal(state["budget"])
+	}
+	owner.post(t, "budget", object{"monthlyTurns": nil, "version": 2}, 200)
+	send(turn, 200)
+}

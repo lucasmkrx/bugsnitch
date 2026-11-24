@@ -27,7 +27,7 @@ func workerPlan(ctx context.Context, a *Attempt, files map[string]string, ordina
 		prompt += " Return disposition ready with an empty question only for ordinary work within the approved issue. If scope, acceptance, architecture or a material choice needs the owner's judgment, return needs_owner with the smallest concrete question."
 		schema = passPlanSchema
 	}
-	r, err := turn(ctx, a, prompt, map[string]any{"issue": a.Issue, "files": files}, schema)
+	r, err := turn(ctx, a, prompt, map[string]any{"issue": a.Issue, "files": files, "editDirectories": a.Project.Config.EditDirectories}, schema)
 	if err != nil {
 		return err
 	}

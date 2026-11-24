@@ -54,6 +54,7 @@ type StageSettings struct {
 }
 type Config struct {
 	ReviewDepth              string                   `json:"reviewDepth,omitempty"`
+	EditDirectories          []string                 `json:"editDirectories,omitempty"`
 	ValidationSandbox        string                   `json:"validationSandbox,omitempty"`
 	Stages                   map[string]StageSettings `json:"stages,omitempty"`
 	RequirePlanReview        bool                     `json:"requirePlanReview,omitempty"`
@@ -91,7 +92,8 @@ type Artifact struct {
 }
 type CandidateIntent struct {
 	Parent   string
-	SHA256   map[string]string
+	SHA256   map[string]string // An empty digest records a deletion.
+	Modes    map[string]string `json:",omitempty"` // Git modes of new files, including rename destinations.
 	Artifact Artifact
 }
 type Attempt struct {
@@ -235,7 +237,7 @@ func (a *Attempt) add(artifact Artifact) {
 	artifact.BaseSHA = a.BaseSHA
 	artifact.CandidateSHA = a.CandidateSHA
 	artifact.IssueVersion = a.Issue.UpdatedAt
-	artifact.Policy = "local-reviewed-files/v1"
+	artifact.Policy = a.Project.Config.editPolicy()
 	identity, _ := json.Marshal(artifact)
 	artifact.ID = fmt.Sprintf("%x", sha256.Sum256(identity))
 	a.Artifacts = append(a.Artifacts, artifact)

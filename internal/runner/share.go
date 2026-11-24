@@ -21,7 +21,16 @@ func DiffForSharing(id string) (Attempt, string, error) {
 		return a, "", err
 	}
 	args := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=2", a.BaseSHA, a.CandidateSHA, "--"}
-	args = append(args, a.Project.Config.Files...)
+	changed, err := changedPaths(a.Worktree, a.BaseSHA, a.CandidateSHA)
+	if err != nil || len(changed) == 0 {
+		return a, "", errors.New("cannot identify candidate files")
+	}
+	for _, p := range changed {
+		if !a.Project.Config.allowsFile(p) {
+			return a, "", errors.New("unapproved path in candidate diff")
+		}
+	}
+	args = append(args, changed...)
 	raw, err := git(a.Worktree, args...)
 	if err != nil {
 		return a, "", err

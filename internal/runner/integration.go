@@ -140,7 +140,7 @@ func CheckCombined(ctx context.Context, id, ref string) (IntegrationCheck, error
 		return c, err
 	}
 	c = IntegrationCheck{ID: checkID, Attempt: id, Workspace: a.Workspace, Repository: a.Repository,
-		TargetRef: ref, CandidateSHA: a.CandidateSHA, CriteriaVersion: a.Issue.UpdatedAt, Policy: "local-reviewed-files/v1", ValidationSandbox: a.Project.Config.ValidationSandbox,
+		TargetRef: ref, CandidateSHA: a.CandidateSHA, CriteriaVersion: a.Issue.UpdatedAt, Policy: a.Project.Config.editPolicy(), ValidationSandbox: a.Project.Config.ValidationSandbox,
 		Worktree: filepath.Join(dir, "integration", checkID), Status: "requested", Command: a.Project.Config.Validate, CreatedAt: now()}
 	resolved, err := integrationGit(ctx, "resolve", c, a)
 	if err != nil {

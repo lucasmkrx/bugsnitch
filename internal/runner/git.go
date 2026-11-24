@@ -148,7 +148,11 @@ func (a *Attempt) cleanAt(sha string) error { return a.worktreeOp("clean", sha) 
 func (a *Attempt) contextFiles() (map[string]string, error) {
 	files := map[string]string{}
 	total := 0
-	for _, p := range a.Project.Config.Files {
+	names, err := a.discoverFiles()
+	if err != nil {
+		return nil, err
+	}
+	for _, p := range names {
 		tracked, err := git(a.Worktree, "ls-files", "-z", "--error-unmatch", "--", p)
 		if err != nil || tracked != p+"\x00" {
 			return nil, errors.New("approved source must be tracked in the recorded revision")
@@ -209,14 +213,22 @@ func AddProject(w, r, path string, config Config) error {
 			return errors.New("unknown model stage provider")
 		}
 	}
-	if len(config.Files) == 0 || len(config.Files) > 32 || len(config.Validate) == 0 || len(config.Validate) > 48 {
-		return errors.New("choose 1–32 tracked files and a validation argument vector")
+	if len(config.Files)+len(config.EditDirectories) == 0 || len(config.Files) > 32 || len(config.EditDirectories) > 16 || len(config.Validate) == 0 || len(config.Validate) > 48 {
+		return errors.New("choose approved files or edit directories and a validation argument vector")
 	}
 	if config.ReviewDepth != "" && reviewLevel(config.ReviewDepth) == 0 {
 		return errors.New("reviewDepth must be quick, standard or deep")
 	}
 	if config.ValidationSandbox != "" && config.ValidationSandbox != "isolated" {
 		return errors.New("unknown validation sandbox")
+	}
+	for _, scope := range config.EditDirectories {
+		if !safeRelative(scope) {
+			return errors.New("invalid edit directory")
+		}
+		if err := checkDirectory(dir, scope); err != nil {
+			return err
+		}
 	}
 	if !filepath.IsAbs(config.Validate[0]) {
 		return errors.New("validation executable must be an absolute path")

@@ -3,11 +3,10 @@ package runner
 
 import (
 	"context"
-	"crypto/sha256"
+
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -325,7 +324,6 @@ func recordTurn(a *Attempt, r agent.Result, summary string) Artifact {
 	return Artifact{DurationMS: r.DurationMS, Phase: a.Phase, Model: r.Model, Thread: r.Thread, Turn: r.Turn, Summary: summary, Usage: r.Usage}
 }
 
-type edit struct{ Path, Content string }
 type implementation struct {
 	Summary string
 	Edits   []edit
@@ -403,25 +401,28 @@ func steps(ctx context.Context, a *Attempt, ordinaryPass bool) error {
 	if err != nil {
 		return err
 	}
-	r, err := turn(ctx, a, directive+" Return the complete UTF-8 replacement content of each affected approved file. Limit changes to the approved files. Preserve existing validation and describe which criteria the change addresses.", map[string]any{"issue": a.Issue, "plan": a.Artifacts[0].Summary, "files": files, "feedback": a.Feedback, "ownerQuestion": a.OwnerQuestion, "ownerAnswer": a.OwnerAnswer, "recentFindings": a.Artifacts[len(a.Artifacts)-1].Findings}, implementSchema)
+	prompt := directive + " Return the complete UTF-8 replacement content of each affected approved file. Preserve existing validation and describe which criteria the change addresses."
+	schema := implementSchema
+	if len(a.Project.Config.EditDirectories) > 0 {
+		prompt = directive + " Return scoped file operations. Use create or replace with complete UTF-8 content, delete with empty content, and rename with a new destination and empty content. Use an empty destination for all other operations. Only create, rename or delete within editDirectories. Explicit files are replace-only. Preserve existing validation."
+		schema = scopedImplementSchema
+	}
+	r, err := turn(ctx, a, prompt, map[string]any{"issue": a.Issue, "plan": a.Artifacts[0].Summary, "files": files, "editDirectories": a.Project.Config.EditDirectories, "explicitFiles": a.Project.Config.Files, "feedback": a.Feedback, "ownerQuestion": a.OwnerQuestion, "ownerAnswer": a.OwnerAnswer, "recentFindings": a.Artifacts[len(a.Artifacts)-1].Findings}, schema)
 	if err != nil {
 		return err
 	}
 	var work implementation
-	if json.Unmarshal([]byte(r.Text), &work) != nil || work.Summary == "" || len(work.Edits) == 0 || len(work.Edits) > len(files) {
+	if json.Unmarshal([]byte(r.Text), &work) != nil || work.Summary == "" {
 		return errors.New("invalid implementation artifact")
 	}
-	seen := map[string]bool{}
-	for _, e := range work.Edits {
-		if _, ok := files[e.Path]; !ok || seen[e.Path] || len(e.Content) > 65536 || strings.ContainsRune(e.Content, '\x00') {
-			return errors.New("edit outside approved file contract")
-		}
-		seen[e.Path] = true
+	changes, err := a.fileChanges(files, work.Edits)
+	if err != nil {
+		return err
 	}
 	if ordinaryPass {
-		for _, edit := range work.Edits {
-			if files[edit.Path] != edit.Content && protectedChange(edit.Path) {
-				a.OwnerQuestion = "The proposed change touches " + edit.Path + ". Which changes to this sensitive path do you approve for this ticket?"
+		for _, change := range changes {
+			if protectedChange(change.path) {
+				a.OwnerQuestion = "The proposed change touches " + change.path + ". Which changes to this sensitive path do you approve for this ticket?"
 				a.Message = "Sensitive change requires owner feedback."
 				a.State = "waiting"
 				a.ReasonCode = protocol.OwnerInputRequired
@@ -435,56 +436,19 @@ func steps(ctx context.Context, a *Attempt, ordinaryPass bool) error {
 	if err = boundary(ctx, a.ID); err != nil {
 		return err
 	}
-	manifest := map[string]string{}
-	for _, e := range work.Edits {
-		if files[e.Path] != e.Content {
-			manifest[e.Path] = fmt.Sprintf("%x", sha256.Sum256([]byte(e.Content)))
-		}
-	}
-	if len(manifest) == 0 {
-		return errors.New("worker proposed no change")
-	}
 	if _, err = lease(ctx, subject(a), false); err != nil {
 		return err
 	}
-	a.Intent = &CandidateIntent{Parent: expected, SHA256: manifest, Artifact: recordTurn(a, r, work.Summary)}
+	a.Intent = intentFor(expected, changes, recordTurn(a, r, work.Summary))
 	if err = a.save(); err != nil {
 		return err
 	}
-	for _, e := range work.Edits {
-		current, err := readFile(a.Worktree, e.Path)
-		if err != nil || current != files[e.Path] {
-			return errors.New("approved file changed during turn")
-		}
-		// A same-directory replacement avoids modifying other files through hard links.
-		path := filepath.Join(a.Worktree, e.Path)
-		st, err := os.Stat(path)
-		if err != nil {
-			return err
-		}
-		f, err := os.CreateTemp(filepath.Dir(path), ".bugsnitch-edit-*")
-		if err != nil {
-			return err
-		}
-		err = f.Chmod(st.Mode().Perm())
-		if err == nil {
-			_, err = f.WriteString(e.Content)
-		}
-		closeErr := f.Close()
-		if err == nil {
-			err = closeErr
-		}
-		if err == nil {
-			err = os.Rename(f.Name(), path)
-		}
-		if err != nil {
-			os.Remove(f.Name())
-			return err
-		}
+	if err = a.applyChanges(changes); err != nil {
+		return err
 	}
-	paths := make([]string, 0, len(seen))
-	for p := range seen {
-		paths = append(paths, p)
+	paths := make([]string, 0, len(changes))
+	for _, change := range changes {
+		paths = append(paths, change.path)
 	}
 	slices.Sort(paths)
 	if _, err = lease(ctx, subject(a), false); err != nil {
@@ -503,6 +467,9 @@ func steps(ctx context.Context, a *Attempt, ordinaryPass bool) error {
 	if err != nil {
 		return err
 	}
+	if err := a.verifyIntent(a.CandidateSHA); err != nil {
+		return err
+	}
 	paths, err = changedPaths(a.Worktree, a.BaseSHA, a.CandidateSHA)
 	if err != nil {
 		return err
@@ -511,7 +478,7 @@ func steps(ctx context.Context, a *Attempt, ordinaryPass bool) error {
 		return errors.New("candidate has no changes from the base")
 	}
 	for _, p := range paths {
-		if !slices.Contains(a.Project.Config.Files, p) {
+		if !a.Project.Config.allowsFile(p) {
 			return errors.New("candidate includes an unapproved file")
 		}
 	}

@@ -20,8 +20,8 @@ func DiffForSharing(id string) (Attempt, string, error) {
 	if err = a.cleanAt(a.CandidateSHA); err != nil {
 		return a, "", err
 	}
-	args := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=2", a.BaseSHA, a.CandidateSHA, "--"}
-	changed, err := changedPaths(a.Worktree, a.BaseSHA, a.CandidateSHA)
+	args := []string{"diff", "--no-ext-diff", "--no-textconv", "--no-renames", "--unified=2", a.changeBase(), a.CandidateSHA, "--"}
+	changed, err := changedPaths(a.Worktree, a.changeBase(), a.CandidateSHA)
 	if err != nil || len(changed) == 0 {
 		return a, "", errors.New("cannot identify candidate files")
 	}

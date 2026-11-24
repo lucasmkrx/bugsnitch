@@ -99,6 +99,7 @@ type CandidateIntent struct {
 type Attempt struct {
 	stopAtCandidate bool // invocation-only stop requested by local-continue
 
+	Steward         *StewardSubject    `json:"steward,omitempty"`
 	LocalRunScope   *protocol.RunScope `json:"localRunScope,omitempty"`
 	OwnerAnswer     string             `json:"ownerAnswer,omitempty"`
 	OwnerQuestion   string             `json:"ownerQuestion,omitempty"`

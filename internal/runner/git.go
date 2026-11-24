@@ -32,6 +32,11 @@ func (b *capped) Write(data []byte) (int, error) {
 	return n, err
 }
 func git(dir string, args ...string) (string, error) {
+	return gitAllowStatus(dir, 0, args...)
+}
+
+// merge-tree exits 1 for a real merge result containing unresolved conflicts.
+func gitAllowStatus(dir string, allowed int, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "git", append([]string{"--literal-pathspecs", "-c", "core.hooksPath=" + os.DevNull, "-c", "commit.gpgsign=false", "-c", "user.name=Bugsnitch", "-c", "user.email=runner@bugsnitch.invalid", "-C", dir}, args...)...)
@@ -40,7 +45,10 @@ func git(dir string, args ...string) (string, error) {
 	out.max = 512 << 10
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git %s failed", args[0])
+		var failed *exec.ExitError
+		if allowed == 0 || !errors.As(err, &failed) || failed.ExitCode() != allowed {
+			return "", fmt.Errorf("git %s failed: %w", args[0], err)
+		}
 	}
 	if out.overflow {
 		return "", errors.New("Git output exceeds artifact limit")

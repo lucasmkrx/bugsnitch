@@ -64,10 +64,13 @@ func RecoverCommit(id string) (Attempt, error) {
 	if err != nil || parents != head+" "+a.Intent.Parent {
 		return a, errors.New("candidate parent differs from the pre-commit record")
 	}
+	if err := a.resolvedStewardConflicts(head); err != nil {
+		return a, err
+	}
 	if err := a.verifyIntent(head); err != nil {
 		return a, err
 	}
-	changed, err := changedPaths(a.Worktree, a.BaseSHA, head)
+	changed, err := changedPaths(a.Worktree, a.changeBase(), head)
 	if err != nil || len(changed) == 0 {
 		return a, errors.New("recovered candidate has no verifiable changes from base")
 	}

@@ -18,7 +18,7 @@ import (
 )
 
 func Start(ctx context.Context, w, r string, i Issue) (Attempt, error) {
-	return create(ctx, w, r, i, "", "", nil, nil)
+	return create(ctx, w, r, i, "", "", nil, nil, nil)
 }
 func Retry(ctx context.Context, previous string, i Issue, reason string) (Attempt, error) {
 	prior, err := Get(previous)
@@ -28,9 +28,19 @@ func Retry(ctx context.Context, previous string, i Issue, reason string) (Attemp
 	if (prior.State != "failed" && prior.State != "cancelled") || reason == "" || len(reason) > 2048 || prior.IssueNumber != i.Number {
 		return prior, errors.New("retry requires a failed or cancelled attempt, same issue and concrete reason")
 	}
-	return create(ctx, prior.Workspace, prior.Repository, i, previous, reason, nil, nil)
+	if sub := prior.Steward; sub != nil {
+		pr, err := readStewardPR(ctx, prior.Repository, sub.Pull)
+		if err != nil {
+			return prior, err
+		}
+		if !pr.matches(prior.Repository, "bugsnitch/"+sub.RootAttempt, sub.PreviousHead, sub.Target) || pr.ReviewDecision == "APPROVED" {
+			return prior, ErrStewardFinished
+		}
+		return create(ctx, prior.Workspace, prior.Repository, i, previous, reason, prior.LocalRunScope, nil, sub)
+	}
+	return create(ctx, prior.Workspace, prior.Repository, i, previous, reason, nil, nil, nil)
 }
-func create(ctx context.Context, w, r string, i Issue, previous, reason string, scope *protocol.RunScope, admitted func(Summary)) (Attempt, error) {
+func create(ctx context.Context, w, r string, i Issue, previous, reason string, scope *protocol.RunScope, admitted func(Summary), steward *StewardSubject) (Attempt, error) {
 	var a Attempt
 	if err := i.verify(); err != nil {
 		return a, err
@@ -52,6 +62,9 @@ func create(ctx context.Context, w, r string, i Issue, previous, reason string, 
 	if err != nil {
 		return a, err
 	}
+	if steward != nil {
+		sha = steward.PreviousHead
+	}
 	id, err := newID()
 	if err != nil {
 		return a, err
@@ -61,6 +74,7 @@ func create(ctx context.Context, w, r string, i Issue, previous, reason string, 
 		return a, err
 	}
 	a = Attempt{Summary: Summary{ID: id, Workspace: w, Repository: p.Repository, IssueNumber: i.Number, BaseSHA: sha, Version: 1, Phase: "plan", State: "waiting"}, Project: p, Issue: i, CreatedAt: now(), Branch: "bugsnitch/" + id, Worktree: filepath.Join(dir, "worktrees", id)}
+	a.Steward = steward
 	a.UpdatedAt = a.CreatedAt
 	a.LocalRunScope = scope
 	a.PreviousAttempt = previous
@@ -70,6 +84,9 @@ func create(ctx context.Context, w, r string, i Issue, previous, reason string, 
 	generation := "SELECT 1"
 	if previous != "" {
 		generation = "SELECT generation+1 FROM journal_attempts WHERE id=" + literal(previous) + " AND id=(" + latest + ") AND generation<3 AND json_extract(data,'$.state') IN ('failed','cancelled')"
+	}
+	if steward != nil {
+		generation = "SELECT generation+1 FROM journal_attempts WHERE id=" + literal(previous) + " AND id=(" + latest + ") AND generation<3 AND ((json_extract(data,'$.state')='completed' AND json_extract(data,'$.candidateSha')=" + literal(steward.PreviousHead) + ") OR (json_extract(data,'$.state') IN ('failed','cancelled') AND json_extract(data,'$.steward.previousHead')=" + literal(steward.PreviousHead) + " AND json_extract(data,'$.steward.rootAttempt')=" + literal(steward.RootAttempt) + "))"
 	}
 	// Batch selection is advisory. Publish a fresh running attempt and take its
 	// ticket in one write so a lost race cannot leave a never-admitted row.
@@ -107,7 +124,7 @@ func create(ctx context.Context, w, r string, i Issue, previous, reason string, 
 	if admitted != nil {
 		return runClaimed(ctx, &a, admitted, true)
 	}
-	return advance(ctx, &a, "", false)
+	return advance(ctx, &a, "", steward != nil)
 }
 func Continue(ctx context.Context, id, feedback string) (Attempt, error) {
 	return continueAttempt(ctx, id, feedback, 0, false)
@@ -152,7 +169,7 @@ func continueAttempt(ctx context.Context, id, feedback string, version int, unti
 	if a.OwnerQuestion != "" && a.OwnerAnswer == "" && strings.TrimSpace(feedback) == "" {
 		return a, errors.New("answer the recorded owner question with --feedback before continuing")
 	}
-	guarded := a.OwnerQuestion == "" && version != 0 && a.LocalRunScope != nil && a.Project.Config.AutoCorrect
+	guarded := a.OwnerQuestion == "" && (a.Steward != nil || version != 0 && a.LocalRunScope != nil && a.Project.Config.AutoCorrect)
 	return advance(ctx, &a, feedback, guarded)
 }
 func hook(f func(Summary) error, a *Attempt) error {
@@ -363,10 +380,7 @@ func steps(ctx context.Context, a *Attempt, ordinaryPass bool) error {
 		return nil
 	}
 	if a.Phase == "plan" {
-		if err := a.prepare(); err != nil {
-			return err
-		}
-		if err := a.cleanAt(a.BaseSHA); err != nil {
+		if err := a.preparePlanTree(); err != nil {
 			return err
 		}
 		files, err := a.contextFiles()
@@ -407,7 +421,7 @@ func steps(ctx context.Context, a *Attempt, ordinaryPass bool) error {
 		prompt = directive + " Return scoped file operations. Use create or replace with complete UTF-8 content, delete with empty content, and rename with a new destination and empty content. Use an empty destination for all other operations. Only create, rename or delete within editDirectories. Explicit files are replace-only. Preserve existing validation."
 		schema = scopedImplementSchema
 	}
-	r, err := turn(ctx, a, prompt, map[string]any{"issue": a.Issue, "plan": a.Artifacts[0].Summary, "files": files, "editDirectories": a.Project.Config.EditDirectories, "explicitFiles": a.Project.Config.Files, "feedback": a.Feedback, "ownerQuestion": a.OwnerQuestion, "ownerAnswer": a.OwnerAnswer, "recentFindings": a.Artifacts[len(a.Artifacts)-1].Findings}, schema)
+	r, err := turn(ctx, a, prompt, map[string]any{"issue": a.Issue, "plan": a.Artifacts[0].Summary, "files": files, "editDirectories": a.Project.Config.EditDirectories, "explicitFiles": a.Project.Config.Files, "feedback": a.Feedback, "ownerQuestion": a.OwnerQuestion, "ownerAnswer": a.OwnerAnswer, "pullFeedback": a.Steward, "recentFindings": a.Artifacts[len(a.Artifacts)-1].Findings}, schema)
 	if err != nil {
 		return err
 	}
@@ -467,10 +481,13 @@ func steps(ctx context.Context, a *Attempt, ordinaryPass bool) error {
 	if err != nil {
 		return err
 	}
+	if err := a.resolvedStewardConflicts(a.CandidateSHA); err != nil {
+		return err
+	}
 	if err := a.verifyIntent(a.CandidateSHA); err != nil {
 		return err
 	}
-	paths, err = changedPaths(a.Worktree, a.BaseSHA, a.CandidateSHA)
+	paths, err = changedPaths(a.Worktree, a.changeBase(), a.CandidateSHA)
 	if err != nil {
 		return err
 	}
@@ -547,11 +564,24 @@ func reviewCandidate(ctx context.Context, a *Attempt) error {
 	if verification.ExitCode == nil {
 		return errors.New("missing candidate validation evidence")
 	}
-	diff, err := git(a.Worktree, "diff", "--no-ext-diff", "--no-textconv", a.BaseSHA, a.CandidateSHA, "--")
+	reviewBase := a.BaseSHA
+	if a.Steward != nil {
+		reviewBase = a.Steward.OriginalBase
+		paths, err := changedPaths(a.Worktree, reviewBase, a.CandidateSHA)
+		if err != nil {
+			return err
+		}
+		for _, path := range paths {
+			if !a.Project.Config.allowsFile(path) {
+				return errors.New("complete pull request exceeds the current review scope")
+			}
+		}
+	}
+	diff, err := git(a.Worktree, "diff", "--no-ext-diff", "--no-textconv", reviewBase, a.CandidateSHA, "--")
 	if err != nil {
 		return err
 	}
-	v, important, err := inspectCandidate(ctx, a, a.BaseSHA, diff, verification)
+	v, important, err := inspectCandidate(ctx, a, reviewBase, diff, verification)
 	if err != nil {
 		return err
 	}

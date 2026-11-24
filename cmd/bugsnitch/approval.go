@@ -36,3 +36,25 @@ func approvalCheck(ctx context.Context, args []string) error {
 	}
 	return nil
 }
+
+func approvalPreview(ctx context.Context, args []string) error {
+	fs := flag.NewFlagSet("approval-preview", flag.ContinueOnError)
+	repo := fs.String("repo", ".", "local Git checkout")
+	cases := fs.String("cases", "", "file of labeled historical changes")
+	policySHA := fs.String("policy-revision", "", "immutable trusted policy to simulate on ordinary historical changes")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *cases == "" || fs.NArg() != 0 {
+		return errors.New("provide historical --cases JSON")
+	}
+	var data approvalpolicy.CaseFile
+	if err := readJSONLimit(*cases, &data, 4<<20); err != nil {
+		return err
+	}
+	report, err := approvalpolicy.Replay(ctx, *repo, *policySHA, data)
+	if err != nil {
+		return err
+	}
+	return printJSON(report)
+}

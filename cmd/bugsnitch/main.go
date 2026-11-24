@@ -27,6 +27,7 @@ const usage = `Usage: bugsnitch COMMAND [OPTIONS]
 
   share-diff             Preview or share an approved candidate diff
   approval-check         Evaluate repository policy on an exact base and candidate
+  approval-preview       Replay repository policy against labeled historical changes
   doctor                 Check Git, native runner capabilities and Codex
   models                 List models and reasoning settings on this runtime
   usage                  Read available ChatGPT allowance windows
@@ -61,15 +62,17 @@ func printJSON(v any) error {
 	e.SetIndent("", "  ")
 	return e.Encode(v)
 }
-func readJSON(path string, v any) error {
+func readJSON(path string, v any) error { return readJSONLimit(path, v, 128<<10) }
+
+func readJSONLimit(path string, v any, maxBytes int64) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	info, err := f.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > 128<<10 {
-		return errors.New("input must be a regular JSON file under 128 KiB")
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxBytes {
+		return fmt.Errorf("input must be a regular JSON file no larger than %d bytes", maxBytes)
 	}
 	dec := json.NewDecoder(f)
 	dec.DisallowUnknownFields()
@@ -100,6 +103,8 @@ func run(ctx context.Context, args []string) error {
 		return device.RunCLIContext(ctx, args)
 	case "approval-check":
 		return approvalCheck(ctx, args[1:])
+	case "approval-preview":
+		return approvalPreview(ctx, args[1:])
 	case "doctor":
 		fmt.Printf("Platform %s/%s\n", runtime.GOOS, runtime.GOARCH)
 		if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {

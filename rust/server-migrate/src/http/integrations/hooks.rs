@@ -311,13 +311,7 @@ pub(super) async fn github(
         let delivery = header(&headers, "x-github-delivery")
             .filter(|d| UUID.is_match(d))
             .ok_or_else(|| fail(StatusCode::UNPROCESSABLE_ENTITY, "Invalid delivery id"))?;
-        let payload: Value = serde_json::from_slice(&body).map_err(|_| {
-            fail(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "Invalid pull observation signal",
-            )
-        })?;
-        if let Some(hint) = pull_watch_hint(event, delivery, &payload) {
+        if let Some(hint) = parse_pull_watch(event, delivery, &body)? {
             state
                 .coord(
                     "hooks.pull_watch",
@@ -362,18 +356,53 @@ pub(super) async fn github(
     Ok(StatusCode::ACCEPTED)
 }
 
-fn pull_watch_hint(event: &str, delivery: &str, p: &Value) -> Option<Value> {
-    let installation = p["installation"]["id"].as_i64().filter(|n| *n > 0)?;
-    let repository = p["repository"]["id"].as_i64().filter(|n| *n > 0)?;
+#[derive(Deserialize)]
+struct PullWatchEvent {
+    installation: Option<PullWatchObject>,
+    repository: Option<PullWatchObject>,
+    pull_request: Option<PullWatchRequest>,
+    check_run: Option<PullWatchCheck>,
+}
+
+#[derive(Deserialize)]
+struct PullWatchObject {
+    id: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct PullWatchRequest {
+    number: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct PullWatchCheck {
+    head_sha: Option<String>,
+}
+
+fn parse_pull_watch(event: &str, delivery: &str, body: &[u8]) -> WebResult<Option<Value>> {
+    let Json(payload) = Json::<PullWatchEvent>::from_bytes(body).map_err(|_| {
+        fail(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Invalid pull observation signal",
+        )
+    })?;
+    Ok(pull_watch_hint(event, delivery, &payload))
+}
+
+fn pull_watch_hint(event: &str, delivery: &str, p: &PullWatchEvent) -> Option<Value> {
+    let installation = p.installation.as_ref()?.id.filter(|n| *n > 0)?;
+    let repository = p.repository.as_ref()?.id.filter(|n| *n > 0)?;
     let (number, head) = if event == "check_run" {
         (
             0,
-            p["check_run"]["head_sha"]
-                .as_str()
+            p.check_run
+                .as_ref()?
+                .head_sha
+                .as_deref()
                 .filter(|s| crate::devices::valid_sha(s))?,
         )
     } else {
-        (p["pull_request"]["number"].as_i64().filter(|n| *n > 0)?, "")
+        (p.pull_request.as_ref()?.number.filter(|n| *n > 0)?, "")
     };
     Some(
         json!({"installation":installation,"repository":repository,"delivery":delivery,"number":number,"head":head,"feedback":matches!(event,"pull_request_review"|"pull_request_review_comment")}),
@@ -598,6 +627,31 @@ mod tests {
                 .0,
             StatusCode::UNAUTHORIZED
         );
+    }
+
+    #[test]
+    fn pull_watch_uses_only_valid_identifiers_from_the_event() {
+        let delivery = "00112233-aabb-ccdd-eeff-001122334455";
+        let parse = |kind, event: &Value| {
+            parse_pull_watch(kind, delivery, &serde_json::to_vec(event).unwrap())
+        };
+        let mut event = json!({"installation":{"id":10},"repository":{"id":11},
+            "pull_request":{"number":12,"body":"unused"}});
+        assert_eq!(
+            parse("pull_request_review", &event).unwrap().unwrap(),
+            json!({"installation":10,"repository":11,"delivery":delivery,
+                "number":12,"head":"","feedback":true})
+        );
+        event["pull_request"]["number"] = json!(0);
+        assert!(parse("pull_request", &event).unwrap().is_none());
+        event["check_run"] = json!({"head_sha":"a".repeat(40)});
+        let check = parse("check_run", &event).unwrap().unwrap();
+        assert_eq!(check["number"], 0);
+        assert_eq!(check["head"], "a".repeat(40));
+        event["check_run"]["head_sha"] = json!("main");
+        assert!(parse("check_run", &event).unwrap().is_none());
+        event["installation"]["id"] = json!("10");
+        assert!(parse("check_run", &event).is_err());
     }
 
     #[test]

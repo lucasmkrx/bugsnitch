@@ -8,7 +8,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};

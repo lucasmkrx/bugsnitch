@@ -4,34 +4,90 @@ if (location.hash.startsWith("#/")) {
   location.replace("/app/" + location.search + location.hash);
 }
 
-const stages = document.querySelector(".trace-tabs");
-const tabs = Array.from(stages.querySelectorAll('[role="tab"]'));
+const walkthrough = document.querySelector(".walkthrough");
+const viewport = walkthrough.querySelector(".walkthrough-viewport");
+const steps = [...walkthrough.querySelectorAll(".run-progress li")];
+const scenes = [...walkthrough.querySelectorAll(".walkthrough-scene")];
+const canPin = matchMedia(
+  "(min-height: 520px) and (prefers-reduced-motion: no-preference)",
+);
+const clamp = (value) => Math.max(0, Math.min(1, value));
+let isPinned;
+let current = -1;
+let frame;
 
-function showStage(selected) {
-  for (const tab of tabs) {
-    const active = tab === selected;
-    tab.setAttribute("aria-selected", String(active));
-    tab.tabIndex = active ? 0 : -1;
-    document.getElementById(tab.getAttribute("aria-controls")).inert = !active;
+function measureTrack() {
+  return {
+    offset: walkthrough.getBoundingClientRect().top,
+    distance: walkthrough.offsetHeight - viewport.offsetHeight,
+  };
+}
+
+function setCurrent(index) {
+  if (current === index) return;
+  current = index;
+  for (const [stepIndex, step] of steps.entries()) {
+    const active = stepIndex === current;
+    scenes[stepIndex].inert = isPinned && !active;
+    if (active) step.setAttribute("aria-current", "step");
+    else step.removeAttribute("aria-current");
   }
 }
 
-tabs.forEach((tab, index) => {
-  tab.addEventListener("click", () => showStage(tab));
-  tab.addEventListener("keydown", (event) => {
-    const next = {
-      ArrowLeft: (index + tabs.length - 1) % tabs.length,
-      ArrowRight: (index + 1) % tabs.length,
-      Home: 0,
-      End: tabs.length - 1,
-    }[event.key];
-    if (next === undefined) return;
-    event.preventDefault();
-    showStage(tabs[next]);
-    tabs[next].focus();
-  });
-});
-stages.hidden = false;
+function update() {
+  frame = undefined;
+  if (!isPinned) return;
+  const { offset, distance } = measureTrack();
+  const progress = clamp(-offset / Math.max(distance, 1));
+  const position = progress * steps.length;
+  const index = Math.min(Math.floor(position), steps.length - 1);
+  const sceneProgress = position - index;
+  const slideStart = 0.68;
+  const phase =
+    index < steps.length - 1
+      ? clamp((sceneProgress - slideStart) / (1 - slideStart))
+      : 0;
+  // Ease the handoff as a function of scroll, including when scrolling back.
+  const slide = phase * phase * (3 - 2 * phase);
+  setCurrent(index + Number(slide >= 0.5));
+  viewport.style.setProperty("--scroll-progress", progress);
+
+  for (const [sceneIndex, scene] of scenes.entries()) {
+    const outgoing = sceneIndex === index;
+    const entering = sceneIndex === index + 1 && slide > 0;
+    const localProgress = outgoing ? clamp(sceneProgress / slideStart) : 0;
+    const x = outgoing ? -slide : 1 - slide;
+    scene.style.setProperty("--slide-offset", `${x * 100}%`);
+    scene.style.setProperty(
+      "--scene-visibility",
+      outgoing || entering ? "visible" : "hidden",
+    );
+    scene.style.setProperty("--scene-shift", `${7 - localProgress * 14}px`);
+    scene.style.setProperty("--scene-zoom", 1 + localProgress * 0.012);
+    scene.style.setProperty("--scene-progress", localProgress);
+  }
+}
+
+function scheduleUpdate() {
+  if (frame === undefined) frame = requestAnimationFrame(update);
+}
+
+function layout() {
+  walkthrough.toggleAttribute("data-pinned", canPin.matches);
+  isPinned = canPin.matches && viewport.offsetHeight <= innerHeight + 1;
+  walkthrough.toggleAttribute("data-pinned", isPinned);
+  current = -1;
+  if (!isPinned) setCurrent(0);
+  scheduleUpdate();
+}
+
+walkthrough.style.setProperty("--step-count", steps.length);
+canPin.addEventListener("change", layout);
+window.addEventListener("scroll", scheduleUpdate, { passive: true });
+window.addEventListener("resize", layout);
+window.addEventListener("pageshow", layout);
+layout();
+document.fonts.ready.then(layout);
 
 const copyButton = document.querySelector(".copy-button");
 const command = document.querySelector("#checkout-command");

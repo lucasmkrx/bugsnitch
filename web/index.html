@@ -92,20 +92,35 @@
 
     <main id="content">
       <section class="hero frame" aria-labelledby="hero-title">
-        <h1 id="hero-title">
-          From issue to <span><em>verified</em> release.</span>
-        </h1>
-        <p class="hero-description">
-          <strong>Bugsnitch is an autonomous software factory.</strong>
-          Give it a GitHub issue and an approved plan. It runs coding agents on
-          your machines, brings the fix back for review, and tracks it through
-          to a verified deployment.
-        </p>
-        <div class="hero-actions">
-          <a class="button primary" href="#showcase"
-            >See a factory run <span aria-hidden="true">↓</span></a
-          >
+        <div class="hero-copy">
+          <h1 id="hero-title">
+            From issue to <span><em>verified</em> release.</span>
+          </h1>
+          <p class="hero-description">
+            <strong>Bugsnitch is an autonomous software factory.</strong>
+            Give it a GitHub issue and an approved plan. It runs coding agents
+            on your machines, brings the fix back for review, and tracks it
+            through to a verified deployment.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#showcase"
+              >See a factory run <span aria-hidden="true">↓</span></a
+            >
+          </div>
         </div>
+        <img
+          class="hero-illustration"
+          src="/brand/factory-workflow.jpg"
+          srcset="
+            /brand/factory-workflow-720.jpg  720w,
+            /brand/factory-workflow.jpg     1320w
+          "
+          sizes="(max-width: 700px) calc(100vw - 40px), (max-width: 1440px) 44vw, 620px"
+          width="1320"
+          height="990"
+          alt=""
+          fetchpriority="high"
+        />
         <ol
           class="release-path"
           aria-label="Example run from issue to release"

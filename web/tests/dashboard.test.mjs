@@ -454,17 +454,40 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
       ]);
     },
   );
-  await t.test("the local preview loads the release path", async (t) => {
+  await t.test("the local preview loads the illustrated hero", async (t) => {
     const dev = await createViteServer({
       server: { host: "127.0.0.1", port: 5174, strictPort: false, hmr: false },
     });
     t.after(() => dev.close());
     await dev.listen();
     for (const width of [1440, 360]) {
-      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      const page = await browser.newPage({
+        viewport: { width, height: 900 },
+        deviceScaleFactor: width === 1440 ? 2 : 1,
+      });
       t.after(() => page.close());
       await page.goto(dev.resolvedUrls.local[0]);
       await expectHomepageLogos(page);
+      const copy = page.locator(".hero-copy");
+      const illustration = page.locator(".hero-illustration");
+      const source = await illustration.evaluate(async (image) => {
+        await image.decode();
+        return new URL(image.currentSrc).pathname;
+      });
+      assert.equal(
+        source,
+        width === 1440
+          ? "/brand/factory-workflow.jpg"
+          : "/brand/factory-workflow-720.jpg",
+      );
+      const textBounds = await copy.boundingBox();
+      const artBounds = await illustration.boundingBox();
+      if (width === 1440) {
+        assert.ok(artBounds.x >= textBounds.x + textBounds.width);
+      } else {
+        assert.equal(artBounds.x, textBounds.x);
+        assert.ok(artBounds.y >= textBounds.y + textBounds.height);
+      }
       const releasePath = page.getByRole("list", {
         name: "Example run from issue to release",
       });

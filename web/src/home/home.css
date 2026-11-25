@@ -145,13 +145,14 @@ section[id] {
 }
 .hero {
   display: grid;
-  justify-items: center;
-  padding-block: clamp(56px, 8vw, 118px) clamp(42px, 6vw, 86px);
-  text-align: center;
+  grid-template-columns: minmax(0, 0.98fr) minmax(0, 1.02fr);
+  align-items: center;
+  gap: clamp(25px, 4.5vw, 62px);
+  padding-block: clamp(46px, 6.3vw, 94px) clamp(35px, 5vw, 70px);
 }
 .hero h1 {
   font-family: var(--display);
-  font-size: clamp(50px, 8.6vw, 126px);
+  font-size: clamp(37px, 5.7vw, 85px);
   font-weight: 750;
   letter-spacing: -0.057em;
   word-spacing: 0.035em;
@@ -178,19 +179,22 @@ section[id] {
 }
 .hero-actions {
   display: flex;
-  justify-content: center;
-  gap: 10px;
-  flex-wrap: wrap;
   margin-top: 24px;
 }
 .hero-actions .button {
   min-height: 46px;
 }
+.hero-illustration {
+  width: 100%;
+  height: auto;
+  border: 1px solid #e6dacb;
+  border-radius: 12px;
+}
 .release-path {
+  grid-column: 1 / -1;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  width: min(100%, 975px);
-  margin: clamp(33px, 5vw, 67px) 0 0;
+  margin: 0;
   padding: 0;
   list-style: none;
   border-block: 1px solid var(--line);
@@ -711,9 +715,6 @@ section[id] {
   .nav-bar nav {
     gap: 16px;
   }
-  .hero h1 {
-    font-size: clamp(45px, 9.8vw, 76px);
-  }
   .factory-grid {
     grid-template-columns: 1fr;
   }
@@ -740,6 +741,12 @@ section[id] {
   }
 }
 @media (max-width: 700px) {
+  .hero {
+    grid-template-columns: 1fr;
+  }
+  .hero h1 {
+    font-size: clamp(42px, 8.8vw, 62px);
+  }
   .walkthrough[data-pinned] .walkthrough-viewport {
     padding-block: clamp(20px, 5svh, 48px) 18px;
   }

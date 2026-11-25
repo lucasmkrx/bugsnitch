@@ -1,0 +1,29 @@
+# Bugsnitch
+
+> Bugsnitch is a software factory for teams that run coding agents on their own machines. It takes approved GitHub issues through implementation in Git worktrees, independent review, team approval, and verification of the deployed build.
+
+Bugsnitch is in developer preview. The public workspace is a read-only demo with sample data. The GitHub repository contains the current software and documentation for local and self-hosted use. Hosted pilot workspaces are available by invitation.
+
+## Start here
+
+- [Public homepage](https://bugsnitch.com/)
+- [Read-only workspace demo](https://bugsnitch.com/app/)
+- [Expanded plain-text reference](https://bugsnitch.com/llms-full.txt)
+- [Repository README and local quickstart](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/README.md)
+- [Product and issue-to-release workflow](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/docs/PRODUCT.md)
+
+## Setup and reference
+
+- [Pair and configure a local runner](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/docs/RUNNER.md)
+- [Use the dashboard](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/docs/DASHBOARD.md)
+- [Run the checkout acceptance demo](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/examples/checkout/README.md)
+- [Self-host and operate a workspace](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/docs/OPERATIONS.md)
+- [Configure GitHub, deployment monitors, and Sentry](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/docs/PROVIDERS.md)
+- [HTTP API reference](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/api/README.md)
+
+## Optional
+
+- [Architecture and data boundaries](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/docs/ARCHITECTURE.md)
+- [Approval policy and decision roles](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/docs/APPROVAL_POLICY.md)
+- [Linear, chat, and MCP integrations](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/docs/INTEGRATIONS.md)
+- [Support and reporting](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/SUPPORT.md)

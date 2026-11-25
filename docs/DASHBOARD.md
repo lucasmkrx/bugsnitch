@@ -44,4 +44,4 @@ Run `npm --prefix web run test:browser` after building, with Chrome installed or
 
 The screenshots show the labeled test workspace and synthetic records.
 
-[Desktop overview](screenshots/fixture-overview-1440.png) · [Phone overview](screenshots/fixture-overview-360.png)
+[Desktop overview](../web/public/screenshots/fixture-overview-1440.png) · [Phone overview](../web/public/screenshots/fixture-overview-360.png)

@@ -59,6 +59,7 @@ func run() error {
 	}
 	store := incidents.Store{DB: db}
 	service := transport.Server{GitHubApp: app, DB: db, Incidents: store, Origin: os.Getenv("BUGSNITCH_ORIGIN"), Linear: linear.New(os.Getenv("BUGSNITCH_LINEAR_API_KEY"))}
+	service.ProgressionWakes = &transport.ProgressionWakes{}
 	if raw := os.Getenv("BUGSNITCH_GITHUB_INSTALLATION_ID"); raw != "" {
 		service.GitHubInstallation, err = strconv.ParseInt(raw, 10, 64)
 		if err != nil || service.GitHubInstallation <= 0 {
@@ -80,7 +81,7 @@ func run() error {
 		work.Go(func() { service.ProcessLinearSessions(ctx) })
 	}
 	work.Go(func() { storage.Maintain(ctx, db) })
-	work.Go(func() { runBackground(ctx, db, dsn, app) })
+	work.Go(func() { runBackground(ctx, db, dsn, app, service.ProgressionWakes.Signal) })
 	go func() { <-ctx.Done(); _ = listener.Close() }()
 	if _, err = os.Stdout.Write([]byte{1}); err != nil {
 		return err

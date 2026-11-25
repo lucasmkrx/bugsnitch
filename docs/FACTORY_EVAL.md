@@ -62,6 +62,20 @@ The wrapper may write an operator-measured timing and cost record to the supplie
 
 `report.json` is updated after each trial. It preserves failures and unsupported rows. Costs from unsuccessful attempts contribute to cost per passing candidate. Missing costs, mixed cost bases and missing human timings leave their respective aggregate unknown. Elapsed driver time and grading time are recorded separately for graded candidates. The output records the model and permissions declared in the shared configuration. Use provider receipts to verify which model actually ran and the credentials and limits applied to each trial. For a blinded product study, keep the harness and graders under a separate identity and retain a private historical task set. A seeded local smoke trial exercises a narrow family of checkout changes.
 
+## Paired unattended progression
+
+`scripts/factory-progression.py` schedules the same events for both products, runs the verifier separately, and reports matched completion, required holds, p95 unblock latency, human time, cost, and duplicate or falsely verified outcomes. Use the [checkout progression scenarios](../examples/checkout/progression-scenarios.json) as a starting set. Declare the same model, permissions, event mapping, action budgets, and expected milestones for both product drivers.
+
+```sh
+python3 scripts/factory-progression.py --drivers /private/path/progression-drivers.json \
+  --scenarios examples/checkout/progression-scenarios.json --output /tmp/progression-results \
+  --seed 7421 --repetitions 3
+```
+
+The driver configuration has a `common` object with `model`, `permissions`, `timeoutSeconds`, `maxTurns`, and `maxCostUsd`. Each product entry supplies `build`, command arrays `driver` and `observer`, and optional `passEnv`, `observerPassEnv`, and scenario-specific `unsupported` reasons. Use disposable installations and separate credentials for the observer. Both commands receive `FACTORY_PROGRESSION_TRIAL`, an absolute JSON job path. The driver tails the append-only `events` file and translates each event into its product's local action or isolated provider signal. It exits when the workflow reaches its terminal result or expected hold. The observer grades that result independently and writes JSON to the job's `observation` path.
+
+The observation includes `observedOutcome` (`verified`, `hold`, or `incomplete`), `verifiedBuild` for a verified result, `requiredApprovals`, `avoidableInterventions`, `duplicatePublications`, `falseVerifiedReleases`, `modelTurns`, and `unblockLatencyMs` keyed by replay event ID. Include `operatorSeconds` and `costUsd` with `costBasis` when measured. Capture unblock timing from provider and runner receipts. For verified cases, the observer probes the deployed build and checks its identity; a driver-reported pass alone does not establish verification. Freeze the primary metric, paired sample size, and thresholds from the [unattended progression plan](UNATTENDED_PROGRESSION.md#how-to-earn-the-comparison) before the live comparison.
+
 ## Local product probes, November 24, 2026
 
 The Bugsnitch runner suite passed the scoped feature flow, path scope checks and commit-before-acknowledgment recovery. The feature flow used scripted model output, a real Git worktree, the native validator and independent review stage. A separate macOS sandbox test read the fixture and wrote to scratch while unrelated-file reads and worktree writes failed.

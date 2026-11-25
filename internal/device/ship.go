@@ -29,6 +29,11 @@ type deliveryRequest struct {
 	Base            string `json:"baseSha"`
 	Candidate       string `json:"candidateSha"`
 	Target          string `json:"target"`
+	Follow          bool   `json:"follow,omitempty"`
+}
+
+func draftRequest(a runner.Attempt, target string) deliveryRequest {
+	return deliveryRequest{Protocol: 1, Attempt: a.ID, Version: a.Version, Base: a.BaseSHA, Candidate: a.CandidateSHA, Target: target}
 }
 
 func Ship(ctx context.Context, id string, version int, candidate, target string, wait time.Duration, notice func(string)) (ShipReceipt, error) {
@@ -57,7 +62,7 @@ func Ship(ctx context.Context, id string, version int, candidate, target string,
 	if p == nil {
 		return result, runner.ErrDeviceUnauthorized
 	}
-	req := deliveryRequest{Protocol: 1, Attempt: id, Version: version, Base: a.BaseSHA, Candidate: candidate, Target: target}
+	req := draftRequest(a, target)
 	step := func(ctx context.Context, op string) (ShipReceipt, error) {
 		req.Operation = op
 		var state ShipReceipt

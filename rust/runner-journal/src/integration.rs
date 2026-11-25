@@ -137,7 +137,11 @@ impl Check {
             return Err("invalid integration subject or protocol version".into());
         }
         if !(request.target_ref.starts_with("refs/heads/")
-            || request.target_ref.starts_with("refs/remotes/origin/"))
+            || request.target_ref.starts_with("refs/remotes/origin/")
+            || request
+                .target_ref
+                .strip_prefix("refs/bugsnitch/inspections/")
+                .is_some_and(valid_sha))
         {
             return Err("use an explicit local branch or origin remote-tracking reference".into());
         }
@@ -159,7 +163,14 @@ impl Check {
 
     fn revision(&self, reference: &str) -> Result<String, String> {
         let commit = format!("{reference}^{{commit}}");
-        git(&self.request.project, &["rev-parse", "--verify", &commit])
+        let found = git(&self.request.project, &["rev-parse", "--verify", &commit])?;
+        if reference
+            .strip_prefix("refs/bugsnitch/inspections/")
+            .is_some_and(|p| p != found)
+        {
+            return Err("retained integration base does not match its recorded revision".into());
+        }
+        Ok(found)
     }
 
     fn references_match(&self) -> Result<(), String> {

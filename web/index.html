@@ -7,7 +7,7 @@
     <meta name="theme-color" content="#faf9f6" />
     <meta
       name="description"
-      content="Bugsnitch is a software factory for teams. Plan GitHub issues, run agents on your own machines, review pull requests, and verify the deployed build."
+      content="Run approved GitHub issues on your own machines. Bugsnitch resumes work when blockers clear, carries approvals through PR delivery, and tracks verification on the deployed build."
     />
     <title>Bugsnitch — From issue to verified release</title>
     <link rel="canonical" href="https://bugsnitch.com/" />
@@ -20,7 +20,7 @@
     />
     <meta
       property="og:description"
-      content="Plan issues, run agents on your own machines, and take independently reviewed changes through GitHub to a verified release."
+      content="Let a paired runner pick up approved GitHub issues, resume after blockers clear, and carry reviewed changes through approval and deployment verification."
     />
     <meta
       property="og:image"
@@ -31,7 +31,7 @@
     <meta property="og:image:height" content="630" />
     <meta
       property="og:image:alt"
-      content="Bugsnitch. From issue to verified release. A software factory for teams that ship from their own machines. A black and red bug icon sits on a light circuit board."
+      content="Black and red bug icon above the Bugsnitch wordmark on a light background."
     />
     <meta name="twitter:card" content="summary_large_image" />
     <meta
@@ -40,7 +40,7 @@
     />
     <meta
       name="twitter:image:alt"
-      content="Bugsnitch. From issue to verified release. A software factory for teams that ship from their own machines. A black and red bug icon sits on a light circuit board."
+      content="Black and red bug icon above the Bugsnitch wordmark on a light background."
     />
     <link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48" />
     <link rel="icon" href="/brand/favicon.svg" type="image/svg+xml" />
@@ -57,16 +57,12 @@
     <header class="site-header">
       <div class="frame nav-bar">
         <a class="wordmark" href="/" aria-label="Bugsnitch home">
-          <img
-            src="../assets/brand/bugsnitch-logo.svg"
-            alt=""
-            width="28"
-            height="25"
-          />
+          <img src="/brand/bugsnitch-logo.svg" alt="" width="48" height="42" />
           Bugsnitch
         </a>
         <nav aria-label="Main navigation">
           <a href="#workflow">Workflow</a>
+          <a href="#evidence">Evidence</a>
           <a href="#quickstart">Quickstart</a>
         </nav>
         <a class="button outline nav-action" href="/app/"
@@ -83,9 +79,10 @@
           </p>
           <h1 id="hero-title">From issue to <em>verified</em> release.</h1>
           <p class="hero-description">
-            A software factory for teams that ship from their own machines. Give
-            your agents an approved GitHub issue, review the change, and follow
-            it all the way to the build your users get.
+            Give a runner on your own machine approved GitHub issues and a
+            budget. It picks up eligible work and resumes when blockers clear.
+            Your team approves what ships and sees which build passed
+            verification.
           </p>
           <div class="hero-actions">
             <a class="button primary" href="#quickstart"
@@ -93,8 +90,8 @@
             >
             <a
               class="inline-link"
-              href="https://github.com/lucasmkrx/bugsnitch#workflows"
-              >Read the docs <span aria-hidden="true">↗</span></a
+              href="https://github.com/lucasmkrx/bugsnitch/blob/main/docs/RUNNER.md#authorize-unattended-local-work"
+              >Set up unattended work <span aria-hidden="true">↗</span></a
             >
           </div>
         </div>
@@ -218,8 +215,8 @@
               >
                 <h3>Publish the reviewed change</h3>
                 <p>
-                  With the owner's approval, the originating runner opens a
-                  draft PR for the reviewed commit.
+                  The owner approves the commit and target. The runner pushes
+                  the branch, then the GitHub App opens the draft PR.
                 </p>
                 <dl>
                   <div>
@@ -242,7 +239,8 @@
                 <h3>Check the deployed build</h3>
                 <p>
                   Chromium tries the $50 order on the served checkout. The
-                  result is recorded against that build.
+                  result applies to that deployment. A redeploy needs a fresh
+                  check.
                 </p>
                 <dl>
                   <div>
@@ -267,11 +265,8 @@
         id="workflow"
         aria-labelledby="workflow-title"
       >
-        <p class="eyebrow">The workspace</p>
-        <h2 id="workflow-title">
-          Coordinate a release<br />
-          across repositories.
-        </h2>
+        <p class="eyebrow">Unattended workflow</p>
+        <h2 id="workflow-title">Keep work moving between approvals.</h2>
         <div class="workspace-layout">
           <figure class="workspace-visual">
             <div class="window-bar">
@@ -282,13 +277,13 @@
             <picture>
               <source
                 media="(max-width: 540px)"
-                srcset="../docs/screenshots/fixture-overview-360.png"
+                srcset="/screenshots/fixture-overview-360.png"
                 width="360"
                 height="800"
               />
               <img
                 class="dashboard-image"
-                src="../docs/screenshots/fixture-overview-1440.png"
+                src="/screenshots/fixture-overview-1440.png"
                 alt="Bugsnitch overview showing a paused Storefront project and a pending decision to resume work"
                 width="1440"
                 height="900"
@@ -297,49 +292,123 @@
             </picture>
             <figcaption>Workspace with sample data</figcaption>
           </figure>
-          <div class="capabilities">
-            <article>
+          <ol class="workflow-steps" role="list">
+            <li>
               <h3>
                 <a
-                  href="https://github.com/lucasmkrx/bugsnitch/blob/main/docs/RUNNER.md"
-                  >Run agents in parallel <span aria-hidden="true">↗</span></a
+                  href="https://github.com/lucasmkrx/bugsnitch/blob/main/docs/RUNNER.md#authorize-unattended-local-work"
+                  >Authorize a batch <span aria-hidden="true">↗</span></a
                 >
               </h3>
               <p>
-                Start with a GitHub issue or a linked Linear ticket. Independent
-                tasks get separate worktrees on registered machines, each with
-                its own validation and review.
+                Choose the issue revisions, paired machine, time window,
+                concurrency, and model-turn budget. Each ticket runs in its own
+                worktree with validation and independent review.
               </p>
-            </article>
-            <article>
+            </li>
+            <li>
               <h3>
                 <a
-                  href="https://github.com/lucasmkrx/bugsnitch/blob/main/docs/INTEGRATION_QUEUE.md"
-                  >Control what ships <span aria-hidden="true">↗</span></a
-                >
-              </h3>
-              <p>
-                Sign off on a specific revision, watch its GitHub checks, and
-                order pull requests across repositories. Signed deployment
-                events and a fresh behavior check tie the result to the build.
-              </p>
-            </article>
-            <article>
-              <h3>
-                <a
-                  href="https://github.com/lucasmkrx/bugsnitch/blob/main/docs/INTEGRATIONS.md"
-                  >Set team permissions and budgets
+                  href="https://github.com/lucasmkrx/bugsnitch/blob/main/docs/RUNNER.md#recovery-and-retention"
+                  >Resume when evidence arrives
                   <span aria-hidden="true">↗</span></a
                 >
               </h3>
               <p>
-                Give operators and approvers access by project. Answer dispatch
-                decisions in Slack or Telegram, cap monthly model turns, and
-                track estimated spend.
+                Accepted dependencies and fresh GitHub observations wake the
+                runner. It checks what already happened after a restart and
+                shows uncertain actions in Work for inspection.
               </p>
-            </article>
-          </div>
+            </li>
+            <li>
+              <h3>
+                <a
+                  href="https://github.com/lucasmkrx/bugsnitch/blob/main/docs/INTEGRATION_QUEUE.md"
+                  >Approve the exact revision
+                  <span aria-hidden="true">↗</span></a
+                >
+              </h3>
+              <p>
+                The designated approver approves the saved plan. The owner
+                approves publication, including CI fixes. The owner or a scoped
+                approver signs off on the PR head, and signs again if it
+                changes.
+              </p>
+            </li>
+            <li>
+              <h3>
+                <a
+                  href="https://github.com/lucasmkrx/bugsnitch/blob/main/docs/PROVIDERS.md#github-deployment-monitor"
+                  >Verify the build users get
+                  <span aria-hidden="true">↗</span></a
+                >
+              </h3>
+              <p>
+                The runner prepares combined-validation evidence for sign-off.
+                After the merge, Bugsnitch tracks signed deployment and behavior
+                evidence for the active monitored build.
+              </p>
+            </li>
+          </ol>
         </div>
+        <div class="workflow-links">
+          <a class="inline-link" href="/app/#/work"
+            >Explore the Work board <span aria-hidden="true">→</span></a
+          >
+          <a
+            class="inline-link"
+            href="https://github.com/lucasmkrx/bugsnitch/blob/main/docs/INTEGRATIONS.md"
+            >Team permissions and budgets <span aria-hidden="true">↗</span></a
+          >
+        </div>
+      </section>
+
+      <section
+        class="verification frame"
+        id="evidence"
+        aria-labelledby="evidence-title"
+      >
+        <div class="verification-copy">
+          <p class="eyebrow">Deployment evidence</p>
+          <h2 id="evidence-title">What the checkout demo proves.</h2>
+          <p>
+            Bugsnitch ties the browser result to the deployment identity, so the
+            verification shows which build served the fix.
+          </p>
+          <a
+            class="inline-link"
+            href="https://github.com/lucasmkrx/bugsnitch/tree/main/examples/checkout"
+            >Read the checkout walkthrough <span aria-hidden="true">↗</span></a
+          >
+        </div>
+        <table class="verification-results" aria-labelledby="evidence-title">
+          <thead>
+            <tr>
+              <th scope="col">Stage</th>
+              <th scope="col">Evidence</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Original build</th>
+              <td>A $50 order is charged $5 shipping.</td>
+            </tr>
+            <tr>
+              <th scope="row">Fixed build</th>
+              <td>The same order gets free shipping.</td>
+            </tr>
+            <tr>
+              <th scope="row">Redeploy</th>
+              <td>The new deployment requires a fresh browser check.</td>
+            </tr>
+            <tr>
+              <th scope="row">Recurrence</th>
+              <td>
+                A failure on the active build sends the incident back to triage.
+              </td>
+            </tr>
+          </tbody>
+        </table>
       </section>
 
       <section
@@ -379,12 +448,7 @@
 
     <footer class="frame footer">
       <a class="wordmark" href="/" aria-label="Bugsnitch home">
-        <img
-          src="../assets/brand/bugsnitch-logo.svg"
-          alt=""
-          width="28"
-          height="25"
-        />
+        <img src="/brand/bugsnitch-logo.svg" alt="" width="40" height="35" />
         Bugsnitch
       </a>
       <span class="pilot-note">Hosted pilot by invitation</span>

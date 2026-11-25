@@ -101,6 +101,7 @@ type Attempt struct {
 
 	Steward         *StewardSubject    `json:"steward,omitempty"`
 	LocalRunScope   *protocol.RunScope `json:"localRunScope,omitempty"`
+	UnattendedGrant string             `json:"unattendedGrant,omitempty"`
 	OwnerAnswer     string             `json:"ownerAnswer,omitempty"`
 	OwnerQuestion   string             `json:"ownerQuestion,omitempty"`
 	PreviousAttempt string             `json:",omitempty"`

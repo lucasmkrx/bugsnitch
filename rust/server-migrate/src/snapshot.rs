@@ -14,7 +14,7 @@ macro_rules! view {
 static STATE: LazyLock<String> = LazyLock::new(|| {
     let mut fields = vec![
         r#"json_build_object('id',owner_scope.id,'name',owner_scope.name,'stopped',owner_scope.stopped,'dispatchVersion',owner_scope.dispatch_version) AS "workspace""#.into(),
-        r#"json_build_object('name',coalesce(viewer.name,'Owner'),'role',coalesce(viewer.role,'owner'),'projectId',viewer.project_id) AS "viewer""#.into(),
+        r#"json_build_object('id',coalesce(viewer.id,owner_scope.account_id),'name',coalesce(viewer.name,'Owner'),'role',coalesce(viewer.role,'owner'),'projectId',viewer.project_id) AS "viewer""#.into(),
         r#"json_build_object('tickets',owner_scope.ticket_limit,'turns',owner_scope.turn_limit,'version',owner_scope.limits_version) AS "limits""#.into(),
         r#"json_build_object('hostedInference',false,'reason','Hosted inference requires confirmation of this deployment’s eligibility for Sign in with ChatGPT. Local account-backed runs can be started on the computer.') AS "capabilities""#.into(),
         r#"CASE WHEN viewer.id IS NULL THEN json_build_object('monthlyTurns',owner_scope.monthly_turn_limit,'usedTurns',coalesce((SELECT turns FROM monthly_model_usage WHERE workspace_id=owner_scope.id AND month=date_trunc('month',now() AT TIME ZONE 'UTC')::date),0)) ELSE 'null'::json END AS "budget""#.into(),

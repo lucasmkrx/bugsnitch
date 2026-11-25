@@ -314,9 +314,10 @@ fn transaction(
     // Keep settings transaction-local even when an operator uses pooled
     // PostgreSQL connections. Send static setup statements in one round trip.
     let begin = match req.op.as_str() {
-        "claims.next" | "workspace.state" | "workspace.diagnostics" => {
-            "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;"
-        }
+        "claims.next"
+        | "device.progression_cursor"
+        | "workspace.state"
+        | "workspace.diagnostics" => "BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY;",
         op if crate::plugin_reads::is_list(op) => "BEGIN READ ONLY;",
         _ => "BEGIN;",
     };

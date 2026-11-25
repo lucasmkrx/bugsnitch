@@ -1,0 +1,36 @@
+[
+  {"id":"ordinary","expected":"verified","events":[
+    {"id":"start","atMs":0,"kind":"authorized_start"},
+    {"id":"checks","atMs":3000,"kind":"checks_passed","unblock":true},
+    {"id":"probe","atMs":6000,"kind":"deployment_verified","unblock":true}]},
+  {"id":"prerequisite","expected":"verified","events":[
+    {"id":"start","atMs":0,"kind":"authorized_start"},
+    {"id":"prerequisite","atMs":3000,"kind":"prerequisite_accepted","unblock":true},
+    {"id":"probe","atMs":6000,"kind":"deployment_verified","unblock":true}]},
+  {"id":"ci-correction","expected":"verified","events":[
+    {"id":"red","atMs":0,"kind":"checks_failed"},
+    {"id":"approval","atMs":3000,"kind":"correction_approved","unblock":true},
+    {"id":"green","atMs":6000,"kind":"checks_passed","unblock":true},
+    {"id":"probe","atMs":9000,"kind":"deployment_verified","unblock":true}]},
+  {"id":"duplicate-event","expected":"verified","events":[
+    {"id":"green-1","atMs":0,"kind":"checks_passed","delivery":"ci-delivery-1","unblock":true},
+    {"id":"green-2","atMs":2000,"kind":"checks_passed","delivery":"ci-delivery-1"},
+    {"id":"probe","atMs":4000,"kind":"deployment_verified","unblock":true}]},
+  {"id":"lost-publication-response","expected":"verified","events":[
+    {"id":"lost","atMs":0,"kind":"publication_ack_lost"},
+    {"id":"receipt","atMs":3000,"kind":"publication_observed","unblock":true},
+    {"id":"probe","atMs":6000,"kind":"deployment_verified","unblock":true}]},
+  {"id":"runner-restart","expected":"verified","events":[
+    {"id":"interrupt","atMs":0,"kind":"runner_interrupted"},
+    {"id":"restart","atMs":3000,"kind":"runner_restarted","unblock":true},
+    {"id":"probe","atMs":6000,"kind":"deployment_verified","unblock":true}]},
+  {"id":"moved-head","expected":"hold","events":[
+    {"id":"approve","atMs":0,"kind":"publication_approved"},
+    {"id":"head","atMs":3000,"kind":"pull_head_moved"}]},
+  {"id":"revoked-approval","expected":"hold","events":[
+    {"id":"approve","atMs":0,"kind":"publication_approved"},
+    {"id":"revoke","atMs":3000,"kind":"approval_revoked"}]},
+  {"id":"deployment-recurrence","expected":"hold","events":[
+    {"id":"probe","atMs":0,"kind":"deployment_verified"},
+    {"id":"recurrence","atMs":3000,"kind":"deployment_recurrence"}]}
+]

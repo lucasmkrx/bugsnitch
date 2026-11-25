@@ -6,6 +6,7 @@ import { createServer } from "node:http";
 import { readFile, mkdir } from "node:fs/promises";
 import { resolve, extname } from "node:path";
 import { chromium } from "playwright-core";
+import { createServer as createViteServer } from "vite";
 
 const staticRoot = resolve("dist");
 const types = {
@@ -47,6 +48,28 @@ async function staticHost() {
   );
   return { server, url: "http://127.0.0.1:" + server.address().port };
 }
+
+async function expectHomepageLogos(page) {
+  const logos = page.locator(".wordmark img");
+  assert.equal(await logos.count(), 2);
+  for (const logo of await logos.all()) {
+    await logo.evaluate((image) => image.decode());
+    assert.ok(await logo.isVisible());
+  }
+}
+
+async function expectWorkspaceScreenshot(page, width) {
+  const screenshot = page.locator(".dashboard-image");
+  await screenshot.scrollIntoViewIfNeeded();
+  assert.equal(
+    await screenshot.evaluate(async (image) => {
+      await image.decode();
+      return image.naturalWidth;
+    }),
+    width,
+  );
+}
+
 const project = {
   id: "p1",
   name: "Storefront",
@@ -370,6 +393,20 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
       ]);
     },
   );
+  await t.test("the local preview loads homepage artwork", async (t) => {
+    const dev = await createViteServer({
+      server: { host: "127.0.0.1", port: 5174, strictPort: false, hmr: false },
+    });
+    t.after(() => dev.close());
+    await dev.listen();
+    for (const width of [1440, 360]) {
+      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      t.after(() => page.close());
+      await page.goto(dev.resolvedUrls.local[0]);
+      await expectHomepageLogos(page);
+      await expectWorkspaceScreenshot(page, width);
+    }
+  });
   await t.test(
     "homepage works on desktop and mobile and opens the workspace",
     async (t) => {
@@ -384,6 +421,7 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
           route.fulfill({ json: fixture() }),
         );
         await page.goto(origin);
+        await expectHomepageLogos(page);
         await page
           .getByRole("heading", {
             name: "From issue to verified release.",
@@ -413,9 +451,12 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
         const favicon = await page
           .locator('link[rel="icon"][type="image/svg+xml"]')
           .getAttribute("href");
-        const icon = await page
-          .locator(".site-header .wordmark img")
-          .getAttribute("src");
+        const headerIcon = page.locator(".site-header .wordmark img");
+        const icon = await headerIcon.getAttribute("src");
+        assert.equal(
+          (await headerIcon.boundingBox()).width,
+          width === 1440 ? 48 : 38,
+        );
         assert.equal(favicon, "/brand/favicon.svg");
         if (width === 1440) {
           const [faviconArt, canonicalArt] = await page.evaluate(
@@ -479,14 +520,23 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
         await page.keyboard.press("Home");
         await expectStage("Plan", "Approve the work");
 
-        const dashboardImage = page.locator(".dashboard-image");
-        await dashboardImage.scrollIntoViewIfNeeded();
+        await expectWorkspaceScreenshot(page, width);
+        const workflow = page.getByRole("region", {
+          name: "Keep work moving between approvals.",
+        });
+        assert.equal(await workflow.getByRole("listitem").count(), 4);
         assert.equal(
-          await dashboardImage.evaluate(async (image) => {
-            await image.decode();
-            return image.naturalWidth;
-          }),
-          width,
+          await workflow
+            .getByRole("link", { name: "Explore the Work board" })
+            .getAttribute("href"),
+          "/app/#/work",
+        );
+        const verification = page.getByRole("table", {
+          name: "What the checkout demo proves.",
+        });
+        assert.deepEqual(
+          await verification.getByRole("rowheader").allTextContents(),
+          ["Original build", "Fixed build", "Redeploy", "Recurrence"],
         );
         assert.ok(
           await page.evaluate(
@@ -703,6 +753,72 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
         .getByText("Workspace dispatch is stopped", { exact: true })
         .waitFor();
       assert.equal(await page.getByText(/bugsnitch local-continue/).count(), 0);
+    },
+  );
+  await t.test(
+    "only the named approver sees the ticket decision for the current version",
+    async (t) => {
+      const page = await browser.newPage({
+        viewport: { width: 360, height: 800 },
+      });
+      t.after(() => page.close());
+      const state = fixture();
+      state.projects[0].paused = false;
+      const id = "e".repeat(32);
+      const action = {
+        attemptId: id,
+        version: 7,
+        kind: "review_plan",
+        disposition: "ask",
+        approver: "assigned",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      };
+      state.attempts = [
+        {
+          id,
+          projectId: "p1",
+          machine: "Builder",
+          repository: project.repository,
+          issueNumber: 7,
+          phase: "implement",
+          state: "waiting",
+          reasonCode: "plan_review_required",
+          version: 7,
+          baseSha: "b".repeat(40),
+          candidateSha: null,
+          connection: "connected",
+          updatedAt: state.updatedAt,
+          nextAction: action,
+        },
+      ];
+      state.viewer = {
+        id: "different",
+        role: "approver",
+        name: "Other approver",
+      };
+      let request;
+      await page.route("**/api/v1/state", (route) =>
+        route.fulfill({ json: state }),
+      );
+      await page.route(
+        "**/api/v1/attempts/" + id + "/ticket-decision",
+        (route) => {
+          request = route.request().postDataJSON();
+          action.answer = "approve";
+          return route.fulfill({ json: { answer: "approve" } });
+        },
+      );
+      await page.goto(url + "#/work?project=p1&id=" + id);
+      await page.getByText(/Requested from assigned/).waitFor();
+      const approve = page.getByRole("button", {
+        name: "Approve reviewed plan",
+      });
+      assert.equal(await approve.count(), 0);
+      state.viewer.id = "assigned";
+      await page.reload();
+      await approve.click();
+      await approve.waitFor({ state: "hidden" });
+      assert.deepEqual(request, { version: 7, answer: "approve" });
     },
   );
   for (const viewport of [

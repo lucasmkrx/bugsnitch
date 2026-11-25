@@ -16,6 +16,7 @@ import (
 
 // Server implements application operations on the private domain socket.
 type Server struct {
+	ProgressionWakes   *ProgressionWakes
 	DB                 *sql.DB
 	Origin             string
 	GitHubApp          *github.App

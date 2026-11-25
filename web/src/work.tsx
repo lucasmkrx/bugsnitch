@@ -19,7 +19,67 @@ const waiting: Record<string, string> = {
   owner_paused: "Review the paused attempt",
 };
 
+const progressionLabels: Record<string, string> = {
+  device_revoked: "Device access revoked",
+  device_offline: "Reconnect the assigned runner",
+  dispatch_paused: "Dispatch is paused",
+  stage_running: "Wait for the current stage",
+  review_plan: "Review the implementation plan",
+  owner_input: "Answer the runner’s question",
+  review_correction: "Review the findings before continuing",
+  resume_candidate: "Validate the recovered candidate",
+  inspect_execution: "Inspect the retained execution checkpoint",
+  publish_draft: "Publish the owner-approved draft",
+  approve_draft: "Review the candidate for publication",
+  approve_correction: "Review the correction for publication",
+  publish_correction: "Publish the owner-approved correction",
+  wait_draft: "Wait for GitHub to create the draft",
+  wait_inspection: "Wait for the first PR inspection",
+  inspect_revision: "Review the new PR revision",
+  wait_ci: "Wait for GitHub checks",
+  prepare_signoff: "Review the PR and prepare sign-off",
+  wait_deployment: "Review deployment evidence",
+  deployment_handover: "Record deployment handover",
+  hold: "Inspect the publication hold",
+  finished: "Handover recorded",
+  terminal: "Inspect the terminal attempt",
+};
+
+function observedAction(a: Attempt): WorkAction | undefined {
+  const next = a.nextAction;
+  if (!next || next.attemptId !== a.id || next.version !== a.version) return;
+  const label = progressionLabels[next.kind];
+  if (!label) return;
+  const deployment = next.deployment?.[0];
+  return {
+    label: next.answer === "hold" ? "Plan held by the approver" : label,
+    description:
+      next.expiresAt && next.approver && !next.answer
+        ? "Requested from " + next.approver + " until " + when(next.expiresAt)
+        : next.reason,
+    command:
+      a.state === "waiting" || next.kind === "terminal"
+        ? "bugsnitch local-show --id " + a.id
+        : undefined,
+    href: deployment
+      ? link("incidents", a.projectId, deployment.incidentId)
+      : [
+            "wait_draft",
+            "wait_inspection",
+            "inspect_revision",
+            "wait_ci",
+            "prepare_signoff",
+            "deployment_handover",
+            "finished",
+          ].includes(next.kind)
+        ? link("prs", a.projectId)
+        : undefined,
+  };
+}
+
 export function attemptAction(state: State, a: Attempt): WorkAction {
+  const observed = observedAction(a);
+  if (observed) return observed;
   const project = state.projects.find((p) => p.id === a.projectId);
   const draft = state.draftPRs?.find(
     (d) => d.attemptId === a.id && d.candidateSha === a.candidateSha,
@@ -143,9 +203,11 @@ export function ticketAction(
 export function AttemptAction({
   state,
   attempt,
+  run,
 }: {
   state: State;
   attempt: Attempt;
+  run: Run;
 }) {
   const action = attemptAction(state, attempt);
   const canContinue =
@@ -153,6 +215,28 @@ export function AttemptAction({
     attempt.connection === "connected" &&
     action.command !== undefined &&
     Object.hasOwn(waiting, attempt.reasonCode || "");
+  const next = attempt.nextAction;
+  const isCorrection = next?.kind === "approve_correction";
+  const canAnswer =
+    (next?.kind === "review_plan" || isCorrection) &&
+    next.version === attempt.version &&
+    !next.answer &&
+    next.expiresAt &&
+    new Date(next.expiresAt).getTime() > Date.now() &&
+    next.approver === state.viewer?.id &&
+    (state.viewer?.role === "owner" || state.viewer?.role === "approver");
+  function answer(choice: "approve" | "hold") {
+    return run(
+      () =>
+        post("attempts/" + enc(attempt.id) + "/ticket-decision", {
+          version: attempt.version,
+          answer: choice,
+        }),
+      choice === "approve"
+        ? "Action approved for this revision."
+        : "Action held.",
+    );
+  }
   return (
     <div className="panel-body work-action">
       <h3>Next action</h3>
@@ -165,7 +249,35 @@ export function AttemptAction({
           <code>{action.command}</code>
         </p>
       )}
-      {canContinue && (
+      {next?.preparedEvidence && (
+        <details>
+          <summary>
+            Prepared evidence for inspection{" "}
+            {next.preparedEvidence.inspectionVersion}
+          </summary>
+          <p>
+            Independent review{" "}
+            <code>{next.preparedEvidence.independentReview}</code>
+          </p>
+          <p>
+            Combined validation{" "}
+            <code>{next.preparedEvidence.combinedValidation}</code>
+          </p>
+        </details>
+      )}
+      {canAnswer && (
+        <div className="actions">
+          <button type="button" onClick={() => void answer("approve")}>
+            {isCorrection
+              ? "Approve correction publication"
+              : "Approve reviewed plan"}
+          </button>
+          <button type="button" onClick={() => void answer("hold")}>
+            Hold this revision
+          </button>
+        </div>
+      )}
+      {canContinue && !canAnswer && !next?.answer && (
         <p>
           After reviewing this checkpoint on {attempt.machine}, run{" "}
           <code>

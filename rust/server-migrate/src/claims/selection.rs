@@ -3,7 +3,7 @@ use super::{capacity, plan};
 use crate::coord::{Db, Error, Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -12,6 +12,8 @@ struct Next {
     project: String,
     #[serde(default, rename = "waitForTurn")]
     wait_for_turn: bool,
+    #[serde(default)]
+    issues: Vec<i64>,
 }
 
 // This uses a repeatable-read transaction. Selection explains what could be
@@ -20,7 +22,14 @@ pub(super) fn next(db: &Db<'_>, token: &str, request: Value) -> Result<Value> {
     let Next {
         project,
         wait_for_turn,
+        issues,
     } = serde_json::from_value(request)?;
+    let requested: HashSet<_> = issues.iter().copied().collect();
+    if requested.len() != issues.len() || issues.len() > 32 || issues.iter().any(|n| *n < 1) {
+        return Err(Error::bad(
+            "Choose one to 32 distinct positive issue numbers",
+        ));
+    }
     let row = db.optional("SELECT w.id,d.id,p.repository,p.policy_version,p.paused,w.stopped,w.ticket_limit,w.turn_limit,d.turn_limit,
         EXISTS(SELECT FROM github_mappings g WHERE g.workspace_id=w.id AND g.project_id=p.id AND g.active),
         (SELECT count(*) FROM admission a WHERE a.workspace_id=w.id AND a.active)
@@ -30,6 +39,7 @@ pub(super) fn next(db: &Db<'_>, token: &str, request: Value) -> Result<Value> {
     let ws = row.text(0)?;
     let device = row.text(1)?;
     let repository = row.text(2)?;
+    let hold = row.bool(5)? || row.bool(4)? || !row.bool(9)?;
     let reason = if row.bool(5)? {
         "Workspace dispatch is stopped"
     } else if row.bool(4)? {
@@ -43,11 +53,19 @@ pub(super) fn next(db: &Db<'_>, token: &str, request: Value) -> Result<Value> {
     } else {
         ""
     };
-    if !reason.is_empty() {
+    if !reason.is_empty() && (issues.is_empty() || hold) {
+        if !issues.is_empty() {
+            return Ok(json!({"reason":reason,"hold":true}));
+        }
         return Ok(json!({"reason":reason}));
     }
     let Some(mut plan) = plan::approved(db, ws, &project)? else {
-        return Ok(json!({"reason":"Approve a plan before requesting its next issue"}));
+        let reason = "Approve a plan before requesting its next issue";
+        return Ok(if issues.is_empty() {
+            json!({"reason":reason})
+        } else {
+            json!({"reason":reason,"hold":true})
+        });
     };
     let facts = ticket_facts(db, ws, &project, &plan.id)?;
     plan.tickets.sort_by_key(|t| {
@@ -59,14 +77,31 @@ pub(super) fn next(db: &Db<'_>, token: &str, request: Value) -> Result<Value> {
     });
     let mut candidates = Vec::with_capacity(plan.tickets.len());
     for ticket in &plan.tickets {
-        candidates.push(candidate(&facts, repository, ticket)?);
+        if issues.is_empty() || requested.contains(&ticket.number) {
+            candidates.push(candidate(&facts, repository, ticket)?);
+        }
     }
-    Ok(
-        json!({"plan":plan.document,"scope":{"deviceId":device,"projectId":project,"planId":plan.id,"policyVersion":row.i64(3)?},"candidates":candidates}),
-    )
+    let mut snapshot = json!({"plan":plan.document,"scope":{"deviceId":device,"projectId":project,"planId":plan.id,"policyVersion":row.i64(3)?},"candidates":candidates});
+    if !issues.is_empty() {
+        let bindings: HashMap<_, _> = issues.into_iter().filter_map(|number| {
+            let issue = facts.get(&number)?.canonical.as_ref()?;
+            // Freshness is checked at admission. A temporary refresh outage
+            // must not rewrite the last observed identity or revision.
+                if !issue.bound || issue.state != "open" || issue.revision.is_empty() || issue.digest.len() != 64 {
+                return None;
+            }
+            Some((number, json!({"githubId":issue.id,"requirementsDigest":issue.digest,"updatedAt":issue.revision})))
+        }).collect();
+        snapshot["bindings"] = json!(bindings);
+        if !reason.is_empty() {
+            snapshot["wait"] = json!(reason);
+        }
+    }
+    Ok(snapshot)
 }
 
 struct Canonical {
+    bound: bool,
     fresh_and_bound: bool,
     state: String,
     id: i64,
@@ -112,7 +147,7 @@ fn ticket_facts(
         SELECT t.number, a.issue_number IS NOT NULL, e.issue_number IS NOT NULL,
             EXISTS(SELECT FROM reservations r WHERE r.resources ?| t.resources),
             z.source_state, coalesce(m.active AND z.availability='current' AND z.checked_at>now()-interval '20 minutes'
-                AND b.plan_id IS NOT NULL,false), z.github_id, z.digest, z.title, z.selection_revision, EXISTS(SELECT FROM linear_sessions s WHERE s.workspace_id=$1 AND s.project_id=$2 AND s.issue_number=t.number AND NOT s.finished)
+                AND b.plan_id IS NOT NULL,false), z.github_id, z.digest, z.title, z.selection_revision, EXISTS(SELECT FROM linear_sessions s WHERE s.workspace_id=$1 AND s.project_id=$2 AND s.issue_number=t.number AND NOT s.finished), b.plan_id IS NOT NULL
         FROM tickets t
         LEFT JOIN attempted a ON a.issue_number=t.number
         LEFT JOIN prerequisite_evidence e ON e.workspace_id=$1 AND e.project_id=$2 AND e.plan_id=$3 AND e.issue_number=t.number
@@ -127,6 +162,7 @@ fn ticket_facts(
     for row in rows {
         let canonical = if let Some(state) = row.opt(4)? {
             Some(Canonical {
+                bound: row.bool(11)?,
                 state: state.into(),
                 fresh_and_bound: row.bool(5)?,
                 id: row.i64(6)?,

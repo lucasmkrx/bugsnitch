@@ -66,10 +66,24 @@ const PULL_WATCH: &str = "
         JOIN github_mappings m USING(workspace_id,project_id)
         WHERE m.active AND o.watching AND o.snapshot->>'state'='OPEN' AND o.next_watch<=now()
         ORDER BY o.next_watch,o.workspace_id,o.project_id,o.number FOR UPDATE OF o SKIP LOCKED LIMIT 1
+    ), watched AS (
+        UPDATE pull_observations o SET next_watch=clock_timestamp()+interval '2 minutes' FROM ready
+        WHERE (o.workspace_id,o.project_id,o.number)=(ready.workspace_id,ready.project_id,ready.number)
+        RETURNING o.workspace_id,o.project_id,''::text,o.number,o.next_watch::text
+    ), first_watch AS (
+        SELECT x.workspace_id,x.attempt_id FROM draft_pr_intents x
+        JOIN github_mappings m USING(workspace_id,project_id,installation_id,repository_id)
+        WHERE m.active AND x.status='created' AND x.number IS NOT NULL AND x.follow_at<=now()
+          AND NOT EXISTS(SELECT FROM watched)
+          AND NOT EXISTS(SELECT FROM pull_observations o
+             WHERE (o.workspace_id,o.project_id,o.number)=(x.workspace_id,x.project_id,x.number))
+        ORDER BY x.follow_at,x.workspace_id,x.attempt_id FOR UPDATE OF x SKIP LOCKED LIMIT 1
+    ), initialized AS (
+        UPDATE draft_pr_intents x SET follow_at=clock_timestamp()+interval '2 minutes' FROM first_watch
+        WHERE (x.workspace_id,x.attempt_id)=(first_watch.workspace_id,first_watch.attempt_id)
+        RETURNING x.workspace_id,x.project_id,x.attempt_id,x.number,x.follow_at::text
     )
-    UPDATE pull_observations o SET next_watch=clock_timestamp()+interval '2 minutes' FROM ready
-    WHERE (o.workspace_id,o.project_id,o.number)=(ready.workspace_id,ready.project_id,ready.number)
-    RETURNING o.workspace_id,o.project_id,''::text,o.number,o.next_watch::text";
+    SELECT * FROM watched UNION ALL SELECT * FROM initialized";
 
 // The same eligibility query drives both the cheap readiness hint and the locked
 // qualification operation. Another server may consume a hinted row first.

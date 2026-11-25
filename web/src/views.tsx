@@ -511,7 +511,7 @@ export function Views({
                 ["Attempt ID", <code>{a.id}</code>],
               ]}
             />
-            <AttemptAction state={s} attempt={a} />
+            <AttemptAction state={s} attempt={a} run={run} />
             <div className="panel-body">
               <h3>Execution evidence</h3>
               {a.evidence?.length ? (

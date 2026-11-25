@@ -3,9 +3,13 @@ package runner
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
+
+	"github.com/lucasmkrx/bugsnitch/internal/github"
 )
 
 type IntegrationCheck struct {
@@ -100,6 +104,56 @@ func integrationGit(ctx context.Context, op string, c IntegrationCheck, a Attemp
 }
 
 func CheckCombined(ctx context.Context, id, ref string) (IntegrationCheck, error) {
+	return checkCombined(ctx, id, ref, "")
+}
+
+func CheckCombinedAt(ctx context.Context, id, ref, expected string) (IntegrationCheck, error) {
+	if expected == "" {
+		return IntegrationCheck{}, errors.New("an unattended integration check needs an exact target revision")
+	}
+	return checkCombined(ctx, id, ref, expected)
+}
+
+// Retain the exact inspected base without moving the checkout or the user's
+// tracking refs. The fetch, when needed, uses the same isolated Git client as publication.
+func RetainInspectedBase(ctx context.Context, a Attempt, branch, expected string) (string, error) {
+	decoded, err := hex.DecodeString(expected)
+	if err != nil || (len(decoded) != 20 && len(decoded) != 32) || strings.ToLower(expected) != expected ||
+		!github.ValidBranch(branch) || !repoPattern.MatchString(a.Repository) {
+		return "", errors.New("invalid inspected integration target")
+	}
+	if err := checkOrigin(a.Project.Path, a.Repository); err != nil {
+		return "", err
+	}
+	ref := "refs/bugsnitch/inspections/" + expected
+	if kind, err := git(a.Project.Path, "cat-file", "-t", expected); err != nil || kind != "commit" {
+		err = withRemoteGit(ctx, a, "https", func(run remoteGit) error {
+			if _, err := run("fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--no-auto-maintenance", "--",
+				"https://github.com/"+a.Repository+".git", "refs/heads/"+branch+":refs/heads/inspected-target"); err != nil {
+				return errors.New("could not fetch the inspected integration target")
+			}
+			got, err := run("rev-parse", "--verify", "refs/heads/inspected-target^{commit}")
+			if err != nil || got != expected {
+				return errors.New("integration target moved since inspection")
+			}
+			return nil
+		})
+		if err != nil {
+			return "", err
+		}
+	}
+	if got, err := git(a.Project.Path, "rev-parse", "--verify", ref+"^{commit}"); err == nil && got == expected {
+		return ref, nil
+	}
+	if _, err := git(a.Project.Path, "update-ref", ref, expected, strings.Repeat("0", len(expected))); err != nil {
+		if got, e := git(a.Project.Path, "rev-parse", "--verify", ref+"^{commit}"); e != nil || got != expected {
+			return "", err
+		}
+	}
+	return ref, nil
+}
+
+func checkCombined(ctx context.Context, id, ref, expected string) (IntegrationCheck, error) {
 	var c IntegrationCheck
 	unlock, err := attemptLock(id)
 	if err != nil {
@@ -147,6 +201,9 @@ func CheckCombined(ctx context.Context, id, ref string) (IntegrationCheck, error
 		return IntegrationCheck{}, err
 	}
 	c.TargetSHA = resolved.TargetSHA
+	if expected != "" && c.TargetSHA != expected {
+		return IntegrationCheck{}, errors.New("local target ref differs from the inspected revision")
+	}
 	if err = c.save(); err != nil {
 		return c, err
 	}

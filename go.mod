@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/jackc/pgx/v5 v5.13.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	golang.org/x/sys v0.41.0
+	golang.org/x/sys v0.50.0
 )
 
 require (

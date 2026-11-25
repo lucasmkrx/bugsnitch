@@ -12,9 +12,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["raw_value"] }
 axum = { version = "0.8", default-features = false, features = ["http1", "json", "query", "tokio", "matched-path"] }
 bytes = "1"
-getrandom = "0.3"
+getrandom = "0.4"
 hex = "0.4"
-hmac = "0.12"
+hmac = "0.13"
 httpdate = "1"
 tokio-io-timeout = "1"
 http-range = "0.1.6"
@@ -27,7 +27,7 @@ mime_guess = "2"
 regex = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-native-roots", "stream"] }
 rmcp = { version = "=3.11.0", default-features = false, features = ["server", "transport-streamable-http-server"] }
-sha2 = "0.10"
+sha2 = "0.11"
 subtle = "2"
 tempfile = "3"
 time = { version = "0.3", features = ["formatting", "parsing"] }

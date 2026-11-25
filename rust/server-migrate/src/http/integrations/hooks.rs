@@ -8,7 +8,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
 };
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -304,6 +304,30 @@ pub(super) async fn github(
         return Ok(StatusCode::ACCEPTED);
     }
     let event = header(&headers, "x-github-event").unwrap_or("");
+    if matches!(
+        event,
+        "pull_request" | "pull_request_review" | "pull_request_review_comment" | "check_run"
+    ) {
+        let delivery = header(&headers, "x-github-delivery")
+            .filter(|d| UUID.is_match(d))
+            .ok_or_else(|| fail(StatusCode::UNPROCESSABLE_ENTITY, "Invalid delivery id"))?;
+        if let Some(hint) = parse_pull_watch(event, delivery, &body)? {
+            state
+                .coord(
+                    "hooks.pull_watch",
+                    [
+                        "provider".into(),
+                        format!("github/{}", hint["installation"]),
+                    ],
+                    hint,
+                )
+                .await
+                .map_err(intake_error)?;
+        }
+        if event != "check_run" {
+            return Ok(StatusCode::ACCEPTED);
+        }
+    }
     if matches!(event, "deployment_status" | "check_run") {
         let delivery = header(&headers, "x-github-delivery")
             .filter(|d| UUID.is_match(d))
@@ -330,6 +354,86 @@ pub(super) async fn github(
         .await
         .map_err(intake_error)?;
     Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(Deserialize)]
+struct PullWatchEvent {
+    installation: Option<PullWatchObject>,
+    repository: Option<PullWatchObject>,
+    pull_request: Option<PullWatchRequest>,
+    check_run: Option<PullWatchCheck>,
+}
+
+#[derive(Deserialize)]
+struct PullWatchObject {
+    id: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct PullWatchRequest {
+    number: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct PullWatchCheck {
+    head_sha: Option<String>,
+}
+
+fn parse_pull_watch(event: &str, delivery: &str, body: &[u8]) -> WebResult<Option<Value>> {
+    let Json(payload) = Json::<PullWatchEvent>::from_bytes(body).map_err(|_| {
+        fail(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "Invalid pull observation signal",
+        )
+    })?;
+    Ok(pull_watch_hint(event, delivery, &payload))
+}
+
+fn pull_watch_hint(event: &str, delivery: &str, p: &PullWatchEvent) -> Option<Value> {
+    let installation = p.installation.as_ref()?.id.filter(|n| *n > 0)?;
+    let repository = p.repository.as_ref()?.id.filter(|n| *n > 0)?;
+    let (number, head) = if event == "check_run" {
+        (
+            0,
+            p.check_run
+                .as_ref()?
+                .head_sha
+                .as_deref()
+                .filter(|s| crate::devices::valid_sha(s))?,
+        )
+    } else {
+        (p.pull_request.as_ref()?.number.filter(|n| *n > 0)?, "")
+    };
+    Some(
+        json!({"installation":installation,"repository":repository,"delivery":delivery,"number":number,"head":head,"feedback":matches!(event,"pull_request_review"|"pull_request_review_comment")}),
+    )
+}
+
+fn wake_pull_watch(db: &Db<'_>, p: Value) -> Result<Value> {
+    let installation = p["installation"]
+        .as_i64()
+        .ok_or_else(Error::denied)?
+        .to_string();
+    let repository = p["repository"]
+        .as_i64()
+        .ok_or_else(Error::denied)?
+        .to_string();
+    let number = p["number"].as_i64().ok_or_else(Error::denied)?.to_string();
+    let Some(m)=db.optional("SELECT workspace_id,project_id FROM github_mappings WHERE installation_id=$1 AND repository_id=$2 AND active FOR SHARE",
+        &[&installation,&repository])? else{return Ok(Value::Null)};
+    let (ws, project) = (m.text(0)?, m.text(1)?);
+    db.exec("WITH matches AS MATERIALIZED (
+       SELECT o.number FROM pull_observations o WHERE o.workspace_id=$1 AND o.project_id=$2
+         AND o.watching AND o.snapshot->>'state'='OPEN'
+         AND ($4::bigint>0 AND o.number=$4 OR $4::bigint=0 AND o.snapshot->>'head'=$5)
+     ), delivery AS (
+       INSERT INTO github_deliveries(workspace_id,project_id,delivery)
+       SELECT $1,$2,$3 WHERE EXISTS(SELECT FROM matches) ON CONFLICT DO NOTHING RETURNING 1
+     ) UPDATE pull_observations o SET next_watch=least(o.next_watch,greatest(now(),o.observed_at+interval '3 seconds')),
+        progression_signal=progression_signal+CASE WHEN $6::boolean THEN 1 ELSE 0 END
+     WHERE o.workspace_id=$1 AND o.project_id=$2 AND o.number IN (SELECT number FROM matches) AND EXISTS(SELECT FROM delivery)",
+      &[ws,project,text(&p,"delivery"),&number,text(&p,"head"),&p["feedback"].as_bool().unwrap_or(false).to_string()])?;
+    Ok(Value::Null)
 }
 
 #[derive(Deserialize)]
@@ -446,6 +550,7 @@ fn record_merge_group(db: &Db<'_>, g: Value) -> Result<Value> {
 pub(crate) fn apply(db: &Db<'_>, op: &str, input: Value) -> Result<Value> {
     match op {
         "hooks.merge_group" => record_merge_group(db, input),
+        "hooks.pull_watch" => wake_pull_watch(db, input),
         "hooks.sentry" => record_observation(db, serde_json::from_value(input)?),
         "hooks.github" => record_github(db, serde_json::from_value(input)?),
         _ => Err(Error::bad("Unknown webhook operation")),
@@ -522,6 +627,31 @@ mod tests {
                 .0,
             StatusCode::UNAUTHORIZED
         );
+    }
+
+    #[test]
+    fn pull_watch_uses_only_valid_identifiers_from_the_event() {
+        let delivery = "00112233-aabb-ccdd-eeff-001122334455";
+        let parse = |kind, event: &Value| {
+            parse_pull_watch(kind, delivery, &serde_json::to_vec(event).unwrap())
+        };
+        let mut event = json!({"installation":{"id":10},"repository":{"id":11},
+            "pull_request":{"number":12,"body":"unused"}});
+        assert_eq!(
+            parse("pull_request_review", &event).unwrap().unwrap(),
+            json!({"installation":10,"repository":11,"delivery":delivery,
+                "number":12,"head":"","feedback":true})
+        );
+        event["pull_request"]["number"] = json!(0);
+        assert!(parse("pull_request", &event).unwrap().is_none());
+        event["check_run"] = json!({"head_sha":"a".repeat(40)});
+        let check = parse("check_run", &event).unwrap().unwrap();
+        assert_eq!(check["number"], 0);
+        assert_eq!(check["head"], "a".repeat(40));
+        event["check_run"]["head_sha"] = json!("main");
+        assert!(parse("check_run", &event).unwrap().is_none());
+        event["installation"]["id"] = json!("10");
+        assert!(parse("check_run", &event).is_err());
     }
 
     #[test]

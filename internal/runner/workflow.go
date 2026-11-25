@@ -52,6 +52,11 @@ func create(ctx context.Context, w, r string, i Issue, previous, reason string, 
 	if err != nil {
 		return a, err
 	}
+	if grant, ok := ctx.Value(unattendedKey{}).(unattendedPass); ok {
+		if projectDigest(p) != grant.projectDigest {
+			return a, errors.New("local worker configuration changed since unattended authorization")
+		}
+	}
 	if err = checkOrigin(p.Path, p.Repository); err != nil {
 		return a, err
 	}
@@ -75,6 +80,9 @@ func create(ctx context.Context, w, r string, i Issue, previous, reason string, 
 	}
 	a = Attempt{Summary: Summary{ID: id, Workspace: w, Repository: p.Repository, IssueNumber: i.Number, BaseSHA: sha, Version: 1, Phase: "plan", State: "waiting"}, Project: p, Issue: i, CreatedAt: now(), Branch: "bugsnitch/" + id, Worktree: filepath.Join(dir, "worktrees", id)}
 	a.Steward = steward
+	if grant, ok := ctx.Value(unattendedKey{}).(unattendedPass); ok {
+		a.UnattendedGrant = grant.grantID
+	}
 	a.UpdatedAt = a.CreatedAt
 	a.LocalRunScope = scope
 	a.PreviousAttempt = previous
@@ -163,6 +171,9 @@ func continueAttempt(ctx context.Context, id, feedback string, version int, unti
 	if a.State != "waiting" {
 		return a, errors.New("attempt is not waiting; inspect the retained worktree and journal")
 	}
+	if grant, ok := ctx.Value(unattendedKey{}).(unattendedPass); ok && (a.UnattendedGrant != grant.grantID || projectDigest(a.Project) != grant.projectDigest) {
+		return a, errors.New("the retained attempt differs from the unattended grant")
+	}
 	if len(feedback) > 8192 {
 		return a, errors.New("feedback exceeds 8 KiB")
 	}
@@ -230,7 +241,11 @@ func runClaimed(ctx context.Context, a *Attempt, admitted func(Summary), guarded
 	done := make(chan struct{})
 	go watchControls(runCtx, a.ID, cancel, done)
 	err := steps(runCtx, a, guarded)
-	for err == nil && guarded && a.Project.Config.AutoCorrect && a.State == "waiting" && a.ReasonCode == protocol.ReviewCorrection {
+	autoCorrect := a.Project.Config.AutoCorrect
+	if grant, ok := ctx.Value(unattendedKey{}).(unattendedPass); ok {
+		autoCorrect = autoCorrect && grant.corrections
+	}
+	for err == nil && guarded && autoCorrect && a.State == "waiting" && a.ReasonCode == protocol.ReviewCorrection {
 		// Persist the finding and next stage before another turn. Pauses and
 		// questions always stop automatic corrections.
 		a.State, a.ReasonCode, a.Message = "running", "", ""
@@ -316,6 +331,11 @@ func turn(ctx context.Context, a *Attempt, directive string, payload any, schema
 	}
 	var result agent.Result
 	runErr := authorizedStage(ctx, a, true, func(live context.Context) error {
+		if grant, ok := live.Value(unattendedKey{}).(unattendedPass); ok {
+			if err := grant.takeTurn(live); err != nil {
+				return err
+			}
+		}
 		var e error
 		started := time.Now()
 		result, e = modelTurn(live, a, directive, string(b), schema)

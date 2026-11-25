@@ -55,6 +55,9 @@ func (s Store) Watch(ctx context.Context, workspace, project string, number, ver
 // SyncWatch reads only explicitly watched PRs and uses the same inspection
 // and compare-and-swap path as an interactive refresh.
 func (s Store) SyncWatch(ctx context.Context, job storage.JobClaim) error {
+	if job.Item != "" {
+		return s.initializeDraftWatch(ctx, job)
+	}
 	var issue, version int64
 	err := s.DB.QueryRowContext(ctx, `SELECT issue_number,version FROM pull_observations
 	    WHERE workspace_id=$1 AND project_id=$2 AND number=$3 AND watching
@@ -75,4 +78,24 @@ func (s Store) SyncWatch(ctx context.Context, job storage.JobClaim) error {
 		return err
 	}
 	return s.advanceQueue(ctx, job.Workspace, job.Project, job.Number, current)
+}
+
+func (s Store) initializeDraftWatch(ctx context.Context, job storage.JobClaim) error {
+	var issue int64
+	err := s.DB.QueryRowContext(ctx, `SELECT issue_number FROM draft_pr_intents
+		WHERE workspace_id=$1 AND project_id=$2 AND attempt_id=$3 AND number=$4
+		  AND status='created' AND follow_at=$5::timestamptz`,
+		job.Workspace, job.Project, job.Item, job.Number, job.Fence).Scan(&issue)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	ctx = audit.WithActor(ctx, audit.Service, "pull-watch")
+	_, err = s.refresh(ctx, job.Workspace, job.Project, job.Number, issue, 0, true)
+	if errors.Is(err, ErrConflict) {
+		return nil
+	}
+	return err
 }

@@ -34,7 +34,7 @@ Start the local service from the repository root.
 make dev
 ```
 
-Open the [local homepage](http://localhost:8787/) for the interactive release example or the [workspace](http://localhost:8787/app/) to sign in with the owner credential saved in `.local/dev/owner-token`. The script starts a private PostgreSQL cluster, applies migrations, and builds the web app. Stop the service with Ctrl-C and its database with `scripts/dev stop`. The next start reuses your data. For a read-only tour with sample data, the workspace demo needs only Node.js and npm. [Workspace walkthrough](docs/DASHBOARD.md) · [Read-only demo](docs/DASHBOARD.md#read-only-demo)
+Open the [local homepage](http://localhost:8787/) for the scroll-driven invite-fix walkthrough or the [workspace](http://localhost:8787/app/) to sign in with the owner credential saved in `.local/dev/owner-token`. The script starts a private PostgreSQL cluster, applies migrations, and builds the web app. Stop the service with Ctrl-C and its database with `scripts/dev stop`. The next start reuses your data. For a read-only tour with sample data, the workspace demo needs only Node.js and npm. [Workspace walkthrough](docs/DASHBOARD.md) · [Read-only demo](docs/DASHBOARD.md#read-only-demo)
 
 ### Connect a macOS runner
 

@@ -58,18 +58,6 @@ async function expectHomepageLogos(page) {
   }
 }
 
-async function expectWorkspaceScreenshot(page, width) {
-  const screenshot = page.locator(".dashboard-image");
-  await screenshot.scrollIntoViewIfNeeded();
-  assert.equal(
-    await screenshot.evaluate(async (image) => {
-      await image.decode();
-      return image.naturalWidth;
-    }),
-    width,
-  );
-}
-
 const project = {
   id: "p1",
   name: "Storefront",
@@ -466,18 +454,45 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
       ]);
     },
   );
-  await t.test("the local preview loads homepage artwork", async (t) => {
+  await t.test("the local preview loads the illustrated hero", async (t) => {
     const dev = await createViteServer({
       server: { host: "127.0.0.1", port: 5174, strictPort: false, hmr: false },
     });
     t.after(() => dev.close());
     await dev.listen();
     for (const width of [1440, 360]) {
-      const page = await browser.newPage({ viewport: { width, height: 900 } });
+      const page = await browser.newPage({
+        viewport: { width, height: 900 },
+        deviceScaleFactor: width === 1440 ? 2 : 1,
+      });
       t.after(() => page.close());
       await page.goto(dev.resolvedUrls.local[0]);
       await expectHomepageLogos(page);
-      await expectWorkspaceScreenshot(page, width);
+      const copy = page.locator(".hero-copy");
+      const illustration = page.locator(".hero-illustration");
+      const source = await illustration.evaluate(async (image) => {
+        await image.decode();
+        return new URL(image.currentSrc).pathname;
+      });
+      assert.equal(
+        source,
+        width === 1440
+          ? "/brand/factory-workflow.jpg"
+          : "/brand/factory-workflow-720.jpg",
+      );
+      const textBounds = await copy.boundingBox();
+      const artBounds = await illustration.boundingBox();
+      if (width === 1440) {
+        assert.ok(artBounds.x >= textBounds.x + textBounds.width);
+      } else {
+        assert.equal(artBounds.x, textBounds.x);
+        assert.ok(artBounds.y >= textBounds.y + textBounds.height);
+      }
+      const releasePath = page.getByRole("list", {
+        name: "Example run from issue to release",
+      });
+      await releasePath.getByText("Verified build", { exact: true }).waitFor();
+      assert.equal(await releasePath.getByRole("listitem").count(), 4);
     }
   });
   await t.test(
@@ -490,6 +505,9 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
           permissions: ["clipboard-read", "clipboard-write"],
         });
         t.after(() => page.close());
+        await page.emulateMedia({
+          reducedMotion: "no-preference",
+        });
         await page.route("**/api/v1/state", (route) =>
           route.fulfill({ json: fixture() }),
         );
@@ -566,64 +584,151 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
             ["image/png", 1200, 630],
           );
         }
-        async function expectStage(name, heading) {
-          const selected = page.getByRole("tab", { selected: true });
-          assert.equal(await selected.count(), 1);
-          assert.equal(
-            await page
-              .getByRole("tab", { name, exact: true })
-              .getAttribute("aria-selected"),
-            "true",
-          );
-          assert.equal(await page.getByRole("tabpanel").count(), 1);
-          await page
-            .getByRole("tabpanel", { name, exact: true })
-            .getByRole("heading", { name: heading, exact: true })
-            .waitFor();
-        }
-        await expectStage("Verify", "Check the deployed build");
-        await page.getByRole("tab", { name: "Plan", exact: true }).click();
-        await expectStage("Plan", "Approve the work");
-        await page.keyboard.press("ArrowRight");
-        await expectStage("Review", "Review the candidate");
-        await page.keyboard.press("ArrowRight");
-        await expectStage("Ship", "Publish the reviewed change");
-        await page.keyboard.press("End");
-        await expectStage("Verify", "Check the deployed build");
-        await page.keyboard.press("Home");
-        await expectStage("Plan", "Approve the work");
-
-        await expectWorkspaceScreenshot(page, width);
-        const workflow = page.getByRole("region", {
-          name: "Keep work moving between approvals.",
-        });
-        assert.equal(await workflow.getByRole("listitem").count(), 4);
-        assert.equal(
-          await workflow
-            .getByRole("link", { name: "Explore the Work board" })
-            .getAttribute("href"),
-          "/app/#/work",
-        );
-        const verification = page.getByRole("table", {
-          name: "What the checkout demo proves.",
+        const hero = page.getByRole("region", {
+          name: "From issue to verified release.",
         });
         assert.deepEqual(
-          await verification.getByRole("rowheader").allTextContents(),
-          ["Original build", "Fixed build", "Redeploy", "Recurrence"],
+          await hero.locator("h1").evaluate((heading) => {
+            const accent = heading.querySelector("em");
+            return [
+              accent.textContent,
+              getComputedStyle(accent).color,
+              getComputedStyle(accent.parentElement).color ===
+                getComputedStyle(heading).color,
+            ];
+          }),
+          ["verified", "rgb(212, 0, 0)", true],
         );
+        const footer = page.getByRole("contentinfo");
+        assert.equal(
+          await footer
+            .getByRole("navigation", { name: "Product links" })
+            .getByRole("link", { name: "Workspace" })
+            .getAttribute("href"),
+          "/app/",
+        );
+        await footer.getByRole("link", { name: "Documentation" }).waitFor();
+        await hero.getByRole("link", { name: "See a factory run" }).click();
+        assert.equal(new URL(page.url()).hash, "#showcase");
+        const showcase = page.getByRole("region", {
+          name: "Inside a factory run",
+        });
+        assert.equal(await showcase.locator("video").count(), 0);
+        assert.equal(await showcase.getByRole("button").count(), 0);
+        const progress = showcase.getByRole("list", {
+          name: "Factory run progress",
+        });
+        const activeStep = progress.locator('[aria-current="step"]');
+        const expectStep = (name) =>
+          activeStep.and(progress.getByText(name, { exact: true })).waitFor();
+        await page.waitForFunction(
+          () =>
+            Math.abs(
+              document
+                .querySelector(".walkthrough-viewport")
+                .getBoundingClientRect().top,
+            ) < 2,
+        );
+        await expectStep("Plan");
+        await showcase.getByText("Invite expired", { exact: true }).waitFor();
+
+        const track = showcase.locator(".walkthrough[data-pinned]");
+        await track.waitFor();
+        const panel = track.locator(".walkthrough-viewport");
+        const runway = track.locator(".walkthrough-runway");
+        const panelBounds = await panel.boundingBox();
+        assert.ok(Math.abs(panelBounds.y) < 2);
+        assert.ok(panelBounds.height >= 899);
+        assert.equal(await showcase.getByRole("article").count(), 1);
+
+        const stepDistance = Math.round(
+          (await runway.boundingBox()).height / 4,
+        );
+        const shortScroll = Math.round(stepDistance / 3);
+        const transform = await showcase
+          .locator("#invite-failure .run-evidence")
+          .evaluate((element) => getComputedStyle(element).transform);
+        await page.mouse.move(width / 2, 400);
+        await page.mouse.wheel(0, shortScroll);
+        await page.waitForFunction((initial) => {
+          const art = document.querySelector("#invite-failure .run-evidence");
+          return getComputedStyle(art).transform !== initial;
+        }, transform);
+        assert.equal(await activeStep.textContent(), "Plan");
+        const toTransition = Math.round(stepDistance * 0.81) - shortScroll;
+        await page.mouse.wheel(0, toTransition);
+        await page.waitForFunction(() => {
+          const offset = (id) =>
+            parseFloat(
+              document
+                .getElementById(id)
+                .style.getPropertyValue("--slide-offset"),
+            );
+          return offset("invite-failure") < 0 && offset("invite-runner") < 100;
+        });
+        await page.mouse.wheel(0, stepDistance - toTransition);
+        await expectStep("Build");
+        assert.ok(Math.abs((await panel.boundingBox()).y) < 2);
+        await showcase.getByText("Invite bug reproduced").waitFor();
+        await page.mouse.wheel(0, -(shortScroll + stepDistance));
+        await expectStep("Plan");
+
+        await page.mouse.wheel(0, Math.round(stepDistance * 2.1));
+        await expectStep("Approve");
+        await showcase
+          .getByText("+ expiresAt = issuedAt + ttlMs", { exact: true })
+          .waitFor();
+        await page.mouse.wheel(0, stepDistance);
+        await expectStep("Verify");
+        await showcase.getByText("Invite accepted", { exact: true }).waitFor();
+
+        await page.mouse.wheel(0, stepDistance * 2);
+        await page.waitForFunction(
+          () =>
+            document.querySelector("#workflow").getBoundingClientRect().top <
+            innerHeight,
+        );
+        if (width === 360) {
+          await page.emulateMedia({ reducedMotion: "reduce" });
+          await showcase.getByRole("article").nth(3).waitFor();
+          assert.equal(
+            await showcase
+              .locator(".run-evidence")
+              .first()
+              .evaluate((element) => getComputedStyle(element).transform),
+            "none",
+          );
+        }
+
+        const workflow = page.getByRole("region", {
+          name: "How the factory runs",
+        });
+        assert.equal(await workflow.getByRole("article").count(), 3);
+        await workflow
+          .getByRole("link", { name: "Deployment verification guide" })
+          .waitFor();
+        await page.locator("#evidence > summary").click();
         assert.ok(
           await page.evaluate(
             () => document.documentElement.scrollWidth <= innerWidth,
           ),
         );
-        await page.getByRole("link", { name: "Try the checkout demo" }).click();
-        assert.equal(new URL(page.url()).hash, "#quickstart");
+        await page
+          .getByRole("heading", { name: "Start with one issue" })
+          .waitFor();
+        assert.equal(
+          await page.locator("main > section").last().getAttribute("id"),
+          "quickstart",
+        );
         await page.getByRole("button", { name: "Copy command" }).click();
         assert.equal(
           await page.evaluate(() => navigator.clipboard.readText()),
           "make checkout-acceptance",
         );
-        await page.getByRole("link", { name: "Open workspace" }).click();
+        await page
+          .getByRole("banner")
+          .getByRole("link", { name: "Workspace", exact: true })
+          .click();
         await page
           .getByRole("heading", { name: "Overview", exact: true })
           .waitFor();

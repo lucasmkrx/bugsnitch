@@ -1,6 +1,6 @@
 # Bugsnitch product and setup reference
 
-> Bugsnitch is a developer-preview software factory that runs coding agents on a team's own machines and tracks approved work from a GitHub issue to a verified release.
+> Bugsnitch is an autonomous software factory in developer preview that runs coding agents on a team's own machines and tracks approved work from a GitHub issue to a verified release.
 
 ## Website and availability
 

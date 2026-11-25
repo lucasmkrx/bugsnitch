@@ -172,9 +172,7 @@ button:hover:enabled,
   margin: 23px 0;
 }
 .nav-group h2 {
-  font-size: 10px;
-  letter-spacing: 0.11em;
-  text-transform: uppercase;
+  font-size: 11px;
   color: var(--mute);
   margin: 0 10px 8px;
 }

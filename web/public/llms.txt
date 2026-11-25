@@ -1,6 +1,6 @@
 # Bugsnitch
 
-> Bugsnitch is a software factory for teams that run coding agents on their own machines. It takes approved GitHub issues through implementation in Git worktrees, independent review, team approval, and verification of the deployed build.
+> Bugsnitch is an autonomous software factory for teams that run coding agents on their own machines. It takes approved GitHub issues through implementation in Git worktrees, independent review, team approval, and verification of the deployed build.
 
 Bugsnitch is in developer preview. The public workspace is a read-only demo with sample data. The GitHub repository contains the current software and documentation for local and self-hosted use. Hosted pilot workspaces are available by invitation.
 

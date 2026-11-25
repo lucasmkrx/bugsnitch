@@ -14,7 +14,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "json",
 bytes = "1"
 getrandom = "0.3"
 hex = "0.4"
-hmac = "0.12"
+hmac = "0.13"
 httpdate = "1"
 tokio-io-timeout = "1"
 http-range = "0.1.6"

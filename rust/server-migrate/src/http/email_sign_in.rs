@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 use super::{session::field, *};
 use crate::coord::{Db, Result as DbResult};
+use gcp_auth::{MetadataServiceAccount, TokenProvider};
 use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use std::sync::LazyLock;
 use subtle::ConstantTimeEq;
 
 const ACTION: &str = "email_sign_in";
-const METADATA_TOKEN: &str =
-    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub(super) struct Settings {
     project: String,
@@ -16,6 +16,7 @@ pub(super) struct Settings {
     resend_key: String,
     sender: String,
     code_key: [u8; 32],
+    credentials: tokio::sync::OnceCell<MetadataServiceAccount>,
     client: reqwest::Client,
 }
 
@@ -47,9 +48,10 @@ impl Settings {
         hex::decode_to_slice(key, &mut code_key)
             .map_err(|_| "BUGSNITCH_EMAIL_CODE_KEY must be 32 bytes encoded as hex")?;
         let client = reqwest::Client::builder()
+            .https_only(true)
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(3))
+            .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|_| "Cannot initialize the email sign-in HTTP client")?;
         Ok(Some(Self {
@@ -58,34 +60,25 @@ impl Settings {
             resend_key,
             sender,
             code_key,
+            credentials: tokio::sync::OnceCell::new(),
             client,
         }))
     }
 
     async fn captcha(&self, response: &str, hostname: &str) -> WebResult<()> {
-        #[derive(Deserialize)]
-        struct Credential {
-            access_token: String,
-        }
-        let credential = self
-            .client
-            .get(METADATA_TOKEN)
-            .header("Metadata-Flavor", "Google")
-            .send()
-            .await
-            .and_then(reqwest::Response::error_for_status)
-            .map_err(|_| unavailable())?;
-        if credential
-            .headers()
-            .get("Metadata-Flavor")
-            .is_none_or(|v| v != "Google")
-        {
-            return Err(unavailable());
-        }
-        let credential: Credential = credential.json().await.map_err(|_| unavailable())?;
+        let credential = tokio::time::timeout(REQUEST_TIMEOUT, async {
+            let credentials = self
+                .credentials
+                .get_or_try_init(MetadataServiceAccount::new)
+                .await?;
+            credentials.token(&[]).await
+        })
+        .await
+        .map_err(|_| unavailable())?
+        .map_err(|_| unavailable())?;
         let assessment: Assessment = self.client
             .post(format!("https://recaptchaenterprise.googleapis.com/v1/projects/{}/assessments", self.project))
-            .bearer_auth(credential.access_token)
+            .bearer_auth(credential.as_str())
             .json(&json!({"event":{"token":response,"siteKey":self.site_key,"expectedAction":ACTION}}))
             .send().await.and_then(reqwest::Response::error_for_status)
             .map_err(|_| unavailable())?
@@ -383,7 +376,8 @@ mod tests {
         );
         assert!(address("Operator <operator@example.test>").is_err());
         assert!(address("operator@example.test,other@example.test").is_err());
-        let key = [7; 32];
+        let mut key = [0; 32];
+        getrandom::fill(&mut key).unwrap();
         assert_ne!(
             code_mac(&key, "first", "123456"),
             code_mac(&key, "second", "123456")

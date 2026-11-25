@@ -1,0 +1,79 @@
+name: Deploy homepage
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: bugsnitch-homepage-production
+  queue: max
+
+permissions:
+  contents: read
+
+env:
+  REGISTRY: us-central1-docker.pkg.dev
+  IMAGE_REPOSITORY: us-central1-docker.pkg.dev/bugsnitch/bugsnitch-web/homepage
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Build and test the homepage image
+        shell: bash
+        run: |
+          tag="$IMAGE_REPOSITORY:git-$GITHUB_SHA"
+          docker build --platform linux/amd64 --provenance=false \
+            --build-arg SOURCE_DATE_EPOCH=0 \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --file deploy/homepage.Dockerfile --tag "$tag" .
+          container=$(docker run -d --rm -p 127.0.0.1::8080 "$tag")
+          trap 'docker stop "$container" >/dev/null' EXIT
+          origin="http://$(docker port "$container" 8080/tcp)"
+          curl --fail --silent --show-error --retry 8 --retry-connrefused "$origin/" >/dev/null
+          python3 deploy/verify-homepage.py "$origin"
+
+      - name: Authenticate to Google Cloud
+        id: google
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          workload_identity_provider: projects/39273601091/locations/global/workloadIdentityPools/bugsnitch-github/providers/main-deploy
+          service_account: bugsnitch-web-deployer@bugsnitch.iam.gserviceaccount.com
+          token_format: access_token
+          access_token_lifetime: 900s
+          create_credentials_file: false
+          export_environment_variables: false
+
+      - name: Publish and deploy the image digest
+        shell: bash
+        env:
+          CLOUD_RUN_ACCESS_TOKEN: ${{ steps.google.outputs.access_token }}
+        run: |
+          if (( GITHUB_RUN_ATTEMPT > 1 )); then
+            latest=$(git ls-remote --heads origin refs/heads/main | cut -f1)
+            if [[ "$latest" != "$GITHUB_SHA" ]]; then
+              echo "An older deployment cannot overwrite the current main branch." >&2
+              exit 1
+            fi
+          fi
+          tag="$IMAGE_REPOSITORY:git-$GITHUB_SHA"
+          printf '%s' "$CLOUD_RUN_ACCESS_TOKEN" |
+            docker login --username oauth2accesstoken --password-stdin "$REGISTRY"
+          trap 'docker logout "$REGISTRY" >/dev/null' EXIT
+          docker push "$tag"
+          image=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$tag" |
+            awk -v prefix="$IMAGE_REPOSITORY@sha256:" 'index($0, prefix) == 1 { print; exit }')
+          revision=$(python3 deploy/deploy-homepage.py "$image")
+          echo "Cloud Run revision: $revision"
+          printf 'Cloud Run revision: `%s`\n\nImage: `%s`\n' "$revision" "$image" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify the public homepage and discovery files
+        run: python3 deploy/verify-homepage.py https://bugsnitch.com

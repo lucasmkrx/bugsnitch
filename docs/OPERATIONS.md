@@ -16,6 +16,12 @@ Bring up staging at `staging.bugsnitch.com` first. Point that hostname at the st
 
 The hosted bootstrap credential belongs to the owner. Browser sessions use hashed opaque secrets with a 12-hour expiry. Cookies use HttpOnly, SameSite Strict and Secure on HTTPS. Changing BUGSNITCH_OWNER_TOKEN affects future sign-in; deleting this owner's sessions forces sign-in again. Connections from devices use a separate 256-bit local credential, with only its digest stored centrally. Use `bugsnitch rotate` to replace a device credential while preserving its identity and reservations. The old credential stops authorizing sync immediately. A lost rotation acknowledgment can be reconciled for 24 hours using the recorded pending key. Revoke and pair afresh if that window expires. Revocation blocks subsequent sync and admission. A sleeping computer may retain uncommitted work. Confirm quiescence on that computer before recovering reservations.
 
+### Public homepage deployment
+
+The [Deploy homepage workflow](../.github/workflows/deploy-homepage.yml) runs on pushes to `main`. It builds and smoke-tests the public Nginx image, publishes it to the `bugsnitch-web` Artifact Registry repository, and deploys the image by digest to the existing `bugsnitch` Cloud Run service in `us-central1`. Deployments run one at a time. The workflow waits for all traffic to reach the new ready revision and verifies the homepage, crawl files, and read-only demo over HTTPS.
+
+Google Workload Identity Federation authenticates the matching workflow on `main` as `bugsnitch-web-deployer` using short-lived credentials. The public container runs as `bugsnitch-web-runtime` with no project roles. The PostgreSQL-backed service and its access configuration have their own deployment process.
+
 ### Email sign-in on Cloud Run
 
 Email sign-in is available to invited operators on the PostgreSQL-backed service. Owners and approvers use their existing credentials. In **Settings → Workspace access**, enter the operator's email address and select their project scope. For an existing operator who needs email sign-in, revoke their previous membership and recreate it with the same scope and their email address. Revocation removes their pending code and existing sessions.

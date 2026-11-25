@@ -451,9 +451,12 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
         const favicon = await page
           .locator('link[rel="icon"][type="image/svg+xml"]')
           .getAttribute("href");
-        const icon = await page
-          .locator(".site-header .wordmark img")
-          .getAttribute("src");
+        const headerIcon = page.locator(".site-header .wordmark img");
+        const icon = await headerIcon.getAttribute("src");
+        assert.equal(
+          (await headerIcon.boundingBox()).width,
+          width === 1440 ? 48 : 38,
+        );
         assert.equal(favicon, "/brand/favicon.svg");
         if (width === 1440) {
           const [faviconArt, canonicalArt] = await page.evaluate(
@@ -518,6 +521,23 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
         await expectStage("Plan", "Approve the work");
 
         await expectWorkspaceScreenshot(page, width);
+        const workflow = page.getByRole("region", {
+          name: "Keep work moving between approvals.",
+        });
+        assert.equal(await workflow.getByRole("listitem").count(), 4);
+        assert.equal(
+          await workflow
+            .getByRole("link", { name: "Explore the Work board" })
+            .getAttribute("href"),
+          "/app/#/work",
+        );
+        const verification = page.getByRole("table", {
+          name: "What the checkout demo proves.",
+        });
+        assert.deepEqual(
+          await verification.getByRole("rowheader").allTextContents(),
+          ["Original build", "Fixed build", "Redeploy", "Recurrence"],
+        );
         assert.ok(
           await page.evaluate(
             () => document.documentElement.scrollWidth <= innerWidth,

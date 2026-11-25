@@ -6,14 +6,8 @@ import { chromium } from "playwright-core";
 const output = new URL("../public/brand/", import.meta.url);
 const icon = await readFile(new URL("bugsnitch-logo.svg", output), "utf8");
 const wordmark = await readFile(new URL("bugsnitch-wordmark.svg", output));
-const texture = await readFile(
-  new URL("../src/home/circuit-texture-light.jpg", import.meta.url),
-);
 const bold = await readFile(
   new URL("../src/fonts/ibm-plex-mono-latin-700.woff2", import.meta.url),
-);
-const normal = await readFile(
-  new URL("../src/fonts/ibm-plex-mono-latin-400.woff2", import.meta.url),
 );
 const dataURL = (mime, bytes) =>
   `data:${mime};base64,${bytes.toString("base64")}`;
@@ -110,30 +104,13 @@ try {
     630,
     `<style>
       @font-face {font-family:Plex; src:url(${dataURL("font/woff2", bold)}); font-weight:700}
-      @font-face {font-family:Plex; src:url(${dataURL("font/woff2", normal)}); font-weight:400}
-      * {box-sizing:border-box}
-      body {background:#faf9f6; color:#201e1d; font-family:Plex,monospace}
-      main {height:630px; padding:60px 64px; display:grid; grid-template-columns: 1fr 390px; gap:24px}
-      section {display:flex; flex-direction:column; align-items:flex-start; justify-content:space-between}
-      h1 {font-size:68px; line-height:1.06; letter-spacing:-4px; margin:0}
-      strong {color:#d40000}
-      p {font-size:23px; line-height:1.5; text-wrap:balance; color:#5b5651; margin:21px 0 0}
-      footer {font-size:18px; color:#5b5651}
-      figure {margin:0; border:1px solid #d7cec4; border-radius:28px; background:url(${dataURL("image/jpeg", texture)}) center/cover; display:grid; place-items:center; overflow:hidden}
-      .icon {height:244px; width:244px; border:1px solid #e0d7ce; border-radius:51px; background:#faf9f6; display:grid; place-items:center; box-shadow: 0 22px 55px #48392836}
+      body {background:#faf9f6; color:#201e1d}
+      main {height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:32px}
+      h1 {margin:0; font:700 76px/1.1 Plex,monospace}
      </style>
      <main>
-       <section>
-         ${scaled(wordmark, 213, 40)}
-         <div>
-           <h1>From issue to<br>verified release<strong>.</strong></h1>
-           <p>A software factory for teams that ship from their own machines.</p>
-         </div>
-         <footer>bugsnitch.com</footer>
-       </section>
-       <figure>
-         <div class="icon">${scaled(Buffer.from(icon), 155, 135)}</div>
-       </figure>
+       ${scaled(Buffer.from(icon), 256, 223)}
+       <h1>Bugsnitch</h1>
      </main>`,
   );
   await writeFile(new URL("social-share.png", output), share);

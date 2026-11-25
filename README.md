@@ -6,7 +6,7 @@ Bugsnitch is a software factory for teams that run coding agents on their own ma
 
 **Developer preview.** Build the factory from `main` or self-host it with Docker Compose. Hosted pilot access is by invitation. The numbered VS Code extension releases belong to the earlier product. [Self-hosting guide](docs/OPERATIONS.md#hosted-service) · [Changelog](CHANGELOG.md)
 
-[Try the checkout demo](#try-it-locally) · [Open a local workspace](#start-the-dashboard) · [Follow an issue through release](#workflows) · [Documentation](#documentation)
+[Website](https://bugsnitch.com/) · [Try the checkout demo](#try-it-locally) · [Open a local workspace](#start-the-dashboard) · [Follow an issue through release](#workflows) · [Documentation](#documentation)
 
 ## Try it locally
 

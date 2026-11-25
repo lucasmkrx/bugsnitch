@@ -1,0 +1,41 @@
+# Bugsnitch product and setup reference
+
+> Bugsnitch is a developer-preview software factory that runs coding agents on a team's own machines and tracks approved work from a GitHub issue to a verified release.
+
+## Website and availability
+
+The public site at https://bugsnitch.com/ describes the product and demonstrates an issue-to-release workflow. The workspace at https://bugsnitch.com/app/ is a read-only demo populated with sample data. To work on a real repository, build from the GitHub repository or run a self-hosted workspace. Hosted pilot workspaces are available by invitation.
+
+Bugsnitch's current code is on the `main` branch of https://github.com/lucasmkrx/bugsnitch. Numbered VS Code extension releases belong to the earlier product. The current source is licensed under Mozilla Public License 2.0. The name and brand assets have separate trademark terms.
+
+## Follow an issue to a verified release
+
+1. Register a project for a GitHub repository, choose a GitHub issue, and record the work's acceptance criteria, dependencies, and validation steps. Production incidents can also be promoted to a GitHub issue.
+2. A paired runner claims eligible, approved work. Each attempt uses a Git worktree and a configured edit scope and validator. A separate reviewer inspects the candidate revision and its validation evidence.
+3. An authorized team member approves publication of the reviewed candidate for the target branch. The originating runner can create a draft GitHub pull request. The team reviews the exact revision, checks, and evidence before integration.
+4. Record the deployment environment and immutable build after integration. A verification verdict requires evidence that matches the active build. A deployment monitor can receive signed deployment and check events. A new deployment requires a fresh check.
+
+The workspace includes plans, incidents, work status, pull requests, decisions, and devices. Owners manage projects, policies, capacity, and access. Operators can report incidents and inspect pull requests. Approvers can also act on plans, evidence, and decisions within the projects assigned to them.
+
+## Local execution and data boundaries
+
+The paired computer holds the checkout, worktrees, and full execution artifacts. The workspace tracks status, decisions, and bounded evidence. A local turn sends selected task context to its configured model provider. Runner setup, provider credentials, and the permitted project scope are configured on the machine that executes the work.
+
+## Getting started
+
+- Run `make checkout-acceptance` from the repository root to exercise the bundled checkout example. A scripted worker fixes a free-shipping error at exactly $50, and Chromium verifies behavior on the served build. It uses local provider fixtures and a disposable PostgreSQL database.
+- Run `make dev` to start a local service with PostgreSQL and the dashboard. Open `http://localhost:8787/` for the homepage or `http://localhost:8787/app/` for the workspace. Use the repository README for prerequisites and local sign-in instructions.
+- To connect a real repository, use the runner guide to pair a device, register a checkout, and configure permitted edits and validation. Use the operations guide to self-host the workspace with Docker Compose and PostgreSQL.
+
+## Canonical documentation
+
+- [Repository and getting started](https://github.com/lucasmkrx/bugsnitch)
+- [Product workflow](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/docs/PRODUCT.md)
+- [Runner guide](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/docs/RUNNER.md)
+- [Dashboard guide](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/docs/DASHBOARD.md)
+- [Checkout example](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/examples/checkout/README.md)
+- [Deployment and recovery](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/docs/OPERATIONS.md)
+- [Provider configuration](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/docs/PROVIDERS.md)
+- [Team integrations](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/docs/INTEGRATIONS.md)
+- [HTTP API](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/api/README.md)
+- [Support](https://raw.githubusercontent.com/lucasmkrx/bugsnitch/main/SUPPORT.md)

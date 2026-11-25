@@ -142,6 +142,77 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
       : { channel: "chrome", headless: true },
   );
   t.after(() => browser.close());
+  await t.test("invited operators sign in with an emailed code", async (t) => {
+    const page = await browser.newPage();
+    t.after(() => page.close());
+    let signedIn = false;
+    await page.route(
+      "https://www.google.com/recaptcha/enterprise.js?render=fixture",
+      (route) =>
+        route.fulfill({
+          contentType: "text/javascript",
+          body: `window.grecaptcha = { enterprise: {
+          ready: (callback) => callback(),
+          execute: async (key, options) => {
+            if (key !== "fixture" || options.action !== "email_sign_in") throw Error("Unexpected CAPTCHA request");
+            return "fixture-captcha-token";
+          },
+        }};`,
+        }),
+    );
+    await page.route("**/api/v1/**", (route) => {
+      const request = route.request();
+      switch (new URL(request.url()).pathname) {
+        case "/api/v1/login/email":
+          return route.fulfill({ json: { siteKey: "fixture" } });
+        case "/api/v1/login/email/start":
+          assert.deepEqual(request.postDataJSON(), {
+            email: "operator@example.test",
+            captchaToken: "fixture-captcha-token",
+          });
+          return route.fulfill({ json: { challenge: "fixture-challenge" } });
+        case "/api/v1/login/email/verify": {
+          const body = request.postDataJSON();
+          assert.equal(body.challenge, "fixture-challenge");
+          if (body.code !== "123456")
+            return route.fulfill({
+              status: 401,
+              json: { error: "Invalid or expired sign-in code" },
+            });
+          signedIn = true;
+          return route.fulfill({ json: { authenticated: true } });
+        }
+        case "/api/v1/state":
+          return signedIn
+            ? route.fulfill({
+                json: {
+                  ...fixture(),
+                  viewer: { id: "op", role: "operator", name: "Operator" },
+                },
+              })
+            : route.fulfill({
+                status: 401,
+                json: { error: "Sign in to Bugsnitch" },
+              });
+        default:
+          return route.fulfill({ status: 404, json: {} });
+      }
+    });
+    await page.goto(url);
+    await page.getByLabel("Email address").fill("operator@example.test");
+    await page.getByRole("button", { name: "Email a code" }).click();
+    await page.getByLabel("Sign-in code").fill("000000");
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page
+      .getByRole("alert")
+      .filter({ hasText: "Invalid or expired sign-in code" })
+      .waitFor();
+    await page.getByLabel("Sign-in code").fill("123456");
+    await page.getByRole("button", { name: "Sign in", exact: true }).click();
+    await page
+      .getByRole("heading", { name: "Overview", exact: true })
+      .waitFor();
+  });
   await t.test(
     "a stale draft approval can be withdrawn and renewed on the exact candidate",
     async (t) => {
@@ -260,6 +331,8 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
           "/api/v1/".length,
         );
         if (path === "state") return r.fulfill({ json: state });
+        if (path === "login/email")
+          return r.fulfill({ json: { siteKey: null } });
         if (path === "members" && r.request().method() === "GET")
           return r.fulfill({ json: members });
         if (path.endsWith("/review-subjects")) return r.fulfill({ json: [] });

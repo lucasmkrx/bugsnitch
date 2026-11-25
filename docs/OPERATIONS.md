@@ -16,6 +16,16 @@ Bring up staging at `staging.bugsnitch.com` first. Point that hostname at the st
 
 The hosted bootstrap credential belongs to the owner. Browser sessions use hashed opaque secrets with a 12-hour expiry. Cookies use HttpOnly, SameSite Strict and Secure on HTTPS. Changing BUGSNITCH_OWNER_TOKEN affects future sign-in; deleting this owner's sessions forces sign-in again. Connections from devices use a separate 256-bit local credential, with only its digest stored centrally. Use `bugsnitch rotate` to replace a device credential while preserving its identity and reservations. The old credential stops authorizing sync immediately. A lost rotation acknowledgment can be reconciled for 24 hours using the recorded pending key. Revoke and pair afresh if that window expires. Revocation blocks subsequent sync and admission. A sleeping computer may retain uncommitted work. Confirm quiescence on that computer before recovering reservations.
 
+### Email sign-in on Cloud Run
+
+Email sign-in is available to invited operators on the PostgreSQL-backed service. Owners and approvers use their existing credentials. In **Settings → Workspace access**, enter the operator's email address and select their project scope. For an existing operator who needs email sign-in, revoke their previous membership and recreate it with the same scope and their email address. Revocation removes their pending code and existing sessions.
+
+1. In the Google Cloud project, restrict a score-based reCAPTCHA web key to the workspace hostname and limit **CreateAssessment Requests per day** to 80 for the pilot. Attach a service account with **reCAPTCHA Enterprise Agent** in the key's project to the backend revision. The sender stops accepting new code requests if Google rejects assessments at the quota.
+2. In Resend, verify the sending domain and create a **Sending access** key restricted to it. Set `BUGSNITCH_EMAIL_FROM` to a plain address on the verified domain, such as `no-reply@bugsnitch.com`.
+3. Set `BUGSNITCH_RECAPTCHA_PROJECT` and `BUGSNITCH_RECAPTCHA_SITE_KEY` on the backend. Store `BUGSNITCH_RESEND_API_KEY` and a new 32-byte hex value for `BUGSNITCH_EMAIL_CODE_KEY` as server secrets. Set all five values together to enable the feature. Rotating the code key invalidates outstanding codes.
+
+A code is usable once, expires after ten minutes, and accepts five attempts. Each invited address can receive at most five codes per UTC day, with at least a minute between requests. Verify the flow with an invited operator and check that their session sees only the selected project.
+
 To enable GitHub in Compose, set GITHUB_APP_KEY_PATH to the absolute PEM path on the host. Grant read access to container UID 10001 using a read ACL or dedicated file ownership. Keep the key outside the build context. Set the client ID and webhook secret, then run:
 
 ```sh

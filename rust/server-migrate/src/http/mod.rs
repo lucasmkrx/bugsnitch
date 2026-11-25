@@ -3,6 +3,7 @@ mod bridge;
 mod coord_pool;
 mod dashboard;
 mod devices;
+mod email_sign_in;
 pub(crate) mod integrations;
 mod owner;
 pub(crate) mod session;
@@ -107,7 +108,9 @@ pub struct AppState {
     socket: PathBuf,
     dashboard: dashboard::Dashboard,
     integrations: integrations::Integrations,
+    email_sign_in: Option<email_sign_in::Settings>,
     buckets: Mutex<HashMap<IpAddr, (Instant, u32)>>,
+    email_buckets: Mutex<HashMap<IpAddr, (Instant, u32)>>,
 }
 impl AppState {
     pub async fn coord(&self, op: &str, actor: [String; 2], input: Value) -> WebResult<Value> {
@@ -120,9 +123,14 @@ impl AppState {
     pub async fn domain(&self, op: &str, actor: [String; 2], input: Value) -> WebResult<Value> {
         bridge::call(&self.socket, op, actor, input).await
     }
-    fn allow(&self, ip: IpAddr) -> bool {
+    fn allow(&self, ip: IpAddr, email_login: bool) -> bool {
         let now = Instant::now();
-        let Ok(mut buckets) = self.buckets.lock() else {
+        let buckets = if email_login {
+            &self.email_buckets
+        } else {
+            &self.buckets
+        };
+        let Ok(mut buckets) = buckets.lock() else {
             return false;
         };
         if buckets.len() >= 4096 {
@@ -150,6 +158,11 @@ async fn protect(State(s): State<Shared>, r: Request, next: Next) -> Response {
     let started = Instant::now();
     let route = r.extensions().get::<axum::extract::MatchedPath>().cloned();
     let path = r.uri().path();
+    let captcha_page = s.email_sign_in.is_some() && (path == "/app" || path.starts_with("/app/"));
+    let email_login = matches!(
+        path,
+        "/api/v1/login/email/start" | "/api/v1/login/email/verify"
+    );
     let invalid_origin = r
         .headers()
         .get_all(header::ORIGIN)
@@ -163,11 +176,11 @@ async fn protect(State(s): State<Shared>, r: Request, next: Next) -> Response {
     let response = if invalid_origin || cross_site {
         WebError(StatusCode::FORBIDDEN, "Permission denied".into()).into_response()
     } else if r.method() == Method::POST
-        && matches!(path, "/api/v1/login" | "/api/v1/device/pair")
+        && (email_login || matches!(path, "/api/v1/login" | "/api/v1/device/pair"))
         && !r
             .extensions()
             .get::<SocketAddr>()
-            .is_some_and(|addr| s.allow(addr.ip()))
+            .is_some_and(|addr| s.allow(addr.ip(), email_login))
     {
         WebError(
             StatusCode::TOO_MANY_REQUESTS,
@@ -205,7 +218,14 @@ async fn protect(State(s): State<Shared>, r: Request, next: Next) -> Response {
     );
     h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-    h.insert("content-security-policy",HeaderValue::from_static("default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"));
+    const CSP: &str = "default-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; style-src 'self' 'unsafe-inline'; img-src 'self' data:";
+    let policy = if captcha_page {
+        HeaderValue::from_str(&format!("{CSP}; script-src 'self' https://www.google.com/recaptcha/ https://www.gstatic.com/recaptcha/; frame-src https://www.google.com/recaptcha/ https://recaptcha.google.com/recaptcha/; connect-src 'self' https://www.google.com/recaptcha/"))
+            .expect("static workspace policy")
+    } else {
+        HeaderValue::from_static(CSP)
+    };
+    h.insert("content-security-policy", policy);
     res
 }
 async fn ready(State(s): State<Shared>) -> Response {
@@ -240,6 +260,7 @@ fn router(s: Shared) -> Router {
         .merge(owner)
         .merge(owner::reads())
         .merge(devices::public())
+        .merge(email_sign_in::routes())
         .route("/api/v1/login", post(session::login))
         .layer(DefaultBodyLimit::max(64 << 10))
         .merge(integrations::routes())
@@ -330,6 +351,7 @@ pub async fn run() -> Result<(), &'static str> {
         return Err("Set a valid BUGSNITCH_ORIGIN and owner token of at least 32 characters");
     }
     let integrations = integrations::from_env()?;
+    let email_sign_in = email_sign_in::Settings::from_env()?;
     if dsn.is_empty() {
         return Err("Set DATABASE_URL");
     }
@@ -344,7 +366,9 @@ pub async fn run() -> Result<(), &'static str> {
             env::var_os("BUGSNITCH_WEB_DIR").unwrap_or_else(|| "web/dist".into()),
         )),
         integrations,
+        email_sign_in,
         buckets: Default::default(),
+        email_buckets: Default::default(),
     });
     timeout(
         Duration::from_secs(5),

@@ -2,12 +2,14 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { enc, messageOf, post, request, type Project } from "./api";
 import type { Run } from "./actions";
+import { useEmailSignIn } from "./email-sign-in";
 import { Field, Modal, Panel, human } from "./ui";
 
 interface Member {
   id: string;
   name: string;
   role: "operator" | "approver";
+  email?: string | null;
   projectId?: string | null;
   revokedAt: string | null;
 }
@@ -26,6 +28,8 @@ export function Members({
   const [revoke, setRevoke] = useState<Member>();
   const [error, setError] = useState("");
   const [generation, setGeneration] = useState(0);
+  const [role, setRole] = useState<Member["role"]>("operator");
+  const emailEnabled = !!useEmailSignIn();
 
   useEffect(() => {
     const abort = new AbortController();
@@ -44,17 +48,25 @@ export function Members({
     e.preventDefault();
     const form = e.currentTarget;
     const fields = new FormData(form);
+    const email = String(fields.get("email") || "").trim();
     if (
-      await run(async () => {
-        const result = await post<{ credential: string }>("members", {
-          name: String(fields.get("name")).trim(),
-          role: fields.get("role"),
-          projectId: fields.get("projectId") || null,
-        });
-        setCredential(result.credential);
-      }, "Workspace access created.")
+      await run(
+        async () => {
+          const result = await post<{ credential: string }>("members", {
+            name: String(fields.get("name")).trim(),
+            role: fields.get("role"),
+            projectId: fields.get("projectId") || null,
+            ...(email ? { email } : {}),
+          });
+          if (!email) setCredential(result.credential);
+        },
+        email
+          ? "Operator can sign in with an email code."
+          : "Workspace access created.",
+      )
     ) {
       form.reset();
+      setRole("operator");
       setGeneration((n) => n + 1);
     }
   }
@@ -78,6 +90,7 @@ export function Members({
               {members.map((member) => (
                 <li key={member.id}>
                   {member.name} · {human(member.role)} ·{" "}
+                  {member.email && <>{member.email} · </>}
                   {projects.find((p) => p.id === member.projectId)?.name ||
                     (member.projectId
                       ? "Selected project"
@@ -159,12 +172,25 @@ export function Members({
               <input name="name" required maxLength={100} />
             </Field>
             <Field title="Role">
-              <select name="role">
+              <select
+                name="role"
+                value={role}
+                onChange={(event) =>
+                  setRole(
+                    event.target.value === "approver" ? "approver" : "operator",
+                  )
+                }
+              >
                 <option value="operator">Operator</option>
                 <option value="approver">Approver</option>
               </select>
             </Field>
           </div>
+          {emailEnabled && role === "operator" && (
+            <Field title="Email sign-in address (optional)">
+              <input type="email" name="email" maxLength={254} />
+            </Field>
+          )}
           <Field title="Project access">
             <select name="projectId">
               <option value="">All projects</option>
@@ -203,7 +229,9 @@ export function Members({
           title="Revoke workspace access?"
           close={() => setRevoke(undefined)}
         >
-          <p>This signs {revoke.name} out and disables their access key.</p>
+          <p>
+            This signs {revoke.name} out and removes their workspace access.
+          </p>
           <button
             disabled={locked}
             onClick={async () => {

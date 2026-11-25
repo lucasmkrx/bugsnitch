@@ -13,7 +13,16 @@ func TestWorkspaceMemberPermissionsAttributionAndRevocation(t *testing.T) {
 	server := fixture(t)
 	owner := login(t, server)
 	project := owner.post(t, "projects", object{"name": "Project", "repository": "example/work"}, 201)["id"].(string)
-	operator := owner.post(t, "members", object{"name": "Alex", "role": "operator"}, 201)
+	operator := owner.post(t, "members", object{"name": "Alex", "role": "operator", "email": "Alex@Example.test"}, 201)
+	owner.post(t, "members", object{"name": "Duplicate", "role": "operator", "email": "alex@example.test"}, 409)
+	owner.post(t, "members", object{"name": "Elevated", "role": "approver", "email": "casey@example.test"}, 400)
+	if status, config := owner.req(t, "GET", "/api/v1/login/email", nil, ""); status != 200 || config["siteKey"] != nil {
+		t.Fatalf("email sign-in advertised without credentials: %d %v", status, config)
+	}
+	for range 30 {
+		owner.post(t, "login/email/start", object{"email": "alex@example.test", "captchaToken": "fixture"}, 503)
+	}
+	owner.post(t, "login/email/start", object{"email": "alex@example.test", "captchaToken": "fixture"}, 429)
 	approver := owner.post(t, "members", object{"name": "Casey", "role": "approver"}, 201)
 	signIn := func(member object, want int) system {
 		t.Helper()

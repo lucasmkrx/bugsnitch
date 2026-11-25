@@ -10,6 +10,7 @@ import struct
 import subprocess
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from unittest.mock import patch
 from urllib.parse import parse_qsl, unquote, urlencode, urlsplit
@@ -104,10 +105,7 @@ class Fixture:
         return output
 
 
-def verify_coordination_frames(db, schema):
-    ready = {"version": 1, "op": "system.ready", "input": None, "actor": ["service", "test"]}
-    requests = [json.dumps({**ready, "version": 2}).encode(), b"{", json.dumps({**ready, "op": MARKER}).encode(),
-                json.dumps(ready).encode()]
+def coordinate_frames(db, schema, requests):
     frames = b"".join(struct.pack(">I", len(body)) + body for body in requests)
     child = db.launch(schema, coordinate=True)
     response, errors = child.communicate(frames, timeout=8)
@@ -119,12 +117,76 @@ def verify_coordination_frames(db, schema):
         replies.append(json.loads(response[4:4 + length]))
         response = response[4 + length:]
     assert len(replies) == len(requests) and all(r["version"] == 1 for r in replies)
+    return replies
+
+
+def verify_coordination_frames(db, schema):
+    ready = {"version": 1, "op": "system.ready", "input": None, "actor": ["service", "test"]}
+    requests = [json.dumps({**ready, "version": 2}).encode(), b"{", json.dumps({**ready, "op": MARKER}).encode(),
+                json.dumps(ready).encode()]
+    replies = coordinate_frames(db, schema, requests)
     assert [r["error"]["status"] for r in replies[:-1]] == [400, 400, 400]
     assert replies[-1]["value"] == 1
     for incomplete in (struct.pack(">I", 4 * 1024 * 1024 + 1), struct.pack(">I", 100) + b"{"):
         child = db.launch(schema, coordinate=True)
         response, errors = child.communicate(incomplete, timeout=8)
         assert child.returncode != 0 and not response and not errors
+
+
+def verify_email_sign_in(db, schema):
+    db.sql("""
+        INSERT INTO projects(id, workspace_id, name, repository)
+        VALUES ('email-project','personal','Email fixture','fixture/email');
+        INSERT INTO workspace_members(workspace_id,id,name,role,token_hash,project_id,login_email)
+        VALUES ('personal','email-member','Fixture Operator','operator','test-email-access',
+                'email-project','Operator@example.test');
+    """, schema)
+
+    def call(op, payload, actor=("service", "http-server")):
+        request = {"version": 1, "op": "session." + op, "input": payload, "actor": actor}
+        reply, = coordinate_frames(db, schema, [json.dumps(request).encode()])
+        assert not reply.get("error"), reply
+        return reply["value"]
+
+    def issue(challenge, email="operator@example.test"):
+        recipient = call("email_code_issue", {"email": email, "challenge": challenge, "mac": "correct"})
+        assert recipient is None or recipient == "Operator@example.test"
+        return recipient is not None
+
+    def redeem(challenge, mac="correct", session="email-session"):
+        return call("email_code_redeem", {"challenge": challenge, "mac": mac, "session": session})
+
+    def age(interval):
+        db.sql(f"UPDATE email_sign_in_codes SET sent_at=now()-interval '{interval}'", schema)
+
+    assert issue("uninvited", "uninvited@example.test") is False
+    assert issue("first") is True
+    assert issue("cooldown") is False
+    assert redeem("first", "wrong") is False
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(lambda session: redeem("first", session=session), ("email-one", "email-two")))
+    assert sorted(results) == [False, True], "Only one concurrent redemption may create a session"
+    assert db.sql("SELECT member_id FROM sessions WHERE token_hash IN ('email-one','email-two')", schema) == "email-member"
+    assert redeem("first") is False
+
+    age("61 seconds")
+    assert issue("expired") is True
+    age("11 minutes")
+    assert redeem("expired") is False
+    assert issue("locked") is True
+    for _ in range(5):
+        assert redeem("locked", "wrong") is False
+    assert redeem("locked") is False
+    assert db.sql("SELECT attempts FROM email_sign_in_codes", schema) == "5"
+    # Exercise the daily limit and its reset without relying on the wall clock.
+    db.sql("UPDATE email_sign_in_codes SET send_count=5,sent_at=date_trunc('day',now() at time zone 'UTC') AT TIME ZONE 'UTC'", schema)
+    assert issue("daily-limit") is False
+    age("25 hours")
+    assert issue("revoked") is True
+    call("revoke_member", {"workspace": "personal", "id": "email-member"}, ("owner", "owner"))
+    assert redeem("revoked") is False
+    assert issue("after-revocation") is False
+    assert db.sql("SELECT count(*) FROM sessions WHERE member_id='email-member'", schema) == "0"
 
 
 def verify_ledger(db, schema, migrations):
@@ -189,6 +251,7 @@ def main(binary):
     with db.schema("fresh") as schema:
         concurrent_start(db, schema)
         verify_coordination_frames(db, schema)
+        verify_email_sign_in(db, schema)
         verify_ledger(db, schema, migrations)
         ledger = "SELECT name,digest,applied_at FROM bugsnitch_migrations ORDER BY name"
         before = db.sql(ledger, schema)

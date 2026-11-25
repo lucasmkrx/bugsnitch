@@ -14,6 +14,7 @@ import {
   type Page,
 } from "./ui";
 import { Editor, type ModalKind, type Run } from "./actions";
+import { EmailSignIn, useEmailSignIn } from "./email-sign-in";
 import { Views } from "./views";
 import { useWorkspace, startPolling, refresh, forget } from "./store";
 import "./brand.css";
@@ -38,6 +39,7 @@ const summaries: Record<Page, string> = {
 function App() {
   const snapshot = useWorkspace(),
     state = snapshot.state;
+  const emailSiteKey = useEmailSignIn(snapshot.signedOut);
   const [route, setRoute] = useState(readRoute),
     [modal, setModal] = useState<ModalKind | null>(null),
     [menu, setMenu] = useState(false),
@@ -109,6 +111,31 @@ function App() {
       <Icon name="theme" />
     </button>
   );
+  const credentialLogin = (
+    <form
+      onSubmit={async (event) => {
+        event.preventDefault();
+        const credential = token;
+        setToken("");
+        await run(() => post("login", { token: credential }));
+      }}
+    >
+      <Field title="Owner token or access key">
+        <input
+          type="password"
+          value={token}
+          onChange={(event) => setToken(event.target.value)}
+          autoComplete="current-password"
+          required
+          autoFocus={!emailSiteKey}
+        />
+      </Field>
+      <button className="primary" disabled={busy || !snapshot.online}>
+        {busy ? "Signing in…" : "Sign in"}
+        <Icon name="arrow" size={16} />
+      </button>
+    </form>
+  );
   if (!state)
     return (
       <main className="login">
@@ -120,30 +147,23 @@ function App() {
           {snapshot.signedOut ? (
             <>
               <h1>Sign in to your workspace</h1>
-              <p>Use your owner token or workspace access key.</p>
-              <form
-                onSubmit={async (e) => {
-                  e.preventDefault();
-                  const t = token;
-                  setToken("");
-                  await run(() => post("login", { token: t }));
-                }}
-              >
-                <Field title="Owner token or access key">
-                  <input
-                    type="password"
-                    value={token}
-                    onChange={(e) => setToken(e.target.value)}
-                    autoComplete="current-password"
-                    required
-                    autoFocus
+              {emailSiteKey ? (
+                <>
+                  <EmailSignIn
+                    siteKey={emailSiteKey}
+                    online={snapshot.online}
                   />
-                </Field>
-                <button className="primary" disabled={busy || !snapshot.online}>
-                  {busy ? "Signing in…" : "Sign in"}
-                  <Icon name="arrow" size={16} />
-                </button>
-              </form>
+                  <details>
+                    <summary>Use an owner token or access key</summary>
+                    {credentialLogin}
+                  </details>
+                </>
+              ) : (
+                <>
+                  <p>Use your owner token or workspace access key.</p>
+                  {credentialLogin}
+                </>
+              )}
             </>
           ) : (
             <>

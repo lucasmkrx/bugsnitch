@@ -71,7 +71,7 @@ pub(super) async fn login(
     }
     Ok(cookie(&s, &token, true))
 }
-fn cookie(s: &AppState, token: &str, active: bool) -> Response {
+pub(super) fn cookie(s: &AppState, token: &str, active: bool) -> Response {
     let secure = if s.origin.starts_with("https://") {
         "; Secure"
     } else {
@@ -146,6 +146,7 @@ pub(super) async fn logout(
 struct Member {
     name: String,
     role: String,
+    email: Option<String>,
     #[serde(default, rename = "projectId")]
     project: Option<String>,
 }
@@ -175,6 +176,16 @@ async fn add_member(
     ApiJson(b): ApiJson<Member>,
 ) -> WebResult<(StatusCode, Json<Value>)> {
     let name = b.name.trim();
+    let email = match b.email.as_deref() {
+        Some(email) if b.role == "operator" => Some(super::email_sign_in::address(email)?),
+        Some(_) => {
+            return Err(WebError(
+                StatusCode::BAD_REQUEST,
+                "Email sign-in is available for operators".into(),
+            ));
+        }
+        None => None,
+    };
     if b.project
         .as_ref()
         .is_some_and(|id| id.len() != 32 || !crate::devices::lower_hex(id))
@@ -191,7 +202,7 @@ async fn add_member(
     let credential = random_hex(32)?;
     let id = random_hex(16)?;
     s.coord("session.add_member", o.actor(), json!({
-        "workspace":o.workspace,"id":id,"name":name,"role":b.role,"project":b.project,"credential":hash(&credential),
+        "workspace":o.workspace,"id":id,"name":name,"role":b.role,"project":b.project,"credential":hash(&credential),"email":email,
     })).await?;
     Ok((
         StatusCode::CREATED,
@@ -214,7 +225,7 @@ async fn revoke_member(
     .map(Json)
 }
 
-fn field<'a>(input: &'a Value, key: &str) -> DbResult<&'a str> {
+pub(super) fn field<'a>(input: &'a Value, key: &str) -> DbResult<&'a str> {
     input[key].as_str().ok_or_else(Error::internal)
 }
 
@@ -237,9 +248,9 @@ pub(crate) fn apply(db: &Db<'_>, op: &str, input: Value) -> DbResult<Value> {
         }
         return match op {
             "session.members" => {
-                let row = db.one("SELECT coalesce(json_agg(json_build_object('id',id,'name',name,'role',role,'projectId',project_id,'revokedAt',revoked_at)
+                let row = db.one("SELECT coalesce(json_agg(json_build_object('id',id,'name',name,'role',role,'email',login_email,'projectId',project_id,'revokedAt',revoked_at)
                     ORDER BY revoked_at NULLS FIRST,created_at,id),'[]') FROM (
-                    SELECT id,name,role,project_id,revoked_at,created_at FROM workspace_members WHERE workspace_id=$1
+                    SELECT id,name,role,login_email,project_id,revoked_at,created_at FROM workspace_members WHERE workspace_id=$1
                     ORDER BY revoked_at NULLS FIRST,created_at DESC,id LIMIT 200) members", &[workspace])?;
                 Ok(serde_json::from_str(row.text(0)?)?)
             }
@@ -256,8 +267,9 @@ pub(crate) fn apply(db: &Db<'_>, op: &str, input: Value) -> DbResult<Value> {
                 {
                     return Err(Error::missing());
                 }
-                db.exec("INSERT INTO workspace_members(workspace_id,id,name,role,token_hash,project_id) VALUES($1,$2,$3,$4,$5,NULLIF($6,''))",
-                    &[workspace,id,field(&input,"name")?,field(&input,"role")?,field(&input,"credential")?,project])?;
+                db.exec("INSERT INTO workspace_members(workspace_id,id,name,role,token_hash,project_id,login_email)
+                    VALUES($1,$2,$3,$4,$5,NULLIF($6,''),NULLIF($7,''))",
+                    &[workspace,id,field(&input,"name")?,field(&input,"role")?,field(&input,"credential")?,project,input["email"].as_str().unwrap_or("")])?;
                 db.event(
                     workspace,
                     "",
@@ -278,6 +290,10 @@ pub(crate) fn apply(db: &Db<'_>, op: &str, input: Value) -> DbResult<Value> {
                         "DELETE FROM sessions WHERE workspace_id=$1 AND member_id=$2",
                         &[workspace, id],
                     )?;
+                    db.exec(
+                        "DELETE FROM email_sign_in_codes WHERE workspace_id=$1 AND member_id=$2",
+                        &[workspace, id],
+                    )?;
                     db.event(
                         workspace,
                         "",
@@ -295,6 +311,8 @@ pub(crate) fn apply(db: &Db<'_>, op: &str, input: Value) -> DbResult<Value> {
         return Err(Error::denied());
     }
     match op{
+        "session.email_code_issue" => super::email_sign_in::issue(db, &input),
+        "session.email_code_redeem" => super::email_sign_in::redeem(db, &input),
         "session.create"=>{db.exec("INSERT INTO sessions(token_hash,workspace_id,expires_at) VALUES($1,'personal',now()+interval '12 hours')",&[input.as_str().ok_or_else(Error::internal)?])?;Ok(Value::Null)}
         "session.member_login" => {
             let n = db.exec("INSERT INTO sessions(token_hash,workspace_id,expires_at,member_id)

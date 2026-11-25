@@ -5,6 +5,14 @@ type NextRequest struct {
 	Protocol    int    `json:"protocol"`
 	Project     string `json:"projectId"`
 	WaitForTurn bool   `json:"waitForTurn,omitempty"`
+	Issues      []int  `json:"issues,omitempty"`
+}
+
+// IssueRevision identifies the exact canonical issue observed in an approved plan.
+type IssueRevision struct {
+	GitHubID int64  `json:"githubId"`
+	Digest   string `json:"requirementsDigest"`
+	Revision string `json:"updatedAt"`
 }
 
 // IssueSelection is the versioned document accepted by the local-start CLI.
@@ -29,7 +37,9 @@ type RunScope struct {
 	Policy  int64  `json:"policyVersion"`
 }
 type Recommendation struct {
-	Scope     *RunScope       `json:"scope,omitempty"`
-	Selection *IssueSelection `json:"selection,omitempty"`
-	Reason    string          `json:"reason,omitempty"`
+	Scope     *RunScope             `json:"scope,omitempty"`
+	Selection *IssueSelection       `json:"selection,omitempty"`
+	Reason    string                `json:"reason,omitempty"`
+	Bindings  map[int]IssueRevision `json:"bindings,omitempty"`
+	Hold      bool                  `json:"hold,omitempty"`
 }

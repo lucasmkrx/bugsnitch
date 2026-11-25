@@ -5,6 +5,7 @@ mod artifacts;
 mod controls;
 mod draft_delivery;
 mod metering;
+mod progression;
 mod sync;
 
 use crate::coord::{Db, Details, Error, Result};
@@ -48,6 +49,9 @@ struct Rotate {
 pub fn handle(db: &Db<'_>, op: &str, input: Value) -> Result<Value> {
     match op {
         "device.draft_delivery" => draft_delivery::handle(db, input),
+        "device.progression" => progression::device(db, input),
+        "device.progression_cursor" => progression::cursor(db, input),
+        "device.ticket_answer" => progression::answer(db, serde_json::from_value(input)?),
         "device.share_diff" => artifacts::share(db, input),
         "device.read_diff" => artifacts::read(db, input),
         "device.pairing" => pairing(db, serde_json::from_value(input)?),

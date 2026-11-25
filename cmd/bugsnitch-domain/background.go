@@ -34,10 +34,10 @@ func signalWork(wake chan<- struct{}) {
 // Reconcile immediately after LISTEN commits, closing the startup/reconnect
 // race. Notifications contain no commands. Any lost signal or scheduled retry
 // is covered by the scheduler's own timer, even if LISTEN is unavailable.
-func watchJobs(ctx context.Context, dsn string, wake chan<- struct{}) {
+func watchJobs(ctx context.Context, dsn string, wake chan<- struct{}, progress func(string)) {
 	var lastWarning time.Time
 	for ctx.Err() == nil {
-		listen(ctx, dsn, wake)
+		listen(ctx, dsn, wake, progress)
 		if ctx.Err() == nil && time.Since(lastWarning) >= time.Minute {
 			slog.Warn("background notification connection lost, continuing timed queue checks")
 			lastWarning = time.Now()
@@ -50,7 +50,7 @@ func watchJobs(ctx context.Context, dsn string, wake chan<- struct{}) {
 	}
 }
 
-func listen(ctx context.Context, dsn string, wake chan<- struct{}) {
+func listen(ctx context.Context, dsn string, wake chan<- struct{}, progress func(string)) {
 	db, err := pgx.Connect(ctx, dsn)
 	if err != nil {
 		return
@@ -65,8 +65,12 @@ func listen(ctx context.Context, dsn string, wake chan<- struct{}) {
 	}
 	signalWork(wake)
 	for ctx.Err() == nil {
-		if _, err = db.WaitForNotification(ctx); err != nil {
+		n, err := db.WaitForNotification(ctx)
+		if err != nil {
 			return
+		}
+		if n.Payload != "" {
+			progress(n.Payload)
 		}
 		signalWork(wake)
 	}
@@ -129,11 +133,11 @@ func (s backgroundStores) consume(ctx context.Context, job selectedJob) (bool, e
 	}
 }
 
-func runBackground(ctx context.Context, db *sql.DB, dsn string, app *github.App) {
+func runBackground(ctx context.Context, db *sql.DB, dsn string, app *github.App, progress func(string)) {
 	wake := make(chan struct{}, 1)
 	var work sync.WaitGroup
 	defer work.Wait()
-	work.Go(func() { watchJobs(ctx, dsn, wake) })
+	work.Go(func() { watchJobs(ctx, dsn, wake, progress) })
 	stores := backgroundStores{db, app, incidents.Store{DB: db}, integration.Store{DB: db, App: app}, planning.Store{DB: db}}
 	lanes := []string{"inbox"}
 	if app != nil {

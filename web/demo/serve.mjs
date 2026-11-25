@@ -20,6 +20,7 @@ const types = {
 const previewIcons = new Set([
   "/favicon.ico",
   "/brand/favicon.svg",
+  "/brand/bugsnitch-logo.svg",
   "/brand/apple-touch-icon.png",
 ]);
 const port = 4174;

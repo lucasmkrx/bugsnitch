@@ -69,6 +69,22 @@ export interface StageEvidence {
   minorFindings: number;
 }
 export interface Attempt {
+  nextAction?: {
+    attemptId: string;
+    version: number;
+    kind: string;
+    reason?: string;
+    disposition: "act" | "wait" | "ask" | "finish";
+    approver?: string;
+    expiresAt?: string;
+    answer?: "approve" | "hold";
+    deployment?: { incidentId: string; environment: string; held: boolean }[];
+    preparedEvidence?: {
+      inspectionVersion: number;
+      independentReview: string;
+      combinedValidation: string;
+    };
+  } | null;
   reasonCode?: string;
   sharedDiff?: {
     digest: string;
@@ -243,6 +259,7 @@ export interface Draft {
 }
 export interface State {
   viewer?: {
+    id?: string;
     name: string;
     role: "owner" | "operator" | "approver";
     projectId?: string | null;

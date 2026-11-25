@@ -23,6 +23,8 @@ pub fn public() -> Router<Shared> {
         .route("/api/v1/device/pair", post(pair))
         .route("/api/v1/device/sync", post(sync))
         .route("/api/v1/device/draft-delivery", post(draft_delivery))
+        .route("/api/v1/device/progression", post(progression))
+        .route("/api/v1/device/progression-wake", post(progression_wake))
         .route("/api/v1/device/rotate", post(rotate))
         .route("/api/v1/device/admission", post(admission))
         .route("/api/v1/device/model-permit", post(permit))
@@ -36,6 +38,7 @@ pub fn owner() -> Router<Shared> {
         .route("/api/v1/pairings", post(pairing))
         .route("/api/v1/devices/{id}/revoke", post(revoke))
         .route("/api/v1/attempts/{id}/control", post(control))
+        .route("/api/v1/attempts/{id}/ticket-decision", post(ticket_answer))
         .route("/api/v1/workspace/dispatch", post(workspace_control))
         .route("/api/v1/events", get(events))
         .route("/api/v1/attempts/{id}/diff", get(read_diff))
@@ -213,6 +216,78 @@ async fn draft_delivery(
     ApiJson(body): ApiJson<Value>,
 ) -> Reply {
     Ok(Json(claim(s, token, "device.draft_delivery", body).await?))
+}
+
+async fn progression(
+    State(s): State<Shared>,
+    Device(token): Device,
+    ApiJson(body): ApiJson<Value>,
+) -> Reply {
+    let mut action = claim(s.clone(), token, "device.progression", body).await?;
+    if action["deployment"].is_array() {
+        let statuses=s.domain("progression.verdict",["service".into(),"device-progression".into()],
+            json!({"workspace":action["workspaceId"],"project":action["projectId"],"deployments":action["deployment"]})).await?;
+        action["deployment"] = statuses;
+    }
+    Ok(Json(action))
+}
+
+async fn progression_wake(
+    State(s): State<Shared>,
+    Device(token): Device,
+    ApiJson(body): ApiJson<Value>,
+) -> Reply {
+    let after = body["after"]
+        .as_i64()
+        .filter(|n| *n >= 0)
+        .ok_or_else(|| bad("Invalid progression cursor"))?;
+    let project = body["projectId"]
+        .as_str()
+        .ok_or_else(|| bad("Invalid progression project"))?;
+    let cursor = claim(
+        s.clone(),
+        token.clone(),
+        "device.progression_cursor",
+        body.clone(),
+    )
+    .await?;
+    if cursor["position"].as_i64().is_some_and(|n| n > after) {
+        return Ok(Json(cursor));
+    }
+    s.domain(
+        "progression.wait",
+        ["service".into(), "device-progression".into()],
+        json!({"project":project}),
+    )
+    .await?;
+    Ok(Json(
+        claim(s, token, "device.progression_cursor", body).await?,
+    ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TicketAnswer {
+    version: i64,
+    answer: String,
+}
+
+async fn ticket_answer(
+    State(s): State<Shared>,
+    Extension(o): Extension<Owner>,
+    Path(id): Path<String>,
+    ApiJson(b): ApiJson<TicketAnswer>,
+) -> Reply {
+    Ok(Json(
+        s.coord(
+            "device.ticket_answer",
+            o.actor(),
+            json!({
+                "workspace":o.workspace,"attemptId":id,"version":b.version,"answer":b.answer
+            }),
+        )
+        .await?,
+    ))
 }
 
 async fn admission(

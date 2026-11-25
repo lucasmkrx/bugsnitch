@@ -28,17 +28,24 @@ type PublicationReceipt struct {
 }
 
 func PublishCandidate(ctx context.Context, id string, version int, candidate string) (PublicationReceipt, error) {
-	return publishCandidate(ctx, id, version, candidate, "", nil)
+	return publishCandidate(ctx, id, version, candidate, "", "", nil)
 }
 
 func PublishApprovedDraft(ctx context.Context, id string, version int, candidate, target string, confirm func(context.Context) error) (PublicationReceipt, error) {
 	if !github.ValidBranch(target) || strings.HasPrefix(target, "bugsnitch/") || confirm == nil {
 		return PublicationReceipt{}, errors.New("draft publication requires an approved target")
 	}
-	return publishCandidate(ctx, id, version, candidate, target, confirm)
+	return publishCandidate(ctx, id, version, candidate, target, "", confirm)
 }
 
-func publishCandidate(ctx context.Context, id string, version int, candidate, target string, confirm func(context.Context) error) (PublicationReceipt, error) {
+func PublishApprovedCorrection(ctx context.Context, id string, version int, candidate, base string, confirm func(context.Context) error) (PublicationReceipt, error) {
+	if base == "" || confirm == nil {
+		return PublicationReceipt{}, errors.New("correction publication requires its exact approval")
+	}
+	return publishCandidate(ctx, id, version, candidate, "", base, confirm)
+}
+
+func publishCandidate(ctx context.Context, id string, version int, candidate, target, correctionBase string, confirm func(context.Context) error) (PublicationReceipt, error) {
 	var receipt PublicationReceipt
 	unlock, err := attemptLock(id)
 	if err != nil {
@@ -50,6 +57,7 @@ func publishCandidate(ctx context.Context, id string, version int, candidate, ta
 		return receipt, err
 	}
 	if a.ID != id || !idPattern.MatchString(id) || !repoPattern.MatchString(a.Repository) ||
+		correctionBase != "" && a.Steward == nil ||
 		target != "" && a.Steward != nil || a.State != "completed" || a.Phase != "wrap_up" || a.Version != version ||
 		candidate == "" || a.CandidateSHA != candidate || a.Branch != "bugsnitch/"+id {
 		return receipt, errors.New("publication requires the exact completed attempt version and candidate SHA")
@@ -99,6 +107,9 @@ func publishCandidate(ctx context.Context, id string, version int, candidate, ta
 		pr, err := readStewardPR(ctx, a.Repository, st.Pull)
 		if err != nil {
 			return PublicationReceipt{}, err
+		}
+		if correctionBase != "" && pr.BaseRefOid != correctionBase {
+			return PublicationReceipt{}, ErrAuthorityStale
 		}
 		if !pr.matches(a.Repository, receipt.Branch, st.PreviousHead, st.Target) || pr.ReviewDecision == "APPROVED" {
 			if !pr.matches(a.Repository, receipt.Branch, candidate, st.Target) {

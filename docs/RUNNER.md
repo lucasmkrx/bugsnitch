@@ -102,6 +102,31 @@ A worker that requests an owner choice saves the question in `local-show --id AT
 
 The terminal emits one JSON record per observed admission or outcome. A waiting or cancelled outcome includes the reason. A failed admission or execution causes a nonzero exit after already admitted work settles. A service or GitHub read failure stops further selection. If an existing worker frees capacity, the same invocation can request another new ticket within its original limit. An interrupt cancels the foreground workers. No timer or server command starts another invocation. Successful output identifies local candidates; publication, merge and deployment retain their separate approval paths.
 
+### Authorize unattended local work
+
+Use `local-unattended` on the paired machine with a matching server and an approved workspace plan. Run `local-unattended observe --project PROJECT_ID` to read the same next actions as **Work** before authorizing execution. Configure the Claude API provider for the planning, implementation, and review stages, and provide `BUGSNITCH_ANTHROPIC_API_KEY` to the runner. Select up to 32 issue numbers already bound to canonical GitHub revisions in that plan.
+
+```sh
+bin/bugsnitch local-unattended arm --project PROJECT_ID --issues 12,14 --for 2h --parallel 2 --turns 12
+bin/bugsnitch local-unattended arm --project PROJECT_ID --issues 12,14 --for 2h --parallel 2 --turns 12 --approve PREVIEW_DIGEST
+nohup bin/bugsnitch local-unattended run --project PROJECT_ID </dev/null > unattended.log 2>&1 &
+bin/bugsnitch local-unattended status --project PROJECT_ID
+```
+
+The first command prints the exact approval scope and digest. The second stores a grant on this device if the preview still matches. `--turns` caps total model starts for that grant across restarts. Add `--allow-corrections` to both previews and approval commands when the registered project has `autoCorrect` enabled and the grant should authorize those corrections.
+
+The supervisor runs until its selected tickets have recorded attempts, authorization closes, or the process exits. It checks again when capacity or prerequisite evidence is pending. Use the same `run` command to relaunch a supervisor after an interruption. Previously attempted tickets retain their journal and worktree. Use `local-show` to inspect a held or interrupted attempt and `local-recover` when a commit may need reconciliation. Changes to an authorized pending issue revision, plan, or local project settings close the grant. Use `local-unattended stop --project PROJECT_ID` to close it locally and cancel active unattended work. Run `sync --watch` separately to report attempt progress to the Work board. Publication starts with a separate owner approval.
+
+Include these options in the preview and its matching authorization to extend the batch beyond local candidates.
+
+| Option | Effect |
+| --- | --- |
+| `--plan-approver owner` or an assigned approver ID | A required local plan review produces a decision in **Work**. The named recipient reviews the plan on the runner, then approves or holds its exact checkpoint. The paired runner consumes one answer. Owner questions and sensitive edits still need local feedback. |
+| `--publish-target main` | The supervisor waits for the owner's existing local-ship approval for the candidate and target. It confirms the exact approval, reconciles uncertain pushes, and enrolls its draft in PR monitoring. It retains the inspected base and prepares review and combined-validation references. A reviewer attaches evidence and signs off through the existing PR workflow. |
+| `--steward` | With a publication target, the supervisor prepares scoped corrections for observed failing checks or requested changes under the same model-turn budget. A correction goes through validation and independent review. The owner approves its publication in **Work**, where the request binds the old PR head, target, and exact correction. |
+
+Typed actions in `status` include the version, approver, current PR observation, and any current deployment verdict. Signed GitHub pull request, review, and check notifications schedule an authoritative PR read. Project events wake a connected supervisor, with timed polling after missed events. After a restart the supervisor can recover a commit only when its parent, file set, modes and contents prove the recorded intent. It then validates that exact candidate. Execution whose outcome remains uncertain stays held on the owning machine.
+
 ### Choose review and correction settings
 
 Set `requirePlanReview` to `true` in the private worker configuration to pause a batch attempt after planning. The Work view shows the wait reason and the version reported by the assigned runner. On that computer, inspect the full plan with `local-show --id ATTEMPT_ID` and run `local-continue --id ATTEMPT_ID --version VERSION` to approve that checkpoint. A changed version requires a fresh review. The device still checks GitHub issue identity, live admission and model capacity.

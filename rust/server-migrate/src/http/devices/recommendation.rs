@@ -106,6 +106,9 @@ struct Candidate {
 #[derive(Deserialize)]
 struct Snapshot {
     reason: Option<String>,
+    hold: Option<bool>,
+    wait: Option<String>,
+    bindings: Option<Value>,
     plan: Option<Plan>,
     scope: Option<Value>,
     candidates: Option<Vec<Candidate>>,
@@ -114,11 +117,23 @@ struct Snapshot {
 pub(super) fn project(input: Value) -> WebResult<Value> {
     let snapshot: Snapshot = serde_json::from_value(input).map_err(|_| invalid())?;
     if let Some(reason) = snapshot.reason {
-        return Ok(json!({"reason":reason}));
+        return Ok(if snapshot.hold == Some(true) {
+            json!({"reason":reason,"hold":true})
+        } else {
+            json!({"reason":reason})
+        });
     }
     let plan = snapshot.plan.ok_or_else(invalid)?;
     plan.validate()?;
     let scope = snapshot.scope.ok_or_else(invalid)?;
+    let mut output = match snapshot.bindings {
+        Some(bindings) => json!({"scope":scope,"bindings":bindings}),
+        None => json!({}),
+    };
+    if let Some(reason) = snapshot.wait {
+        output["reason"] = json!(reason);
+        return Ok(output);
+    }
     let criteria = plan
         .tickets
         .into_iter()
@@ -133,7 +148,9 @@ pub(super) fn project(input: Value) -> WebResult<Value> {
             }
             if list.iter().all(|s| shareable(s)) {
                 selection["criteria"] = json!(list);
-                return Ok(json!({"scope":scope,"selection":selection}));
+                output["scope"] = scope;
+                output["selection"] = selection;
+                return Ok(output);
             }
             "the approved criteria require redaction before sharing".to_owned()
         } else {
@@ -146,7 +163,10 @@ pub(super) fn project(input: Value) -> WebResult<Value> {
             )
         });
     }
-    Ok(json!({"reason":first_reason.ok_or_else(invalid)?}))
+    output["reason"] = json!(
+        first_reason.unwrap_or_else(|| "No requested issue belongs to the approved plan".into())
+    );
+    Ok(output)
 }
 
 #[cfg(test)]

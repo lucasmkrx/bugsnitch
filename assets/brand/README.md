@@ -6,7 +6,7 @@
 
 | Use | Asset |
 | --- | --- |
-| Icon artwork | [Transparent SVG](bugsnitch-logo.svg) |
+| Icon artwork | [Transparent SVG](../../web/public/brand/bugsnitch-logo.svg) |
 | Horizontal wordmark | [Outlined SVG](../../web/public/brand/bugsnitch-wordmark.svg) · [Transparent PNG](../../web/public/brand/bugsnitch-wordmark.png) |
 | Browser tabs | [SVG favicon](../../web/public/brand/favicon.svg) · [Multi-size ICO](../../web/public/favicon.ico) · [16 px](../../web/public/brand/favicon-16.png) · [32 px](../../web/public/brand/favicon-32.png) · [48 px](../../web/public/brand/favicon-48.png) |
 | Home screen and profile images | [180 px Apple touch icon](../../web/public/brand/apple-touch-icon.png) · [192 px icon](../../web/public/brand/app-icon-192.png) · [512 px icon or avatar](../../web/public/brand/app-icon-512.png) |

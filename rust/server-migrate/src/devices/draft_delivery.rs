@@ -23,6 +23,8 @@ struct Request {
     base_sha: String,
     candidate_sha: String,
     target: String,
+    #[serde(default)]
+    follow: bool,
 }
 
 pub(super) fn handle(db: &Db<'_>, input: Value) -> Result<Value> {
@@ -31,9 +33,9 @@ pub(super) fn handle(db: &Db<'_>, input: Value) -> Result<Value> {
         request: b,
     } = serde_json::from_value(input)?;
     if b.protocol != 1
-        || !matches!(b.operation.as_str(), "status" | "published")
+        || !matches!(b.operation.as_str(), "status" | "published" | "follow")
         || b.approval_version < 0
-        || b.operation == "published" && b.approval_version == 0
+        || b.operation != "status" && b.approval_version == 0
         || b.version < 1
         || b.attempt_id.len() != 32
         || !lower_hex(&b.attempt_id)
@@ -71,6 +73,19 @@ pub(super) fn handle(db: &Db<'_>, input: Value) -> Result<Value> {
         return Err(Error::conflict(
             "Owner draft approval changed. Review the current approval.",
         ));
+    }
+    if b.follow
+        && matches!(b.operation.as_str(), "published" | "follow")
+        && matches!(
+            row.text(0)?,
+            "awaiting_publication" | "queued" | "reconciling" | "created"
+        )
+    {
+        db.exec(
+            "UPDATE draft_pr_intents SET follow_at=now()
+            WHERE workspace_id=$1 AND attempt_id=$2 AND follow_at IS NULL",
+            &[ws, &b.attempt_id],
+        )?;
     }
     if row.text(0)? == "awaiting_publication" && b.operation == "published" {
         db.exec("UPDATE draft_pr_intents SET status='queued',next_run=now(),updated_at=now() WHERE workspace_id=$1 AND attempt_id=$2",&[ws,&b.attempt_id])?;

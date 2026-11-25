@@ -23,6 +23,8 @@ func failureCode(err error) string {
 		return "device_unauthorized"
 	case errors.Is(err, ErrAuthorityStale):
 		return "authority_stale"
+	case errors.Is(err, ErrUnattendedBudget):
+		return "allowance_exhausted"
 	case errors.Is(err, ErrAuthorityUnreachable):
 		return "authority_unreachable"
 	case errors.Is(err, ErrControlPending):

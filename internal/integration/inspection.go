@@ -92,6 +92,10 @@ func (s Store) List(ctx context.Context, w string) ([]Pull, error) {
 }
 
 func (s Store) Refresh(ctx context.Context, w, p string, n, issue, version int64) (Pull, error) {
+	return s.refresh(ctx, w, p, n, issue, version, false)
+}
+
+func (s Store) refresh(ctx context.Context, w, p string, n, issue, version int64, watchNew bool) (Pull, error) {
 	var empty Pull
 	if n < 1 || issue < 1 || n == issue || version < 0 {
 		return empty, ErrInvalid
@@ -119,10 +123,14 @@ func (s Store) Refresh(ctx context.Context, w, p string, n, issue, version int64
 	if len(observation.Target) > 256 || incidents.Redact(observation.Target) != observation.Target {
 		return empty, ErrInvalid
 	}
-	return s.save(ctx, w, p, n, issue, version, installation, repository, name, observation)
+	return s.saveObservation(ctx, w, p, n, issue, version, installation, repository, name, observation, watchNew)
 }
 
 func (s Store) save(ctx context.Context, w, p string, n, issue, version, installation, repository int64, name string, obs github.PullObservation) (Pull, error) {
+	return s.saveObservation(ctx, w, p, n, issue, version, installation, repository, name, obs, false)
+}
+
+func (s Store) saveObservation(ctx context.Context, w, p string, n, issue, version, installation, repository int64, name string, obs github.PullObservation, watchNew bool) (Pull, error) {
 	var empty Pull
 	tx, err := s.DB.BeginTx(ctx, nil)
 	if err != nil {
@@ -150,8 +158,8 @@ func (s Store) save(ctx context.Context, w, p string, n, issue, version, install
 	if !unchanged {
 		cur++
 	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO pull_observations(workspace_id,project_id,number,issue_number,version,snapshot,policy_version,plan_version)
-	VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT(workspace_id,project_id,number) DO UPDATE SET snapshot=excluded.snapshot,version=excluded.version,policy_version=excluded.policy_version,plan_version=excluded.plan_version,observed_at=now()`, w, p, n, issue, cur, string(b), policy, plan)
+	_, err = tx.ExecContext(ctx, `INSERT INTO pull_observations(workspace_id,project_id,number,issue_number,version,snapshot,policy_version,plan_version,watching)
+	VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(workspace_id,project_id,number) DO UPDATE SET snapshot=excluded.snapshot,version=excluded.version,policy_version=excluded.policy_version,plan_version=excluded.plan_version,observed_at=now()`, w, p, n, issue, cur, string(b), policy, plan, watchNew && obs.State == "OPEN")
 	if err != nil {
 		return empty, err
 	}

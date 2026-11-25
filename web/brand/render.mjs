@@ -4,10 +4,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import { chromium } from "playwright-core";
 
 const output = new URL("../public/brand/", import.meta.url);
-const icon = await readFile(
-  new URL("../../assets/brand/bugsnitch-logo.svg", import.meta.url),
-  "utf8",
-);
+const icon = await readFile(new URL("bugsnitch-logo.svg", output), "utf8");
 const wordmark = await readFile(new URL("bugsnitch-wordmark.svg", output));
 const texture = await readFile(
   new URL("../src/home/circuit-texture-light.jpg", import.meta.url),

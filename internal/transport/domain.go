@@ -83,6 +83,12 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 	if r.Operation == "linear.session" && r.Actor == [2]string{"service", "verified-linear"} {
 		return s.receiveLinear(ctx, r.Input)
 	}
+	if r.Operation == "progression.verdict" && r.Actor == [2]string{"service", "device-progression"} {
+		return s.progressionVerdict(ctx, r.Input)
+	}
+	if r.Operation == "progression.wait" && r.Actor == [2]string{"service", "device-progression"} {
+		return s.waitProgression(ctx, r.Input)
+	}
 	if r.Operation == "chat.command" && r.Actor == [2]string{"service", "verified-chat"} {
 		return s.chatCommand(ctx, r.Input)
 	}

@@ -36,6 +36,7 @@ const usage = `Usage: bugsnitch COMMAND [OPTIONS]
   proof                  Run a read-only ChatGPT authorization check
   pair, rotate, unpair, status    Manage local device enrollment
   local-run              Execute a bounded batch of approved issues locally
+  local-unattended       Authorize and supervise a batch on this paired device
   local-limits           Show or set this runner's ticket and model-turn limits
   next --project ID      Print the next verified issue selection
   register               Map an assigned project to a local checkout
@@ -98,6 +99,8 @@ func run(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "local-run":
 		return device.LocalRun(ctx, args[1:], os.Stdout)
+	case "local-unattended":
+		return device.LocalUnattended(ctx, args[1:], os.Stdout)
 	case "local-limits":
 		return device.LocalLimits(args[1:], os.Stdout)
 	case "local-usage":
@@ -457,7 +460,7 @@ func main() {
 	runner.BeforeTurn, runner.AfterTurn = device.TurnStart, device.TurnEnd
 	signals := []os.Signal{os.Interrupt}
 	// These commands own long-running work and must finish cleanup on SIGTERM.
-	if len(os.Args) > 1 && (os.Args[1] == "sync" || os.Args[1] == "local-verify" && slices.Contains(os.Args[2:], "--")) {
+	if len(os.Args) > 1 && (os.Args[1] == "sync" || os.Args[1] == "local-unattended" || os.Args[1] == "local-verify" && slices.Contains(os.Args[2:], "--")) {
 		signals = append(signals, syscall.SIGTERM)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), signals...)

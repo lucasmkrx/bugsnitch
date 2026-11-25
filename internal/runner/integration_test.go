@@ -100,6 +100,22 @@ func TestIndependentlyPassingChangesFailInCombination(t *testing.T) {
 		t.Fatal("missing durable integration evidence")
 	}
 
+	t.Run("retain inspected base without moving user refs", func(t *testing.T) {
+		ref, err := RetainInspectedBase(ctx, a, "fixture-target", targetSHA)
+		if err != nil || mustGit(dir, "rev-parse", ref) != targetSHA {
+			t.Fatal(ref, err)
+		}
+		check := receipt
+		check.TargetRef = ref
+		got, err := integrationGit(ctx, "resolve", check, a)
+		if err != nil || got.TargetSHA != targetSHA {
+			t.Fatal(got, err)
+		}
+		if mustGit(dir, "rev-parse", "HEAD") != a.BaseSHA || mustGit(target, "rev-parse", "HEAD") != targetSHA {
+			t.Fatal("retaining the inspection moved a user ref")
+		}
+	})
+
 	t.Run("target movement invalidates combination", func(t *testing.T) {
 		mustGit(dir, "commit", "--allow-empty", "-m", "Move integration target")
 		verified, err := integrationGit(ctx, "verify", positive, a)

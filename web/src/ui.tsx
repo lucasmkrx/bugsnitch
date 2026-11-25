@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
 import { useEffect, useRef, type ReactNode } from "react";
-import logo from "../../assets/brand/bugsnitch-logo.svg";
 
 const paths = {
   overview: "M3 3h7v7H3z M14 3h7v7h-7z M3 14h7v7H3z M14 14h7v7h-7z",
@@ -47,7 +46,7 @@ export function Icon({ name, size = 18 }: { name: IconName; size?: number }) {
 export function Brand() {
   return (
     <span className="brand">
-      <img src={logo} width={28} height={25} alt="" />
+      <img src="/brand/bugsnitch-logo.svg" width={28} height={25} alt="" />
       Bugsnitch
     </span>
   );

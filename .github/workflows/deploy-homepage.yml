@@ -58,6 +58,12 @@ jobs:
         env:
           CLOUD_RUN_ACCESS_TOKEN: ${{ steps.google.outputs.access_token }}
         run: |
+          target=$(python3 deploy/deploy-homepage.py --check-target)
+          if [[ "$target" == portal ]]; then
+            echo "The authenticated portal serves this domain. Skipping the registry upload and static homepage rollout."
+            exit 0
+          fi
+          test "$target" = homepage
           if (( GITHUB_RUN_ATTEMPT > 1 )); then
             latest=$(git ls-remote --heads origin refs/heads/main | cut -f1)
             if [[ "$latest" != "$GITHUB_SHA" ]]; then

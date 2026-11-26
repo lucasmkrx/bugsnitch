@@ -143,7 +143,7 @@ func generalModel(ctx context.Context, ws, repo, role, id, instructions, prompt,
 	if e := <-authority; e != nil {
 		runErr = errors.Join(runErr, e)
 	}
-	// readOnlyModel closes and waits for its app-server process before returning.
+	// The model request has returned and any app-server process has exited.
 	if err = changeGeneral(id, "running", "ending"); err != nil {
 		return result, errors.Join(runErr, err)
 	}
@@ -153,12 +153,7 @@ func generalModel(ctx context.Context, ws, repo, role, id, instructions, prompt,
 var readOnlyModel = func(ctx context.Context, instructions, prompt, model, effort string, schema any) (agent.Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Minute)
 	defer cancel()
-	c, err := agent.Open(ctx)
-	if err != nil {
-		return agent.Result{}, err
-	}
-	defer c.Close()
-	return c.Turn(instructions, prompt, model, effort, schema)
+	return openAIOrCodex(ctx, instructions, prompt, model, effort, schema)
 }
 
 func Proof(ctx context.Context) (agent.Result, error) {

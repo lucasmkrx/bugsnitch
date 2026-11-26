@@ -80,6 +80,12 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 	if r.Version != 1 {
 		return nil, bad("Unsupported domain protocol")
 	}
+	if r.Operation == "jobs.tick" {
+		if r.Actor != [2]string{"service", "scheduled-jobs"} || s.ScheduledJobs == nil {
+			return nil, denied
+		}
+		return true, s.ScheduledJobs(ctx)
+	}
 	if r.Operation == "device.worker_start" && r.Actor == [2]string{"service", "worker-dispatch"} {
 		return s.deviceWorkerStart(ctx, r.Input)
 	}

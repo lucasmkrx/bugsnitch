@@ -70,7 +70,7 @@ func syncBoardStatus(ctx context.Context, db *sql.DB, app boardStatusWriter, act
 	return true, tx.Commit()
 }
 
-func runBoardSync(ctx context.Context, db *sql.DB, app *github.App) {
+func boardOptions() (string, string) {
 	active, done := os.Getenv("BUGSNITCH_GITHUB_PROJECT_STATUS_ACTIVE"), os.Getenv("BUGSNITCH_GITHUB_PROJECT_STATUS_DONE")
 	if active == "" {
 		active = "In Progress"
@@ -78,6 +78,11 @@ func runBoardSync(ctx context.Context, db *sql.DB, app *github.App) {
 	if done == "" {
 		done = "Done"
 	}
+	return active, done
+}
+
+func runBoardSync(ctx context.Context, db *sql.DB, app *github.App) {
+	active, done := boardOptions()
 	for ctx.Err() == nil {
 		task, cancel := context.WithTimeout(ctx, 45*time.Second)
 		processed, err := syncBoardStatus(task, db, app, active, done)

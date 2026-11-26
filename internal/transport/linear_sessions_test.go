@@ -78,7 +78,7 @@ func TestDelegatedLinearIssueReportsHandover(t *testing.T) {
 		if _, e := db.Exec("UPDATE linear_sessions SET due_at=now()"); e != nil {
 			t.Fatal(e)
 		}
-		ok, e := s.processLinearSession(t.Context())
+		ok, e := s.ProcessLinearSession(t.Context())
 		if !ok || e != nil {
 			t.Fatal(ok, e)
 		}
@@ -101,7 +101,7 @@ func TestDelegatedLinearIssueReportsHandover(t *testing.T) {
 	receive(prompt)
 	flush()
 	receive(prompt)
-	if ok, e := s.processLinearSession(t.Context()); ok || e != nil {
+	if ok, e := s.ProcessLinearSession(t.Context()); ok || e != nil {
 		t.Fatal(ok, e)
 	}
 }

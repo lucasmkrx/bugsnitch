@@ -12,7 +12,7 @@ pub use session::Owner;
 use axum::{
     Json, Router,
     extract::{DefaultBodyLimit, FromRequest, Request, State},
-    http::{HeaderValue, Method, StatusCode, header},
+    http::{HeaderMap, HeaderValue, Method, StatusCode, header},
     middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -28,6 +28,7 @@ use std::{
     sync::{Arc, Mutex},
     time::{Duration, Instant},
 };
+use subtle::ConstantTimeEq;
 use tokio::{
     net::TcpListener,
     sync::{Semaphore, watch},
@@ -104,6 +105,7 @@ fn service_actor() -> [String; 2] {
 pub struct AppState {
     pub origin: String,
     owner_hash: String,
+    schedule_hash: Option<String>,
     pool: Arc<coord_pool::Pool>,
     socket: PathBuf,
     dashboard: dashboard::Dashboard,
@@ -149,6 +151,29 @@ impl AppState {
         bucket.1 += 1;
         true
     }
+}
+
+async fn scheduled_tick(State(s): State<Shared>, headers: HeaderMap) -> WebResult<StatusCode> {
+    let Some(expected) = &s.schedule_hash else {
+        return Err(WebError(StatusCode::NOT_FOUND, "Route unavailable".into()));
+    };
+    let token = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "));
+    if !token.is_some_and(|v| bool::from(hash(v).as_bytes().ct_eq(expected.as_bytes()))) {
+        return Err(WebError(
+            StatusCode::UNAUTHORIZED,
+            "Authentication required".into(),
+        ));
+    }
+    s.domain(
+        "jobs.tick",
+        ["service".into(), "scheduled-jobs".into()],
+        Value::Null,
+    )
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 async fn protect(State(s): State<Shared>, r: Request, next: Next) -> Response {
     let id = match random_hex(12) {
@@ -262,6 +287,7 @@ fn router(s: Shared) -> Router {
         .merge(devices::public())
         .merge(email_sign_in::routes())
         .route("/api/v1/login", post(session::login))
+        .route("/internal/jobs/tick", post(scheduled_tick))
         .layer(DefaultBodyLimit::max(64 << 10))
         .merge(integrations::routes())
         .route(
@@ -347,6 +373,17 @@ pub async fn run() -> Result<(), &'static str> {
     let origin = env::var("BUGSNITCH_ORIGIN").unwrap_or_else(|_| "http://localhost:8787".into());
     let owner = env::var("BUGSNITCH_OWNER_TOKEN").unwrap_or_default();
     let dsn = env::var("DATABASE_URL").map_err(|_| "Set DATABASE_URL")?;
+    let schedule_hash = match env::var("BUGSNITCH_SCHEDULE_TOKEN") {
+        Ok(token)
+            if token.len() == 64
+                && token.bytes().all(|b| b.is_ascii_hexdigit())
+                && token != owner =>
+        {
+            Some(hash(&token))
+        }
+        Err(env::VarError::NotPresent) => None,
+        _ => return Err("Set BUGSNITCH_SCHEDULE_TOKEN to an independent 32-byte hex token"),
+    };
     if !valid_origin(&origin) || owner.len() < 32 {
         return Err("Set a valid BUGSNITCH_ORIGIN and owner token of at least 32 characters");
     }
@@ -356,10 +393,11 @@ pub async fn run() -> Result<(), &'static str> {
         return Err("Set DATABASE_URL");
     }
     let pool = coord_pool::Pool::new()?;
-    let mut worker = bridge::Worker::start(&origin).await?;
+    let mut worker = bridge::Worker::start(&origin, schedule_hash.is_some()).await?;
     let state = Arc::new(AppState {
         origin,
         owner_hash: hash(&owner),
+        schedule_hash,
         pool,
         socket: worker.socket.clone(),
         dashboard: dashboard::Dashboard::load(&PathBuf::from(

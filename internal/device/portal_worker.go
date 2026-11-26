@@ -26,6 +26,8 @@ type portalWorker struct {
 	out            io.Writer
 }
 
+var errPortalIdle = errors.New("no portal work is ready")
+
 func PortalWorker(ctx context.Context, args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("portal-worker", flag.ContinueOnError)
 	id := fs.String("project", "", "paired project ID")
@@ -52,18 +54,27 @@ func PortalWorker(ctx context.Context, args []string, out io.Writer) error {
 	defer unlock()
 	w := portalWorker{p, digest, *target, *turns, out}
 	fmt.Fprintf(out, "Listening for portal work on %s, targeting %s\n", p.repo, *target)
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+	const initialIdle = 30 * time.Second
+	idle := initialIdle
 	for ctx.Err() == nil {
-		if err = w.poll(ctx); err != nil && ctx.Err() == nil {
+		err = w.poll(ctx)
+		delay := 5 * time.Second
+		if errors.Is(err, errPortalIdle) {
+			delay, idle = idle, min(2*idle, time.Minute)
+		} else if err != nil && ctx.Err() == nil {
 			fmt.Fprintln(out, err)
 			if errors.Is(err, statusError(403)) || errors.Is(err, statusError(401)) || errors.Is(err, runner.ErrAuthorityStale) {
 				return err
 			}
+			delay = initialIdle
+		} else {
+			idle = initialIdle
 		}
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
-		case <-ticker.C:
+			timer.Stop()
+		case <-timer.C:
 		}
 	}
 	return ctx.Err()
@@ -120,8 +131,11 @@ func (w portalWorker) poll(ctx context.Context) error {
 		return w.supervise(ctx, g.ID)
 	}
 	req, err := w.exchange(ctx, protocol.WorkerStartPoll{Operation: "poll"})
-	if err != nil || req == nil {
+	if err != nil {
 		return err
+	}
+	if req == nil {
+		return errPortalIdle
 	}
 	id, err := hex.DecodeString(req.ID)
 	if err != nil || len(id) != 16 || req.Issue < 1 || req.Project != p.id || req.Device != p.enrolled.Enrollment.DeviceID || req.Policy < 1 ||

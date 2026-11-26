@@ -278,13 +278,17 @@ async fn progression_wake(
     let project = body["projectId"]
         .as_str()
         .ok_or_else(|| bad("Invalid progression project"))?;
-    let cursor = claim(
+    let mut cursor = claim(
         s.clone(),
         token.clone(),
         "device.progression_cursor",
         body.clone(),
     )
     .await?;
+    if s.schedule_hash.is_some() {
+        cursor["nextPollSeconds"] = json!(15);
+        return Ok(Json(cursor));
+    }
     if cursor["position"].as_i64().is_some_and(|n| n > after) {
         return Ok(Json(cursor));
     }

@@ -358,13 +358,20 @@ func superviseUnattended(ctx context.Context, project string, out io.Writer) err
 	if err != nil {
 		return err
 	}
-	wake := make(chan struct{}, 1)
-	wakeDone := make(chan struct{})
-	go func() {
-		defer close(wakeDone)
-		watchProgression(run, p.enrolled, project, wake)
-	}()
-	defer func() { cancel(); <-wakeDone }()
+	var wake chan struct{}
+	pollEvery := 5 * time.Second
+	if grant.PortalDecisions {
+		// Short status checks let a request-billed service sleep between runs.
+		pollEvery = 15 * time.Second
+	} else {
+		wake = make(chan struct{}, 1)
+		wakeDone := make(chan struct{})
+		go func() {
+			defer close(wakeDone)
+			watchProgression(run, p.enrolled, project, wake)
+		}()
+		defer func() { cancel(); <-wakeDone }()
+	}
 	type outcome struct {
 		issue   int
 		attempt runner.Attempt
@@ -408,7 +415,7 @@ func superviseUnattended(ctx context.Context, project string, out io.Writer) err
 			return nil
 		}
 		if len(active) < parallel && !time.Now().Before(nextPoll) {
-			nextPoll = time.Now().Add(5 * time.Second)
+			nextPoll = time.Now().Add(pollEvery)
 			pending, attempts, err := unattendedAttempts(grant)
 			if err != nil {
 				return err
@@ -508,6 +515,9 @@ func superviseUnattended(ctx context.Context, project string, out io.Writer) err
 			nextPoll = time.Time{}
 		case result := <-results:
 			delete(active, result.issue)
+			if grant.PortalDecisions {
+				nextPoll = time.Time{}
+			}
 			if !result.started && result.err == nil {
 				continue
 			}

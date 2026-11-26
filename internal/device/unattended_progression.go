@@ -23,7 +23,8 @@ func watchProgression(ctx context.Context, p profile, project string, wake chan<
 	var after int64
 	for ctx.Err() == nil {
 		var current struct {
-			Position int64 `json:"position"`
+			Position        int64 `json:"position"`
+			NextPollSeconds int   `json:"nextPollSeconds"`
 		}
 		request := struct {
 			Protocol int    `json:"protocol"`
@@ -41,7 +42,8 @@ func watchProgression(ctx context.Context, p profile, project string, wake chan<
 			after = current.Position
 			continue
 		}
-		timer := time.NewTimer(time.Second)
+		seconds := max(1, min(current.NextPollSeconds, 60))
+		timer := time.NewTimer(time.Duration(seconds) * time.Second)
 		select {
 		case <-ctx.Done():
 			timer.Stop()

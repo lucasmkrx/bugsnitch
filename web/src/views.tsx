@@ -1246,7 +1246,9 @@ export function Views({
   }
   return (
     <>
-      {!s.capabilities.demo && <ModelAccess key={s.viewer?.id || "owner"} />}
+      {!s.capabilities.demo && (!s.viewer || s.viewer.role === "owner") && (
+        <ModelAccess key={s.viewer?.id || "owner"} />
+      )}
       <Panel title="Repository connections">
         {projects.length
           ? projects.map((p) => (

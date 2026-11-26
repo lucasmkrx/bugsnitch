@@ -18,13 +18,15 @@ A project may select the Claude Messages API for an individual worker stage, suc
 
 ## Personal OpenAI API key
 
-From the account that runs Bugsnitch, start a local settings session. Supply your dashboard's origin if you use a different address.
+Open **Settings → API keys** on the computer running the paired Bugsnitch runner. Select **Connect runner**, enter an OpenAI project key with Responses write permission and a model that supports structured output, and select **Save API key**. The runner's sync service must be running. The workspace verifies the runner connection before the browser sends the key to the runner. Saving settings never starts a model turn.
+
+For an unpaired or older runner, open **Connect with a runner URL** and start a temporary session from the runner terminal. Supply your dashboard's origin if you use a different address.
 
 ```sh
 bin/bugsnitch model-settings --origin http://localhost:8787
 ```
 
-On the same computer, sign in to the dashboard, open **Settings → Model access**, and paste the connection URL printed in the terminal. Enter your OpenAI API project key with Responses write permission. Choose a model with text and structured output support. **Load models** lists IDs available to a key with Models read permission. You can also enter the model ID directly. Save, then stop the settings session with Ctrl-C. Use `bin/bugsnitch proof` to verify the key and model with one API request.
+Paste the connection URL printed in the terminal into **Runner connection URL**, select **Connect with URL**, and save the key. Stop the temporary session with Ctrl-C. **Load models** lists IDs available to a key with Models read permission. You can also enter the model ID directly.
 
 The key lives in a private file in the runner's local OS profile. Each user runs under their own OS account or sets a separate private, absolute `BUGSNITCH_HOME`. Use that same profile for subsequent runs. Bugsnitch sends the key and selected task context directly from the runner to OpenAI's Responses API. The hosted service receives the same bounded execution reports as with local ChatGPT sign-in.
 

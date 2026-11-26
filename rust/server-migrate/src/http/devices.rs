@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Stable public device protocol. Only authenticated credential digests and
 //! named operations reach the coordinator; the server derives owner scope.
+mod model_settings;
 mod recommendation;
 
 use super::{ApiJson, Owner, Shared, WebError, WebResult, hash, random_hex};
@@ -22,6 +23,10 @@ pub fn public() -> Router<Shared> {
     Router::new()
         .route("/api/v1/device/pair", post(pair))
         .route("/api/v1/device/sync", post(sync))
+        .route(
+            "/api/v1/device/model-settings",
+            post(model_settings::device),
+        )
         .route("/api/v1/device/draft-delivery", post(draft_delivery))
         .route("/api/v1/device/progression", post(progression))
         .route("/api/v1/device/progression-wake", post(progression_wake))
@@ -38,6 +43,10 @@ pub fn public() -> Router<Shared> {
 pub fn owner() -> Router<Shared> {
     Router::new()
         .route("/api/v1/pairings", post(pairing))
+        .route(
+            "/api/v1/model-settings/authorize",
+            post(model_settings::authorize),
+        )
         .route("/api/v1/devices/{id}/revoke", post(revoke))
         .route("/api/v1/attempts/{id}/control", post(control))
         .route("/api/v1/attempts/{id}/ticket-decision", post(ticket_answer))

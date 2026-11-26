@@ -4,6 +4,7 @@ package runner
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	_ "embed"
 	"encoding/hex"
@@ -17,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,9 +33,9 @@ var modelSettingsPage = template.Must(template.New("model settings").Parse(`<!do
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Bugsnitch runner connection</title>
-<body data-dashboard="{{.}}">
+<body data-dashboard="{{.Origin}}" data-paired="{{.Paired}}">
 <main><h1>Bugsnitch runner connection</h1>
-<p id="status">Return to Bugsnitch Settings to enter your OpenAI key and choose a model.</p></main>
+<p id="status">Connecting to Bugsnitch Settings…</p></main>
 <script src="/bridge.js"></script>
 </body>
 </html>
@@ -45,20 +47,48 @@ type modelSettingsReply struct {
 	Error  string   `json:"error,omitempty"`
 }
 
-// ServeModelSettings exposes a short-lived browser handoff on the runner's
-// loopback interface. The URL fragment never appears in HTTP requests.
-func ServeModelSettings(ctx context.Context, dashboardOrigin string, output io.Writer) error {
+type ModelSettingsGrant struct {
+	DeviceID string `json:"deviceId"`
+	Expiry   int64  `json:"expiry"`
+	Proof    string `json:"proof"`
+}
+
+type modelSettingsAuthorization func(context.Context, string, *ModelSettingsGrant) (ModelSettingsGrant, error)
+
+func modelSettingsOrigin(dashboardOrigin string) (string, error) {
 	dashboard, err := url.Parse(dashboardOrigin)
 	if err != nil || dashboard.Hostname() == "" || dashboard.User != nil ||
 		(dashboard.Path != "" && dashboard.Path != "/") || dashboard.RawQuery != "" ||
 		dashboard.ForceQuery || dashboard.Fragment != "" {
-		return errors.New("Use the dashboard origin, such as https://bugsnitch.example.com")
+		return "", errors.New("Use the dashboard origin, such as https://bugsnitch.example.com")
 	}
 	ip := net.ParseIP(dashboard.Hostname())
 	if dashboard.Scheme != "https" && !(dashboard.Scheme == "http" && (dashboard.Hostname() == "localhost" || ip.IsLoopback())) {
-		return errors.New("The dashboard origin must use HTTPS or local HTTP")
+		return "", errors.New("The dashboard origin must use HTTPS or local HTTP")
 	}
-	dashboardOrigin = dashboard.Scheme + "://" + dashboard.Host
+	return dashboard.Scheme + "://" + dashboard.Host, nil
+}
+
+func modelSettingsToken() (string, error) {
+	var secret [32]byte
+	if _, err := rand.Read(secret[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(secret[:]), nil
+}
+
+func modelSettingsDigest(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// ServeModelSettings exposes a short-lived browser handoff on the runner's
+// loopback interface. The URL fragment never appears in HTTP requests.
+func ServeModelSettings(ctx context.Context, dashboardOrigin string, output io.Writer) error {
+	origin, err := modelSettingsOrigin(dashboardOrigin)
+	if err != nil {
+		return err
+	}
 
 	dir, err := home()
 	if err != nil {
@@ -75,31 +105,62 @@ func ServeModelSettings(ctx context.Context, dashboardOrigin string, output io.W
 	if err := lockFile(lock); err != nil {
 		return errors.New("A model settings session is already open for this runner")
 	}
-	var secret [32]byte
-	if _, err := rand.Read(secret[:]); err != nil {
+	token, err := modelSettingsToken()
+	if err != nil {
 		return err
 	}
-	token := hex.EncodeToString(secret[:])
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
 		return err
 	}
 	defer listener.Close()
 	host := listener.Addr().String()
-	localOrigin := "http://" + host
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	fmt.Fprintf(output, "In %s, open Settings → API keys and paste this runner connection URL:\nhttp://%s/#%s\nKeep this terminal open while making changes. Press Ctrl-C when finished.\n", origin, host, token)
+	return serveModelSettings(ctx, listener, modelSettingsHandler(host, origin, token))
+}
+
+// StartPairedModelSettings serves credential settings on loopback while the
+// paired device is syncing. A local browser and the workspace owner authorize
+// each short-lived connection. No API key is sent to the workspace service.
+func StartPairedModelSettings(ctx context.Context, dashboardOrigin string, authorize modelSettingsAuthorization) error {
+	origin, err := modelSettingsOrigin(dashboardOrigin)
+	if err != nil {
+		return err
+	}
+	dir, err := home()
+	if err != nil {
+		return err
+	}
+	if err := checkModelSettingsDir(dir); err != nil {
+		return err
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:43182")
+	if err != nil {
+		return fmt.Errorf("start local API key settings: %w", err)
+	}
+	go func() {
+		defer listener.Close()
+		err := serveModelSettings(ctx, listener, modelSettingsRoutes(listener.Addr().String(), origin, "", authorize))
+		if err != nil && ctx.Err() == nil {
+			fmt.Fprintln(os.Stderr, "Local API key settings stopped.")
+		}
+	}()
+	return nil
+}
+
+func serveModelSettings(ctx context.Context, listener net.Listener, handler http.Handler) error {
 	server := &http.Server{
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      15 * time.Second,
+		WriteTimeout:      25 * time.Second,
 		IdleTimeout:       15 * time.Second,
 		MaxHeaderBytes:    8 << 10,
-		Handler:           modelSettingsHandler(host, dashboardOrigin, token),
+		Handler:           handler,
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
-	defer cancel()
 	stop := context.AfterFunc(ctx, func() { _ = server.Close() })
 	defer stop()
-	fmt.Fprintf(output, "In %s, open Settings → Model access and paste this runner connection URL:\n%s/#%s\nKeep this terminal open while making changes. Press Ctrl-C when finished.\n", dashboardOrigin, localOrigin, token)
 	if err := server.Serve(listener); errors.Is(err, http.ErrServerClosed) {
 		return nil
 	} else {
@@ -108,6 +169,10 @@ func ServeModelSettings(ctx context.Context, dashboardOrigin string, output io.W
 }
 
 func modelSettingsHandler(host, dashboardOrigin, token string) http.HandlerFunc {
+	return modelSettingsRoutes(host, dashboardOrigin, token, nil)
+}
+
+func modelSettingsRoutes(host, dashboardOrigin, token string, authorize modelSettingsAuthorization) http.HandlerFunc {
 	var changes sync.Mutex
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -121,13 +186,39 @@ func modelSettingsHandler(host, dashboardOrigin, token string) http.HandlerFunc 
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_ = modelSettingsPage.Execute(w, dashboardOrigin)
+			_ = modelSettingsPage.Execute(w, struct {
+				Origin string
+				Paired bool
+			}{dashboardOrigin, authorize != nil})
 		case r.Method == http.MethodGet && r.URL.Path == "/bridge.js":
 			w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
 			_, _ = w.Write(modelSettingsBridge)
+		case r.Method == http.MethodPost && r.URL.Path == "/connect" && authorize != nil:
+			if r.Header.Get("Origin") != "http://"+host || r.Header.Get("Content-Type") != "application/json" {
+				http.Error(w, "Invalid runner connection", http.StatusForbidden)
+				return
+			}
+			session, err := modelSettingsToken()
+			if err != nil {
+				http.Error(w, "Could not open the runner connection", http.StatusServiceUnavailable)
+				return
+			}
+			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			defer cancel()
+			grant, err := authorize(ctx, modelSettingsDigest(session), nil)
+			if err != nil {
+				http.Error(w, "Could not verify this paired runner", http.StatusForbidden)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			_ = json.NewEncoder(w).Encode(struct {
+				Token string             `json:"token"`
+				Claim ModelSettingsGrant `json:"claim"`
+			}{session, grant})
 		case r.Method == http.MethodPost && r.URL.Path == "/settings":
-			if r.Header.Get("Origin") != "http://"+host ||
-				subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte("Bearer "+token)) != 1 {
+			bearer, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if r.Header.Get("Origin") != "http://"+host || !ok ||
+				len(bearer) != 64 || (authorize == nil && subtle.ConstantTimeCompare([]byte(bearer), []byte(token)) != 1) {
 				http.Error(w, "Invalid runner connection", http.StatusForbidden)
 				return
 			}
@@ -135,15 +226,31 @@ func modelSettingsHandler(host, dashboardOrigin, token string) http.HandlerFunc 
 				http.Error(w, "Use application/json", http.StatusUnsupportedMediaType)
 				return
 			}
-			var input struct{ Action, APIKey, Model string }
+			var input struct {
+				Action, APIKey, Model string
+				Permit                *ModelSettingsGrant
+			}
 			dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 2048))
 			dec.DisallowUnknownFields()
 			if dec.Decode(&input) != nil || dec.Decode(new(any)) != io.EOF {
 				http.Error(w, "Invalid model settings request", http.StatusBadRequest)
 				return
 			}
-			ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 			defer cancel()
+			if authorize != nil {
+				if input.Permit == nil {
+					http.Error(w, "Missing workspace owner authorization", http.StatusForbidden)
+					return
+				}
+				approval, cancel := context.WithTimeout(ctx, 8*time.Second)
+				_, err := authorize(approval, modelSettingsDigest(bearer), input.Permit)
+				cancel()
+				if err != nil {
+					http.Error(w, "Runner authorization expired", http.StatusForbidden)
+					return
+				}
+			}
 			if input.Action == "save" || input.Action == "remove" {
 				changes.Lock()
 				defer changes.Unlock()

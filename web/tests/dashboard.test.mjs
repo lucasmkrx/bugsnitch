@@ -120,6 +120,110 @@ function fixture() {
     updatedAt: "2026-11-21T15:06:00Z",
   };
 }
+
+test("API keys verify the paired runner before sending credentials to loopback", async (t) => {
+  const { server, url: origin } = await staticHost();
+  t.after(() => server.close());
+  const browser = await chromium.launch(
+    process.env.BUGSNITCH_TEST_CHROME
+      ? { executablePath: process.env.BUGSNITCH_TEST_CHROME, headless: true }
+      : { headless: true },
+  );
+  t.after(() => browser.close());
+  const context = await browser.newContext();
+  const bridge = await readFile(
+    new URL("../../internal/runner/model_settings_bridge.js", import.meta.url),
+  );
+  const local = "http://127.0.0.1:43182";
+  const token = "a".repeat(64);
+  const claim = {
+    deviceId: "b".repeat(32),
+    expiry: 1800000000,
+    proof: "c".repeat(64),
+  };
+  const permit = { ...claim, proof: "d".repeat(64) };
+  const syntheticKey = "sk-synthetic-browser-test-key";
+  const localCalls = [];
+  const ownerRequests = [];
+  let authorizeRunner = false;
+  await context.route(local + "/**", (route) => {
+    const path = new URL(route.request().url()).pathname;
+    switch (path) {
+      case "/":
+        return route.fulfill({
+          contentType: "text/html",
+          body: `<body data-dashboard="${origin}" data-paired="true"><p id="status"></p><script src="/bridge.js"></script></body>`,
+        });
+      case "/bridge.js":
+        return route.fulfill({ contentType: "text/javascript", body: bridge });
+      case "/connect":
+        return route.fulfill({ json: { token, claim } });
+      case "/settings":
+        localCalls.push(route.request().postDataJSON());
+        return route.fulfill({
+          json:
+            localCalls.at(-1).action === "save" ? { model: "gpt-fixture" } : {},
+        });
+      default:
+        return route.fulfill({ status: 404 });
+    }
+  });
+  const page = await context.newPage();
+  await page.route(origin + "/api/v1/**", (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/v1/state")
+      return route.fulfill({ json: fixture() });
+    if (url.pathname === "/api/v1/model-settings/authorize") {
+      ownerRequests.push(route.request().postDataJSON());
+      return authorizeRunner
+        ? route.fulfill({ json: { permit } })
+        : route.fulfill({
+            status: 403,
+            json: { error: "Different workspace" },
+          });
+    }
+    return route.fulfill({ status: 404 });
+  });
+
+  await page.goto(origin + "/app/#/settings");
+  await page.getByRole("heading", { name: "API keys", exact: true }).waitFor();
+  await page.getByLabel("OpenAI API key", { exact: true }).fill(syntheticKey);
+  await page.getByLabel("OpenAI model", { exact: true }).fill("gpt-fixture");
+  await page
+    .getByRole("button", { name: "Connect runner", exact: true })
+    .click();
+  await page
+    .getByText("Could not verify this runner", { exact: false })
+    .waitFor();
+  assert.deepEqual(localCalls, []);
+
+  authorizeRunner = true;
+  await page.getByLabel("OpenAI API key", { exact: true }).fill(syntheticKey);
+  await page
+    .getByRole("button", { name: "Connect runner", exact: true })
+    .click();
+  await page.getByRole("button", { name: "Save API key", exact: true }).click();
+  await page
+    .getByText("OpenAI API key saved on this runner.", { exact: true })
+    .waitFor();
+  assert.deepEqual(localCalls, [
+    { action: "status", apiKey: "", model: "", permit },
+    { action: "save", apiKey: syntheticKey, model: "gpt-fixture", permit },
+  ]);
+  assert.equal(ownerRequests.length, 2);
+  for (const request of ownerRequests) {
+    assert.deepEqual(Object.keys(request).sort(), ["claim", "digest"]);
+    assert.deepEqual(request.claim, claim);
+    assert.match(request.digest, /^[a-f0-9]{64}$/);
+    assert.notEqual(request.digest, token);
+    assert.ok(!JSON.stringify(request).includes(syntheticKey));
+  }
+  assert.equal(
+    await page.getByLabel("OpenAI API key", { exact: true }).inputValue(),
+    "",
+  );
+});
+
 test("desktop and mobile approval, stale state, replay and owner navigation", async (t) => {
   const { server, url: origin } = await staticHost();
   const url = origin + "/app";

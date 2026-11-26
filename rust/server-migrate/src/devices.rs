@@ -59,6 +59,26 @@ pub fn handle(db: &Db<'_>, op: &str, input: Value) -> Result<Value> {
         "device.revoke" => revoke(db, serde_json::from_value(input)?),
         "device.rotate" => rotate(db, serde_json::from_value(input)?),
         "device.sync" => sync::handle(db, input),
+        "device.model_settings_identity" => {
+            let hash = input.as_str().ok_or_else(Error::denied)?;
+            let row = db
+                .optional(
+                    "SELECT workspace_id,id FROM devices WHERE token_hash=$1 AND NOT revoked",
+                    &[hash],
+                )?
+                .ok_or_else(Error::denied)?;
+            Ok(json!({"workspace":row.text(0)?, "device":row.text(1)?}))
+        }
+        "device.model_settings_active" => {
+            let workspace = input["workspace"].as_str().ok_or_else(Error::denied)?;
+            let device = input["device"].as_str().ok_or_else(Error::denied)?;
+            db.optional(
+                "SELECT id FROM devices WHERE workspace_id=$1 AND id=$2 AND NOT revoked",
+                &[workspace, device],
+            )?
+            .ok_or_else(Error::denied)?;
+            Ok(Value::Null)
+        }
         "device.control" => controls::request(db, input),
         "device.workspace_control" => controls::workspace_control(db, input),
         _ => Err(Error::bad("Unknown device operation")),

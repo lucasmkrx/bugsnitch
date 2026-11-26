@@ -371,6 +371,7 @@ func RunCLIContext(ctx context.Context, args []string) error {
 			return errors.New("use sync [--watch]")
 		}
 		delay := 5 * time.Second
+		settingsStarted := false
 		for {
 			if err := syncOnce(ctx); err != nil {
 				if ctx.Err() != nil {
@@ -380,6 +381,12 @@ func RunCLIContext(ctx context.Context, args []string) error {
 				delay = min(delay*2, time.Minute)
 			} else {
 				delay = 25 * time.Second
+				if !settingsStarted {
+					settingsStarted = true
+					if err := startModelSettings(ctx); err != nil {
+						fmt.Fprintln(os.Stderr, err)
+					}
+				}
 			}
 			select {
 			case <-ctx.Done():
@@ -389,4 +396,34 @@ func RunCLIContext(ctx context.Context, args []string) error {
 		}
 	}
 	return errors.New("unknown device command")
+}
+
+func startModelSettings(ctx context.Context) error {
+	paired, err := getProfile()
+	if err != nil {
+		return err
+	}
+	return runner.StartPairedModelSettings(ctx, paired.Server, func(ctx context.Context, digest string, permit *runner.ModelSettingsGrant) (runner.ModelSettingsGrant, error) {
+		current, err := getProfile()
+		if err != nil || current.Server != paired.Server || current.Enrollment.DeviceID != paired.Enrollment.DeviceID ||
+			current.Enrollment.Workspace != paired.Enrollment.Workspace {
+			return runner.ModelSettingsGrant{}, errors.New("the runner pairing changed")
+		}
+		var reply struct {
+			Claim      runner.ModelSettingsGrant
+			Authorized bool
+		}
+		payload := struct {
+			Protocol int                        `json:"protocol"`
+			Digest   string                     `json:"digest"`
+			Permit   *runner.ModelSettingsGrant `json:"permit,omitempty"`
+		}{protocol.Version, digest, permit}
+		if err := send(ctx, current, "model-settings", payload, &reply); err != nil {
+			return runner.ModelSettingsGrant{}, err
+		}
+		if permit != nil && !reply.Authorized || permit == nil && reply.Claim.DeviceID != current.Enrollment.DeviceID {
+			return runner.ModelSettingsGrant{}, errors.New("the workspace did not verify the runner connection")
+		}
+		return reply.Claim, nil
+	})
 }

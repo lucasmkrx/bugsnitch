@@ -306,12 +306,7 @@ var modelTurn = func(ctx context.Context, a *Attempt, directive, prompt string, 
 	if settings.Provider == "claude" {
 		return agent.Claude(ctx, directive, prompt, settings.Model, settings.Reasoning, schema)
 	}
-	c, err := agent.Open(ctx)
-	if err != nil {
-		return agent.Result{}, err
-	}
-	defer c.Close()
-	return c.Turn(directive, prompt, settings.Model, settings.Reasoning, schema)
+	return openAIOrCodex(ctx, directive, prompt, settings.Model, settings.Reasoning, schema)
 }
 
 var MeasureWorker func(Summary, agent.Result)

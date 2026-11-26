@@ -32,6 +32,7 @@ import {
   ticketAction,
 } from "./work";
 import { Members } from "./members";
+import { ModelAccess } from "./model-access";
 
 interface Props {
   page: Page;
@@ -1211,6 +1212,7 @@ export function Views({
   }
   return (
     <>
+      {!s.capabilities.demo && <ModelAccess key={s.viewer?.id || "owner"} />}
       <Panel title="Repository connections">
         {projects.length
           ? projects.map((p) => (
@@ -1269,13 +1271,6 @@ export function Views({
       {!project && role === "owner" && !s.capabilities.demo && (
         <Members locked={locked} run={run} projects={s.projects} />
       )}
-      <Panel title="Model access">
-        <div className="panel-body">
-          <Badge tone="warn">Hosted inference unavailable</Badge>
-          <p>{s.capabilities.reason}</p>
-          <p>Shared account allowance · Unknown</p>
-        </div>
-      </Panel>
     </>
   );
 }

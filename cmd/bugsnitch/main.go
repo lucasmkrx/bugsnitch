@@ -33,7 +33,8 @@ const usage = `Usage: bugsnitch COMMAND [OPTIONS]
   doctor                 Check Git, native runner capabilities and Codex
   models                 List models and reasoning settings on this runtime
   usage                  Read available ChatGPT allowance windows
-  proof                  Run a read-only ChatGPT authorization check
+  proof                  Run a read-only model authorization check
+  model-settings         Connect dashboard model settings to this local runner
   pair, rotate, unpair, status    Manage local device enrollment
   local-run              Execute a bounded batch of approved issues locally
   local-unattended       Authorize and supervise a batch on this paired device
@@ -117,6 +118,19 @@ func run(ctx context.Context, args []string) error {
 		return approvalCheck(ctx, args[1:])
 	case "approval-preview":
 		return approvalPreview(ctx, args[1:])
+	case "model-settings":
+		defaultOrigin := os.Getenv("BUGSNITCH_ORIGIN")
+		if defaultOrigin == "" {
+			defaultOrigin = "http://localhost:8787"
+		}
+		origin := fs.String("origin", defaultOrigin, "dashboard origin")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return errors.New("use model-settings --origin DASHBOARD_ORIGIN")
+		}
+		return runner.ServeModelSettings(ctx, *origin, os.Stdout)
 	case "doctor":
 		fmt.Printf("Platform %s/%s\n", runtime.GOOS, runtime.GOARCH)
 		if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
@@ -140,7 +154,16 @@ func run(ctx context.Context, args []string) error {
 			fmt.Println("Native runner helper unavailable or incompatible. Install the matching runner bundle.")
 			missing = true
 		}
-		for _, tool := range []string{"git", "codex"} {
+		api, err := runner.UsesOpenAIAPI()
+		if err != nil {
+			return err
+		}
+		tools := []string{"git", "codex"}
+		if api {
+			fmt.Println("OpenAI API configured. Run bugsnitch proof to check model access.")
+			tools = []string{"git"}
+		}
+		for _, tool := range tools {
 			cmd := exec.CommandContext(ctx, tool, "--version")
 			out, err := cmd.Output()
 			if err != nil {
@@ -155,6 +178,9 @@ func run(ctx context.Context, args []string) error {
 			}
 		}
 		if missing {
+			if api {
+				return errors.New("the runner requires its matching native helper and Git")
+			}
 			return fmt.Errorf("the runner requires its matching native helper, Git and Codex %s", agent.Version)
 		}
 		return nil
@@ -204,7 +230,11 @@ func run(ctx context.Context, args []string) error {
 		if strings.TrimSpace(r.Text) != "BUGSNITCH_LOCAL_OK" {
 			return errors.New("completed turn did not return the expected marker")
 		}
-		return printJSON(map[string]string{"runtime": agent.Version, "auth": "chatgpt", "status": "completed", "model": r.Model, "thread": r.Thread, "turn": r.Turn, "response": "BUGSNITCH_LOCAL_OK"})
+		auth, runtime := "chatgpt", agent.Version
+		if r.Auth == "api-key" {
+			auth, runtime = r.Auth, "openai-responses"
+		}
+		return printJSON(map[string]string{"runtime": runtime, "auth": auth, "status": "completed", "model": r.Model, "thread": r.Thread, "turn": r.Turn, "response": "BUGSNITCH_LOCAL_OK"})
 	case "plan-draft":
 		workspace := fs.String("workspace", "personal", "local workspace id")
 		brief := fs.String("brief", "", "path to an owner-authored UTF-8 brief")
@@ -460,7 +490,7 @@ func main() {
 	runner.BeforeTurn, runner.AfterTurn = device.TurnStart, device.TurnEnd
 	signals := []os.Signal{os.Interrupt}
 	// These commands own long-running work and must finish cleanup on SIGTERM.
-	if len(os.Args) > 1 && (os.Args[1] == "sync" || os.Args[1] == "local-unattended" || os.Args[1] == "local-verify" && slices.Contains(os.Args[2:], "--")) {
+	if len(os.Args) > 1 && (os.Args[1] == "sync" || os.Args[1] == "model-settings" || os.Args[1] == "local-unattended" || os.Args[1] == "local-verify" && slices.Contains(os.Args[2:], "--")) {
 		signals = append(signals, syscall.SIGTERM)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), signals...)

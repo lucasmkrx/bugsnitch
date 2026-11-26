@@ -14,7 +14,21 @@ bin/bugsnitch usage
 
 `models` lists the runtime's catalog. `proof` starts one model turn to check that the local account can execute. `usage` reads available ChatGPT allowance windows. If the runtime loses its session, sign in again locally. Codex manages the credentials. A runner launched as a user service also needs the supported executable on its `PATH`.
 
-A project may select the Claude Messages API for an individual worker stage, such as independent review, with an explicit Anthropic model ID and `BUGSNITCH_ANTHROPIC_API_KEY` on the runner. That stage sends the selected task context directly to Anthropic and can incur API charges. The Codex discovery and proof commands above check the Codex backend. [Stage configuration](RUNNER.md#route-a-stage-to-claude) · [Device metering](INTEGRATIONS.md#device-token-usage-and-cost)
+A project may select the Claude Messages API for an individual worker stage, such as independent review, with an explicit Anthropic model ID and `BUGSNITCH_ANTHROPIC_API_KEY` on the runner. That stage sends the selected task context directly to Anthropic and can incur API charges. [Stage configuration](RUNNER.md#route-a-stage-to-claude) · [Device metering](INTEGRATIONS.md#device-token-usage-and-cost)
+
+## Personal OpenAI API key
+
+From the account that runs Bugsnitch, start a local settings session. Supply your dashboard's origin if you use a different address.
+
+```sh
+bin/bugsnitch model-settings --origin http://localhost:8787
+```
+
+On the same computer, sign in to the dashboard, open **Settings → Model access**, and paste the connection URL printed in the terminal. Enter your OpenAI API project key with Responses write permission. Choose a model with text and structured output support. **Load models** lists IDs available to a key with Models read permission. You can also enter the model ID directly. Save, then stop the settings session with Ctrl-C. Use `bin/bugsnitch proof` to verify the key and model with one API request.
+
+The key lives in a private file in the runner's local OS profile. Each user runs under their own OS account or sets a separate private, absolute `BUGSNITCH_HOME`. Use that same profile for subsequent runs. Bugsnitch sends the key and selected task context directly from the runner to OpenAI's Responses API. The hosted service receives the same bounded execution reports as with local ChatGPT sign-in.
+
+The selected model applies to local OpenAI turns and uses that model's default reasoning settings. Explicit Claude stages retain their configured provider. Use **Remove saved key** to return that runner to local ChatGPT sign-in. `models` and `usage` continue to show the Codex catalog and ChatGPT allowance.
 
 ## Codex account and protocol checks on November 21, 2026
 

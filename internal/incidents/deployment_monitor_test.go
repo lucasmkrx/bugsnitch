@@ -246,8 +246,28 @@ func TestGitHubDeploymentMonitor(t *testing.T) {
 		fix(22, 30, prior)
 		fix(23, 31, merged)
 		gate(reg.Token, artifact, 20, 409, "Awaiting integrated fix check on the current issue and merged revision")
+		handover := func(build string, want int) {
+			t.Helper()
+			body, err := json.Marshal(obj{"version": 1, "mergedSha": merged, "target": "main", "environment": "staging", "build": build,
+				"evidenceDigest": strings.Repeat("b", 64), "summary": "Verified shipping threshold", "testSteps": "Check a 50 dollar cart in staging."})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resp := post(s.listener, "/api/v1/projects/p/pulls/22/handover", body, ownerHeaders)
+			if resp.Code != want {
+				t.Fatalf("monitored handover returned %d, expected %d: %s", resp.Code, want, resp.Body.String())
+			}
+		}
+		handover(artifact, 409)
 		fix(24, 30, merged)
 		gate(reg.Token, artifact, 20, 200, "Verified in environment")
+		handover("different-build", 409)
+		handover(artifact, 201)
+		handover(artifact, 201)
+		var key string
+		if err := s.DB.QueryRow(`SELECT monitor_deployments->>$1 FROM pull_handovers WHERE pull_number=22`, reg.ID).Scan(&key); err != nil || key == "" {
+			t.Fatal(key, err)
+		}
 		send("check_run", 25, obj{"action": "completed", "check_run": obj{"id": 24, "app": obj{"id": 30}, "head_sha": merged, "name": "integrated threshold", "conclusion": "failure", "completed_at": now.Add(time.Minute), "external_id": "bugsnitch/fix/v1 " + reg.ID}}, "github-fixture", 202)
 		gate(reg.Token, artifact, 20, 409, "Verification inconclusive")
 		fix(26, 30, merged)

@@ -28,6 +28,7 @@ type validationLaunch struct {
 	Attempt        *worktreeIdentity    `json:"attempt,omitempty"`
 	CandidateSHA   string               `json:"candidate_sha,omitempty"`
 	Integration    *integrationIdentity `json:"integration,omitempty"`
+	Readiness      bool                 `json:"readiness,omitempty"`
 }
 
 func validate(ctx context.Context, a *Attempt) (*int, error) {
@@ -56,6 +57,10 @@ func validateCombined(ctx context.Context, a *Attempt, check *IntegrationCheck) 
 		receipt := check.identity()
 		params.Integration, params.Worktree = &receipt, check.Worktree
 	}
+	return runNativeValidation(ctx, params)
+}
+
+func runNativeValidation(ctx context.Context, params validationLaunch) (*int, error) {
 	frame, err := json.Marshal(params)
 	if err != nil || len(frame) > 8<<20 {
 		return nil, errors.New("validation configuration exceeds the local protocol limit")

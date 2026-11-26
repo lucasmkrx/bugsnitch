@@ -15,7 +15,7 @@ pub use unix::run;
 mod unix {
     use crate::{
         integration::{self, IntegrationValidation},
-        worktree::AttemptLocation,
+        worktree::{self, AttemptLocation},
     };
     use serde::Deserialize;
     use std::{
@@ -51,6 +51,8 @@ mod unix {
         attempt: Option<AttemptLocation>,
         candidate_sha: Option<String>,
         integration: Option<IntegrationValidation>,
+        #[serde(default)]
+        readiness: bool,
     }
 
     #[derive(Clone, Copy)]
@@ -261,7 +263,8 @@ mod unix {
         if tree == project
             || program.starts_with(&project)
             || program.starts_with(&tree)
-            || !fs::symlink_metadata(tree.join(".git")).is_ok_and(|meta| meta.is_file())
+            || (!request.readiness
+                && !fs::symlink_metadata(tree.join(".git")).is_ok_and(|meta| meta.is_file()))
         {
             return Ok((Outcome::DidNotStart, -1));
         }
@@ -275,15 +278,37 @@ mod unix {
             &request.attempt,
             &request.candidate_sha,
             &request.integration,
+            request.readiness,
         ) {
-            (Some(attempt), Some(sha), None) => attempt.verify_launch(&request.worktree, sha),
-            (None, None, Some(receipt)) => integration::verify_launch(
+            (Some(attempt), Some(sha), None, false) => {
+                attempt.verify_launch(&request.worktree, sha)
+            }
+            (None, None, Some(receipt), false) => integration::verify_launch(
                 &request.home,
                 &request.project,
                 &request.repository,
                 &request.worktree,
                 receipt,
             ),
+            (None, None, None, true) => {
+                let private_export = env::temp_dir().canonicalize().ok().is_some_and(|tmp| {
+                    tree.file_name().is_some_and(|name| name == "source")
+                        && tree.parent().is_some_and(|parent| {
+                            parent.parent() == Some(tmp.as_path())
+                                && parent.file_name().is_some_and(|name| {
+                                    name.as_encoded_bytes().starts_with(b"bugsnitch-readiness-")
+                                })
+                                && fs::symlink_metadata(parent).is_ok_and(|meta| {
+                                    meta.mode() & 0o777 == 0o700
+                                        && meta.uid() == unsafe { libc::geteuid() }
+                                })
+                        })
+                });
+                if !private_export {
+                    return Ok((Outcome::InvalidRequest, -1));
+                }
+                worktree::check_origin(&project, &request.repository)
+            }
             _ => return Ok((Outcome::InvalidRequest, -1)),
         };
         let same_directory = directory.metadata().and_then(|open| {

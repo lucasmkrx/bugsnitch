@@ -62,6 +62,7 @@ type Config struct {
 	ValidationTimeoutSeconds int                      `json:"validationTimeoutSeconds,omitempty"`
 	Files                    []string                 `json:"files"`
 	Validate                 []string                 `json:"validate"`
+	BrowserQA                map[int]BrowserQACheck   `json:"browserQA,omitempty"`
 	Model                    string                   `json:"model,omitempty"`
 	Reasoning                string                   `json:"reasoning,omitempty"`
 }
@@ -99,14 +100,16 @@ type CandidateIntent struct {
 type Attempt struct {
 	stopAtCandidate bool // invocation-only stop requested by local-continue
 
-	Steward         *StewardSubject    `json:"steward,omitempty"`
-	LocalRunScope   *protocol.RunScope `json:"localRunScope,omitempty"`
-	UnattendedGrant string             `json:"unattendedGrant,omitempty"`
-	OwnerAnswer     string             `json:"ownerAnswer,omitempty"`
-	OwnerQuestion   string             `json:"ownerQuestion,omitempty"`
-	PreviousAttempt string             `json:",omitempty"`
-	RetryReason     string             `json:",omitempty"`
-	Intent          *CandidateIntent   `json:",omitempty"`
+	Steward                *StewardSubject    `json:"steward,omitempty"`
+	LocalRunScope          *protocol.RunScope `json:"localRunScope,omitempty"`
+	UnattendedGrant        string             `json:"unattendedGrant,omitempty"`
+	OwnerAnswer            string             `json:"ownerAnswer,omitempty"`
+	OwnerQuestion          string             `json:"ownerQuestion,omitempty"`
+	PendingSensitivePath   string             `json:"pendingSensitivePath,omitempty"`
+	ApprovedSensitivePaths []string           `json:"approvedSensitivePaths,omitempty"`
+	PreviousAttempt        string             `json:",omitempty"`
+	RetryReason            string             `json:",omitempty"`
+	Intent                 *CandidateIntent   `json:",omitempty"`
 	Summary
 	Project                                                           Project
 	Issue                                                             Issue

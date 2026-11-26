@@ -423,7 +423,32 @@ main#main-content {
 .panel-body p:first-child {
   margin-top: 0;
 }
+.form-pair.qa-comparison {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 270px), 1fr));
+}
+.qa-comparison figure {
+  min-width: 0;
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+}
+.qa-comparison img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin-top: 10px;
+  border-radius: 4px;
+}
+.related-work li {
+  margin-block: 12px;
+}
+.related-work small {
+  display: block;
+}
 .work-action code {
+  overflow-wrap: anywhere;
+}
+.worker-text {
+  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .panel-body button,

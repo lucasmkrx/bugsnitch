@@ -32,7 +32,7 @@ func stewardMerge(ctx context.Context, a Attempt, conf Config, target string) (s
 	if _, err := git(a.Worktree, "cat-file", "-e", target+"^{commit}"); err != nil {
 		fetch, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
-		if err = withRemoteGit(fetch, a, "https", func(run remoteGit) error {
+		if err = withRemoteGit(fetch, a.Worktree, "https", func(run remoteGit) error {
 			_, err := run("-c", "fetch.fsckObjects=true", "fetch", "--no-write-fetch-head", "--no-auto-maintenance", "--no-tags", "--recurse-submodules=no", "--", "https://github.com/"+a.Repository+".git", target)
 			return err
 		}); err != nil {

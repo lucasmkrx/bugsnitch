@@ -8,10 +8,13 @@ Register an App and install it on a deliberately selected test repository with i
 
 Give the installation the permissions needed by the workflows you enable. Bugsnitch requests a repository-scoped token for each operation.
 
-| Operation | GitHub App repository permissions requested |
+| Operation | GitHub App permissions requested |
 | --- | --- |
 | Connect the repository | Metadata read |
+| Browse or import a GitHub Projects ticket | Repository Issues read, organization Projects read |
+| Update the imported ticket’s Status field | Repository Issues read, organization Projects write |
 | Read an issue or publish an approved issue | Issues read for a read, Issues write for publication |
+| Find related incident work or link an existing issue | Issues read |
 | Inspect PR checks and reviews | Contents, Issues, Pull requests, Checks and Commit statuses read |
 | Open a draft for a published candidate branch | Contents and Issues read, Pull requests write |
 | Inspect protected queue rules | Contents, Pull requests, Administration, Merge queues and Checks read |
@@ -28,6 +31,8 @@ INSERT INTO github_mappings(workspace_id, project_id, installation_id, repositor
 SELECT workspace_id,id,12345,98765 FROM projects
 WHERE workspace_id='personal' AND repository='example/disposable';
 ```
+
+For GitHub Projects intake, use a board owned by the same organization as the connected repository. An organization owner must approve any new Projects permission on an existing installation. Enter the board number from its URL (for example, `3` in `github.com/orgs/example/projects/3`). Bugsnitch lists open issues from the connected repository and follows the selected item throughout delivery. For status updates, use the board’s **Status** single-select field. The default options are **In Progress** and **Done**. To use other option names, set `BUGSNITCH_GITHUB_PROJECT_STATUS_ACTIVE` and `BUGSNITCH_GITHUB_PROJECT_STATUS_DONE`. [GitHub Projects API](https://docs.github.com/en/issues/planning-and-tracking-with-projects/automating-your-project/using-the-api-to-manage-projects)
 
 In **Incidents**, open the report and choose **Approve issue promotion**. The equivalent owner API submits its current version to `POST /api/v1/projects/{project}/incidents/{id}/promote`. Repeating the same promotion returns the existing intent. Every mutation uses the normal authenticated owner API. The worker persists a reconciliation marker before sending an issue create request. After a lost response or restart it searches open and closed issues for the marker and verifies App authorship. If the outcome stays uncertain, it stops after eight attempts. Inspect the actual repository and `incident_issues.reason`. If the marker exists, restore the intent to `reconciling` with `next_run=now(), attempt_count=0` after resolving access. Resetting an uncertain write to `queued` could create a duplicate. Authentication and definitive rate-limit failures have bounded retries. Revoked access, repository renames, and transfers require operator reconciliation. Promotion runs independently from repair scheduling.
 

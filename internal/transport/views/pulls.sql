@@ -33,7 +33,7 @@ THEN json_object(
        'handovers' VALUE CASE WHEN s.state='MERGED' AND nullif(s."mergedSha",'') IS NOT NULL THEN (
            SELECT json_agg(json_build_object('version',h.inspection_version,'environment',h.environment,'build',h.build,
               'mergedSha',h.merged_sha,'target',h.target,'evidenceDigest',h.evidence_digest,
-              'summary',h.summary,'testSteps',h.test_steps,'recordedAt',h.recorded_at,
+              'summary',h.summary,'testSteps',h.test_steps,'recordedAt',h.recorded_at,'cost',h.worker_cost,
               'recordedBy',coalesce((SELECT name FROM workspace_members WHERE (workspace_id,id)=(h.workspace_id,h.actor_id)), 'Owner'))
               ORDER BY h.recorded_at DESC,h.environment,h.build)
            FROM (SELECT * FROM pull_handovers WHERE (workspace_id,project_id,pull_number)=(o.workspace_id,o.project_id,o.number)

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/lucasmkrx/bugsnitch/internal/github"
 )
@@ -116,20 +117,20 @@ func CheckCombinedAt(ctx context.Context, id, ref, expected string) (Integration
 
 // Retain the exact inspected base without moving the checkout or the user's
 // tracking refs. The fetch, when needed, uses the same isolated Git client as publication.
-func RetainInspectedBase(ctx context.Context, a Attempt, branch, expected string) (string, error) {
+func RetainInspectedBase(ctx context.Context, p Project, branch, expected string) (string, error) {
 	decoded, err := hex.DecodeString(expected)
 	if err != nil || (len(decoded) != 20 && len(decoded) != 32) || strings.ToLower(expected) != expected ||
-		!github.ValidBranch(branch) || !repoPattern.MatchString(a.Repository) {
+		!github.ValidBranch(branch) || !repoPattern.MatchString(p.Repository) {
 		return "", errors.New("invalid inspected integration target")
 	}
-	if err := checkOrigin(a.Project.Path, a.Repository); err != nil {
+	if err := checkOrigin(p.Path, p.Repository); err != nil {
 		return "", err
 	}
 	ref := "refs/bugsnitch/inspections/" + expected
-	if kind, err := git(a.Project.Path, "cat-file", "-t", expected); err != nil || kind != "commit" {
-		err = withRemoteGit(ctx, a, "https", func(run remoteGit) error {
+	if kind, err := git(p.Path, "cat-file", "-t", expected); err != nil || kind != "commit" {
+		err = withRemoteGit(ctx, p.Path, "https", func(run remoteGit) error {
 			if _, err := run("fetch", "--no-tags", "--no-write-fetch-head", "--no-recurse-submodules", "--no-auto-maintenance", "--",
-				"https://github.com/"+a.Repository+".git", "refs/heads/"+branch+":refs/heads/inspected-target"); err != nil {
+				"https://github.com/"+p.Repository+".git", "refs/heads/"+branch+":refs/heads/inspected-target"); err != nil {
 				return errors.New("could not fetch the inspected integration target")
 			}
 			got, err := run("rev-parse", "--verify", "refs/heads/inspected-target^{commit}")
@@ -142,15 +143,41 @@ func RetainInspectedBase(ctx context.Context, a Attempt, branch, expected string
 			return "", err
 		}
 	}
-	if got, err := git(a.Project.Path, "rev-parse", "--verify", ref+"^{commit}"); err == nil && got == expected {
+	if got, err := git(p.Path, "rev-parse", "--verify", ref+"^{commit}"); err == nil && got == expected {
 		return ref, nil
 	}
-	if _, err := git(a.Project.Path, "update-ref", ref, expected, strings.Repeat("0", len(expected))); err != nil {
-		if got, e := git(a.Project.Path, "rev-parse", "--verify", ref+"^{commit}"); e != nil || got != expected {
+	if _, err := git(p.Path, "update-ref", ref, expected, strings.Repeat("0", len(expected))); err != nil {
+		if got, e := git(p.Path, "rev-parse", "--verify", ref+"^{commit}"); e != nil || got != expected {
 			return "", err
 		}
 	}
 	return ref, nil
+}
+
+// A paired checkout may stay on an older commit after a preceding ticket merges.
+// Pin the configured GitHub branch before worktree creation and admission.
+func portalTicketBase(ctx context.Context, p Project, branch string) (string, error) {
+	if !github.ValidBranch(branch) || strings.HasPrefix(branch, "bugsnitch/") || !repoPattern.MatchString(p.Repository) {
+		return "", errors.New("invalid portal publication target")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	var sha string
+	err := withRemoteGit(ctx, p.Path, "https", func(run remoteGit) error {
+		ref := "refs/heads/" + branch
+		tip, err := run("ls-remote", "--refs", "--", "https://github.com/"+p.Repository+".git", ref)
+		var actual string
+		sha, actual, _ = strings.Cut(tip, "\t")
+		if err != nil || actual != ref || !stewardOID.MatchString(sha) {
+			return errors.New("could not resolve the remote portal publication target")
+		}
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	_, err = RetainInspectedBase(ctx, p, branch, sha)
+	return sha, err
 }
 
 func checkCombined(ctx context.Context, id, ref, expected string) (IntegrationCheck, error) {

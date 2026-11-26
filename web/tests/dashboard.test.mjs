@@ -242,6 +242,9 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
       state.draftPRs = [intent];
       const writes = [];
       await page.route("**/api/v1/state", (r) => r.fulfill({ json: state }));
+      await page.route("**/draft-plan", (r) =>
+        r.fulfill({ json: { plan: null } }),
+      );
       await page.route("**/draft-pr", (r) => {
         const req = r.request().postDataJSON();
         writes.push(req);
@@ -1524,4 +1527,520 @@ test("desktop and mobile approval, stale state, replay and owner navigation", as
       }
     });
   }
+});
+
+test("GitHub Projects ticket to worker, owner answer and handover", async (t) => {
+  const { server, url } = await staticHost();
+  t.after(() => server.close());
+  const browser = await chromium.launch(
+    process.env.BUGSNITCH_TEST_CHROME
+      ? { executablePath: process.env.BUGSNITCH_TEST_CHROME, headless: true }
+      : { channel: "chrome", headless: true },
+  );
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 360, height: 800 } });
+  const state = fixture();
+  state.projects[0].paused = false;
+  state.projects[0].requirePlan = true;
+  state.viewer = { id: "owner", name: "Owner", role: "owner" };
+  state.devices = [
+    { id: "other", projects: ["p2"], name: "Other runner" },
+    { id: "revoked", projects: ["p1"], name: "Revoked runner", revoked: true },
+    { id: "builder", projects: ["p1"], name: "Builder" },
+  ];
+  const ticket = {
+    number: 42,
+    title: "Handle empty carts",
+    status: "Ready",
+    itemId: "board-item",
+  };
+  const starts = [];
+  const requests = [];
+  let rejectImport = true;
+  const id = "a".repeat(32);
+  const writes = [];
+  const plan = {
+    id: "plan-42",
+    projectId: "p1",
+    version: 1,
+    status: "proposed",
+    title: "Handle empty carts",
+    document: {
+      milestone: "Empty cart",
+      tickets: [{ ...ticket, estimateHours: 2 }],
+    },
+  };
+  await page.route("**/api/v1/**", (route) => {
+    const req = route.request();
+    const path = new URL(req.url()).pathname.replace("/api/v1/", "");
+    if (path === "state") return route.fulfill({ json: state });
+    if (path === "projects/p1/worker-starts")
+      return route.fulfill({
+        json: {
+          starts,
+          boardSync: starts.length
+            ? [
+                {
+                  issueNumber: 42,
+                  desired: "active",
+                  applied: false,
+                  reason: "Set an Active status option on GitHub.",
+                },
+              ]
+            : [],
+        },
+      });
+    if (path === "projects/p1/github-project/issues") {
+      const payload = req.postDataJSON();
+      requests.push(payload);
+      const more = !!payload.after;
+      return route.fulfill({
+        json: {
+          number: 8,
+          title: "Delivery",
+          issues: more ? [ticket] : [],
+          nextCursor: more ? null : "next",
+        },
+      });
+    }
+    if (path === "projects/p1/github-project/import") {
+      writes.push({ path, body: req.postDataJSON() });
+      return rejectImport
+        ? route.fulfill({
+            status: 409,
+            json: { error: "Ticket changed. Reload the board." },
+          })
+        : route.fulfill({
+            json: { number: ticket.number, updatedAt: state.updatedAt },
+          });
+    }
+    if (path === "projects/p1/issues/42/start") {
+      const body = req.postDataJSON();
+      writes.push({ path, body });
+      starts.push({
+        ...body,
+        id: "start-42",
+        issueNumber: 42,
+        status: "queued",
+      });
+      return route.fulfill({ status: 202, json: starts[0] });
+    }
+    if (path === "plans/plan-42/approve") {
+      writes.push({ path, body: req.postDataJSON() });
+      plan.status = "approved";
+      starts[0].attemptId = id;
+      starts[0].status = "started";
+      state.attempts = [
+        {
+          id,
+          projectId: "p1",
+          repository: project.repository,
+          issueNumber: 42,
+          version: 3,
+          state: "waiting",
+          phase: "plan",
+          machine: "Builder",
+          connection: "connected",
+          updatedAt: state.updatedAt,
+          baseSha: "b".repeat(40),
+          reasonCode: "owner_input_required",
+          nextAction: {
+            attemptId: id,
+            version: 3,
+            kind: "owner_input",
+            decisionKind: "owner_question",
+            approver: "owner",
+            disposition: "ask",
+            question: "Should an empty cart return zero?",
+            expiresAt: new Date(Date.now() + 60000).toISOString(),
+          },
+        },
+      ];
+      return route.fulfill({ json: {} });
+    }
+    if (path === "attempts/" + id + "/ticket-decision") {
+      writes.push({ path, body: req.postDataJSON() });
+      state.attempts[0].nextAction.answer = "answered";
+      return route.fulfill({ json: {} });
+    }
+    return route.fulfill({ status: 404, json: { error: path } });
+  });
+  const work = url + "/app#/work?project=p1";
+  await page.goto(work);
+  await page.getByLabel("GitHub Project number").fill("8");
+  await page.getByRole("button", { name: "Load tickets", exact: true }).click();
+  await page.getByRole("button", { name: "Load more tickets" }).click();
+  assert.deepEqual(requests, [{ number: 8 }, { number: 8, after: "next" }]);
+  await page.getByLabel("Ticket", { exact: true }).selectOption("42");
+  assert.deepEqual(
+    await page
+      .getByLabel("Assigned runner")
+      .locator("option")
+      .allTextContents(),
+    ["Choose a computer", "Builder"],
+  );
+  const start = page.getByRole("button", { name: "Start worker", exact: true });
+  await start.click();
+  await page.getByText("Ticket changed. Reload the board.").waitFor();
+  assert.deepEqual(writes, [
+    {
+      path: "projects/p1/github-project/import",
+      body: { number: 8, issue: 42, itemId: "board-item" },
+    },
+  ]);
+  rejectImport = false;
+  await start.click();
+  await page.getByText("Worker start queued.").waitFor();
+  await page
+    .getByText(/Active update pending · Set an Active status option/)
+    .waitFor();
+  const { requestId, ...binding } = writes.at(-1).body;
+  assert.match(requestId, /^[a-f0-9-]{36}$/);
+  assert.deepEqual(binding, {
+    deviceId: "builder",
+    planId: "",
+    policyVersion: 1,
+  });
+  assert.equal(await start.count(), 0);
+  state.plans = [plan];
+  Object.assign(starts[0], { status: "awaiting_plan", planId: plan.id });
+  await page.reload();
+  await page.getByRole("link", { name: "Review proposed plan" }).click();
+  await page.getByRole("button", { name: "Approve plan" }).click();
+  await page.getByText("Plan approval recorded.").waitFor();
+  assert.deepEqual(writes.at(-1), {
+    path: "plans/plan-42/approve",
+    body: { version: project.version },
+  });
+  await page.goto(work);
+  await page.getByRole("link", { name: "View attempt" }).click();
+  await page.getByText("Should an empty cart return zero?").waitFor();
+  const answer = page.getByLabel("Your answer");
+  const send = page.getByRole("button", { name: "Send answer to runner" });
+  await answer.fill("é".repeat(1025));
+  assert.equal(await send.isDisabled(), true);
+  await answer.fill("  Return zero and keep the cart open.  ");
+  await send.click();
+  await send.waitFor({ state: "hidden" });
+  assert.deepEqual(writes.at(-1).body, {
+    version: 3,
+    answer: "answered",
+    feedback: "Return zero and keep the cart open.",
+  });
+
+  Object.assign(state.attempts[0], {
+    state: "completed",
+    phase: "wrap_up",
+    candidateSha: "f".repeat(40),
+    nextAction: {
+      attemptId: id,
+      version: 3,
+      kind: "prepare_signoff",
+      disposition: "ask",
+    },
+  });
+  let previewError = true;
+  const preview = {
+    version: 1,
+    digest: "d".repeat(64),
+    criteria: ["An empty cart displays zero."],
+    verification: "Run cart tests.",
+    estimateHours: 2,
+    assumptions: "The cart stays open.",
+  };
+  await page.route("**/draft-plan", (route) =>
+    previewError
+      ? route.fulfill({
+          status: 503,
+          json: { error: "Plan temporarily unavailable." },
+        })
+      : route.fulfill({ json: { plan: preview } }),
+  );
+  await page.route("**/draft-pr", (route) => {
+    writes.push({ path: "draft-pr", body: route.request().postDataJSON() });
+    return route.fulfill({ json: {} });
+  });
+  await page.reload();
+  await page.getByLabel("Target branch").fill("main");
+  await page.getByRole("button", { name: "Review draft request" }).click();
+  const dialog = page.getByRole("dialog");
+  const publish = dialog.getByRole("button", { name: "Request draft PR" });
+  await dialog.getByText("Plan temporarily unavailable.").waitFor();
+  assert.equal(await publish.isDisabled(), true);
+  previewError = false;
+  await dialog.getByRole("button", { name: "Reload plan preview" }).click();
+  await dialog.getByText(preview.criteria[0]).waitFor();
+  const share = dialog.getByLabel(
+    "Include these assumptions in the GitHub draft",
+  );
+  assert.equal(await share.isChecked(), false);
+  await share.check();
+  await publish.click();
+  await dialog.waitFor({ state: "hidden" });
+  assert.equal(writes.at(-1).body.planDigest, preview.digest);
+  assert.equal(writes.at(-1).body.sharePlanAssumptions, true);
+
+  state.draftPRs = [
+    {
+      attemptId: id,
+      projectId: "p1",
+      candidateSha: "f".repeat(40),
+      number: 49,
+      status: "created",
+      target: "main",
+    },
+  ];
+  const pull = {
+    projectId: "p1",
+    number: 49,
+    issueNumber: 42,
+    version: 1,
+    state: "OPEN",
+    blockers: [],
+    title: ticket.title,
+    target: "main",
+    head: "f".repeat(40),
+    base: "b".repeat(40),
+    draft: true,
+    checks: "SUCCESS",
+    checkCount: 1,
+    review: "REVIEW_REQUIRED",
+    issueState: "OPEN",
+  };
+  state.pullRequests = [pull];
+  await page.reload();
+  const nextAction = page
+    .locator(".work-action")
+    .filter({ has: page.getByRole("heading", { name: "Next action" }) });
+  const github = "https://github.com/example/storefront/pull/49";
+  assert.equal(
+    await nextAction
+      .getByRole("link", { name: "Mark draft ready for review on GitHub" })
+      .getAttribute("href"),
+    github,
+  );
+  pull.draft = false;
+  await page.reload();
+  assert.equal(
+    await nextAction
+      .getByRole("link", { name: "Request a review on GitHub" })
+      .getAttribute("href"),
+    github,
+  );
+  Object.assign(pull, {
+    review: "APPROVED",
+    signOff: { at: state.updatedAt },
+    queue: { present: true },
+  });
+  await page.reload();
+  await nextAction
+    .getByRole("link", { name: "Review protected queue delivery" })
+    .click();
+  await page.getByRole("button", { name: "Preview queue policy" }).waitFor();
+  pull.queue.present = false;
+  await page.reload();
+  assert.equal(
+    await page
+      .getByRole("link", { name: "Open GitHub merge controls" })
+      .getAttribute("href"),
+    github,
+  );
+
+  const handover = {
+    environment: "production",
+    build: "build-42",
+    summary: "Empty carts are handled.",
+    testSteps: "Open an empty cart.",
+    evidenceDigest: "c".repeat(64),
+    recordedAt: state.updatedAt,
+    recordedBy: "owner",
+    cost: {
+      admittedTurns: 4,
+      meteredTurns: 2,
+      pricedTurns: 1,
+      inputTokens: 100,
+      outputTokens: 20,
+      estimatedUSD: 0.12,
+    },
+  };
+  state.pullRequests = [
+    {
+      projectId: "p1",
+      number: 49,
+      issueNumber: 42,
+      version: 1,
+      state: "MERGED",
+      blockers: [],
+      title: "Handle empty carts",
+      target: "main",
+      mergedSha: "d".repeat(40),
+      handovers: [handover],
+    },
+  ];
+  await page.goto(url + "/app#/prs?project=p1");
+  await page.reload();
+  await page.getByText("production · build-42").click();
+  await page.getByText(/\$0\.12 partial estimate/).waitFor();
+  await page.getByText(/Usage reported for 2 of 4 admitted turns/).waitFor();
+  delete handover.cost;
+  await page.reload();
+  await page.getByText("production · build-42").click();
+  await page.getByText(/Estimate unavailable/).waitFor();
+  state.viewer.role = "operator";
+  await page.goto(work);
+  await page.reload();
+  await page.getByRole("heading", { name: "Attempts", exact: true }).waitFor();
+  assert.equal(
+    await page.getByRole("heading", { name: "Start a worker" }).count(),
+    0,
+  );
+});
+
+test("incident triage and before-and-after QA evidence", async (t) => {
+  const { server, url } = await staticHost();
+  t.after(() => server.close());
+  const browser = await chromium.launch(
+    process.env.BUGSNITCH_TEST_CHROME
+      ? { executablePath: process.env.BUGSNITCH_TEST_CHROME, headless: true }
+      : { channel: "chrome", headless: true },
+  );
+  t.after(() => browser.close());
+  const page = await browser.newPage({ viewport: { width: 360, height: 800 } });
+  const state = fixture();
+  const incident = {
+    id: "shipping",
+    projectId: "p1",
+    version: 1,
+    source: "manual",
+    occurrences: 1,
+    status: "Needs reproduction",
+    observed: "Checkout charged for shipping",
+    expected: "Free shipping",
+  };
+  state.incidents = [incident];
+  const base = "a".repeat(40),
+    head = "b".repeat(40);
+  const screenshot = (
+    await page.screenshot({ clip: { x: 0, y: 0, width: 8, height: 8 } })
+  ).toString("base64");
+  const report = {
+    protocol: 1,
+    attemptId: "c".repeat(32),
+    issueNumber: 7,
+    assertion: "Orders of $50 ship free",
+    checkedAt: "2026-11-26T11:00:00Z",
+    before: {
+      revision: base,
+      result: "fail",
+      observed: "$5 shipping fee",
+      screenshot,
+    },
+    after: {
+      revision: head,
+      result: "pass",
+      observed: "Free shipping applied",
+      screenshot,
+    },
+  };
+  const path = "projects/p1/incidents/shipping/";
+  let shared;
+  await page.route("**/api/v1/**", (route) => {
+    const req = route.request();
+    const routePath = new URL(req.url()).pathname.slice("/api/v1/".length);
+    switch (routePath) {
+      case "state":
+        return route.fulfill({ json: state });
+      case path + "related-work":
+        return route.fulfill({
+          json: {
+            items: [
+              {
+                number: 7,
+                title: "Checkout shipping threshold",
+                pull: false,
+                match: ["checkout", "shipping"],
+              },
+              {
+                number: 8,
+                title: "Fix shipping threshold",
+                pull: true,
+                match: ["shipping", "threshold"],
+              },
+            ],
+          },
+        });
+      case path + "link-issue":
+        assert.deepEqual(req.postDataJSON(), { number: 7, version: 1 });
+        Object.assign(incident, {
+          issueNumber: 7,
+          version: 2,
+          promotion: "linked",
+        });
+        return route.fulfill({ json: { status: "linked" } });
+      case path + "browser-qa":
+        if (req.method() === "POST") {
+          assert.deepEqual(req.postDataJSON(), { version: 2, report });
+          shared = report;
+        }
+        return route.fulfill({ json: { report: shared || null } });
+      case "projects/p1/pulls/8/browser-qa":
+        return route.fulfill({ json: { report: shared || null } });
+      default:
+        return route.fulfill({
+          status: 404,
+          json: { error: "Fixture path unavailable" },
+        });
+    }
+  });
+  await page.goto(url + "/app#/incidents?project=p1&id=shipping");
+  await page.getByRole("button", { name: "Find related work" }).click();
+  const pr = page.getByRole("link", { name: "PR #8 Fix shipping threshold" });
+  assert.equal(
+    await pr.getAttribute("href"),
+    "https://github.com/example/storefront/pull/8",
+  );
+  await page.getByRole("button", { name: "Link issue #7" }).click();
+  await page.getByText("Share a browser QA report", { exact: true }).click();
+  await page.getByLabel("Browser QA report file").setInputFiles({
+    name: "browser-qa.json",
+    mimeType: "application/json",
+    buffer: Buffer.from(JSON.stringify(report)),
+  });
+  await page
+    .getByRole("img", { name: /Before browser screenshot/ })
+    .evaluate((img) => img.decode());
+  assert.equal(shared, undefined);
+  await page
+    .getByRole("button", { name: "Share QA report with project" })
+    .click();
+  await page
+    .getByText("Browser QA evidence shared.", { exact: true })
+    .waitFor();
+  state.pullRequests = [
+    {
+      projectId: "p1",
+      number: 8,
+      issueNumber: 7,
+      version: 1,
+      state: "OPEN",
+      title: "Fix shipping threshold",
+      blockers: [],
+      head,
+      base,
+    },
+  ];
+  await page.goto(url + "/app#/prs?project=p1&id=8");
+  await page.reload();
+  await page.getByRole("button", { name: "View browser QA evidence" }).click();
+  await page
+    .getByRole("img", { name: /After browser screenshot/ })
+    .evaluate((img) => img.decode());
+  state.pullRequests[0].head = "d".repeat(40);
+  await page.reload();
+  await page.getByRole("button", { name: "View browser QA evidence" }).click();
+  await page
+    .getByText(
+      "No browser QA evidence has been shared for this pull request head.",
+    )
+    .waitFor();
 });

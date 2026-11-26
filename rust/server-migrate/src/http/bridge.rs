@@ -64,6 +64,8 @@ impl Worker {
                             | "ALL_PROXY"
                             | "all_proxy"
                             | "BUGSNITCH_GITHUB_INSTALLATION_ID"
+                            | "BUGSNITCH_GITHUB_PROJECT_STATUS_ACTIVE"
+                            | "BUGSNITCH_GITHUB_PROJECT_STATUS_DONE"
                             | "BUGSNITCH_GITHUB_QUEUE_REPOSITORIES"
                             | "GITHUB_APP_CLIENT_ID"
                             | "GITHUB_APP_KEY_FILE"

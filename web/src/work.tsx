@@ -1,6 +1,13 @@
 // SPDX-License-Identifier: MPL-2.0
 import { useState, type FormEvent } from "react";
-import { enc, post, type Attempt, type State, type Ticket } from "./api";
+import {
+  enc,
+  post,
+  type Attempt,
+  type Pull,
+  type State,
+  type Ticket,
+} from "./api";
 import { Field, Panel, human, link, when } from "./ui";
 import type { Run } from "./actions";
 
@@ -52,7 +59,12 @@ function observedAction(a: Attempt): WorkAction | undefined {
   if (!label) return;
   const deployment = next.deployment?.[0];
   return {
-    label: next.answer === "hold" ? "Plan held by the approver" : label,
+    label:
+      next.answer === "hold"
+        ? "Revision held by the approver"
+        : next.answer === "answered"
+          ? "Answer recorded for the runner"
+          : label,
     description:
       next.expiresAt && next.approver && !next.answer
         ? "Requested from " + next.approver + " until " + when(next.expiresAt)
@@ -79,11 +91,15 @@ function observedAction(a: Attempt): WorkAction | undefined {
 
 export function attemptAction(state: State, a: Attempt): WorkAction {
   const observed = observedAction(a);
-  if (observed) return observed;
   const project = state.projects.find((p) => p.id === a.projectId);
   const draft = state.draftPRs?.find(
     (d) => d.attemptId === a.id && d.candidateSha === a.candidateSha,
   );
+  if (
+    observed &&
+    !["prepare_signoff", "wait_ci"].includes(a.nextAction?.kind || "")
+  )
+    return observed;
   if (a.state === "completed" && draft?.number) {
     const pull = state.pullRequests.find(
       (p) =>
@@ -92,6 +108,19 @@ export function attemptAction(state: State, a: Attempt): WorkAction {
         p.head === a.candidateSha &&
         p.issueNumber === a.issueNumber,
     );
+    const githubAction = pull && githubPullAction(pull);
+    if (githubAction)
+      return {
+        label: githubAction,
+        href: `https://github.com/${a.repository}/pull/${draft.number}`,
+      };
+    if (observed)
+      return pull?.signOff
+        ? {
+            label: "Review protected queue delivery",
+            href: link("prs", a.projectId, String(pull.number)),
+          }
+        : { ...observed, href: link("prs", a.projectId, String(draft.number)) };
     if (pull?.state === "MERGED") {
       const incident = state.incidents.find(
         (i) => i.projectId === a.projectId && i.issueNumber === a.issueNumber,
@@ -116,6 +145,7 @@ export function attemptAction(state: State, a: Attempt): WorkAction {
       href: link("prs", a.projectId),
     };
   }
+  if (observed) return observed;
   if (a.state === "failed" || a.state === "cancelled") {
     return {
       label: "Inspect the terminal attempt",
@@ -167,6 +197,23 @@ export function attemptAction(state: State, a: Attempt): WorkAction {
   return { label: "Inspect the latest attempt report" };
 }
 
+export function githubPullAction(pull?: Pull) {
+  if (pull?.state !== "OPEN") return;
+  if (pull.draft) return "Mark draft ready for review on GitHub";
+  if (pull.review === "CHANGES_REQUESTED")
+    return "Review requested changes on GitHub";
+  if (pull.review !== "APPROVED") return "Request a review on GitHub";
+  if (!pull.signOff) return;
+  if (pull.queueDelivery?.state === "awaiting_queue")
+    return "Add this PR to the GitHub merge queue";
+  if (
+    !pull.queueDelivery &&
+    pull.queue?.present === false &&
+    !pull.queue.rules?.queueRequired
+  )
+    return "Open GitHub merge controls";
+}
+
 export function ticketAction(
   state: State,
   ticket: Ticket,
@@ -189,14 +236,7 @@ export function ticketAction(
   if (ticket.state !== "open")
     return { label: "Confirm issue status on GitHub" };
   return {
-    label:
-      ticket.source === "plan"
-        ? "Check eligibility on the runner"
-        : "Review the issue for local work",
-    description:
-      ticket.source === "plan"
-        ? "The runner checks dependencies, capacity, and the current GitHub issue before admission."
-        : undefined,
+    label: "Available for worker selection",
   };
 }
 
@@ -204,37 +244,64 @@ export function AttemptAction({
   state,
   attempt,
   run,
+  locked,
 }: {
   state: State;
   attempt: Attempt;
   run: Run;
+  locked: boolean;
 }) {
+  const [feedback, setFeedback] = useState("");
   const action = attemptAction(state, attempt);
   const canContinue =
     attempt.state === "waiting" &&
     attempt.connection === "connected" &&
     action.command !== undefined &&
     Object.hasOwn(waiting, attempt.reasonCode || "");
-  const next = attempt.nextAction;
+  const next =
+    attempt.nextAction?.attemptId === attempt.id &&
+    attempt.nextAction.version === attempt.version
+      ? attempt.nextAction
+      : undefined;
   const isCorrection = next?.kind === "approve_correction";
+  const isQuestion =
+    next?.kind === "owner_input" &&
+    next.decisionKind === "owner_question" &&
+    !!next.question;
+  const remoteDecision =
+    (next?.kind === "review_plan" || isCorrection || isQuestion) &&
+    !!next.approver &&
+    (!!next.expiresAt || !!next.answer);
   const canAnswer =
-    (next?.kind === "review_plan" || isCorrection) &&
-    next.version === attempt.version &&
+    next &&
+    remoteDecision &&
     !next.answer &&
     next.expiresAt &&
     new Date(next.expiresAt).getTime() > Date.now() &&
     next.approver === state.viewer?.id &&
-    (state.viewer?.role === "owner" || state.viewer?.role === "approver");
-  function answer(choice: "approve" | "hold") {
+    (state.viewer?.role === "owner" ||
+      (!isQuestion && state.viewer?.role === "approver"));
+  const answerText = feedback.trim();
+  const answerBytes = new TextEncoder().encode(answerText).length;
+  function answer(choice: "approve" | "hold" | "answered") {
+    if (
+      locked ||
+      !canAnswer ||
+      (choice === "answered" && (!answerBytes || answerBytes > 2048))
+    )
+      return;
     return run(
       () =>
         post("attempts/" + enc(attempt.id) + "/ticket-decision", {
           version: attempt.version,
           answer: choice,
+          ...(choice === "answered" ? { feedback: answerText } : {}),
         }),
-      choice === "approve"
-        ? "Action approved for this revision."
-        : "Action held.",
+      choice === "answered"
+        ? "Answer recorded for the runner."
+        : choice === "approve"
+          ? "Action approved for this revision."
+          : "Action held.",
     );
   }
   return (
@@ -244,11 +311,15 @@ export function AttemptAction({
         {action.href ? <a href={action.href}>{action.label}</a> : action.label}
       </p>
       {action.description && <p>{action.description}</p>}
-      {action.command && (
+      {action.command && !remoteDecision && (
         <p>
           <code>{action.command}</code>
         </p>
       )}
+      {next?.kind === "review_plan" && next.planSummary && (
+        <p className="worker-text">{next.planSummary}</p>
+      )}
+      {isQuestion && <p className="worker-text">{next.question}</p>}
       {next?.preparedEvidence && (
         <details>
           <summary>
@@ -265,19 +336,50 @@ export function AttemptAction({
           </p>
         </details>
       )}
-      {canAnswer && (
+      {canAnswer && isQuestion && (
+        <form
+          onSubmit={(event) => {
+            event.preventDefault();
+            void answer("answered");
+          }}
+        >
+          <Field title="Your answer">
+            <textarea
+              value={feedback}
+              maxLength={2048}
+              required
+              onChange={(event) => setFeedback(event.target.value)}
+            />
+          </Field>
+          {answerBytes > 2048 && (
+            <p role="alert">Shorten the answer to 2,048 UTF-8 bytes.</p>
+          )}
+          <button disabled={locked || !answerBytes || answerBytes > 2048}>
+            Send answer to runner
+          </button>
+        </form>
+      )}
+      {canAnswer && !isQuestion && (
         <div className="actions">
-          <button type="button" onClick={() => void answer("approve")}>
+          <button
+            type="button"
+            disabled={locked}
+            onClick={() => void answer("approve")}
+          >
             {isCorrection
               ? "Approve correction publication"
               : "Approve reviewed plan"}
           </button>
-          <button type="button" onClick={() => void answer("hold")}>
+          <button
+            type="button"
+            disabled={locked}
+            onClick={() => void answer("hold")}
+          >
             Hold this revision
           </button>
         </div>
       )}
-      {canContinue && !canAnswer && !next?.answer && (
+      {canContinue && !remoteDecision && !next?.answer && (
         <p>
           After reviewing this checkpoint on {attempt.machine}, run{" "}
           <code>

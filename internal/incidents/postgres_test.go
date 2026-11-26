@@ -216,13 +216,16 @@ func TestPostgresReplayAndLostIssueResponse(t *testing.T) {
 				Repositories []int64 `json:"repository_ids"`
 				Permissions  map[string]string
 			}
-			if json.NewDecoder(req.Body).Decode(&data) != nil || len(data.Repositories) != 1 || data.Repositories[0] != 99 || len(data.Permissions) != 1 || data.Permissions["issues"] != "write" {
+			if json.NewDecoder(req.Body).Decode(&data) != nil || len(data.Repositories) != 1 || data.Repositories[0] != 99 || len(data.Permissions) != 1 || (data.Permissions["issues"] != "write" && data.Permissions["issues"] != "read") {
 				t.Error("token not scoped to mapped repository and permissions")
 			}
-			return jsonResponse(201, map[string]string{"token": "fixture-installation-token"}), nil
+			return jsonResponse(201, map[string]string{"token": "fixture-issues-" + data.Permissions["issues"]}), nil
 		case "/repositories/99":
 			return jsonResponse(200, map[string]any{"id": 99, "full_name": "example/disposable"}), nil
 		case "/repos/example/disposable/issues":
+			if req.Header.Get("Authorization") != "Bearer fixture-issues-write" {
+				t.Error("creation or reconciliation did not use the scoped creation token")
+			}
 			if req.Method == "POST" {
 				writes.Add(1)
 				var draft map[string]string
@@ -238,6 +241,9 @@ func TestPostgresReplayAndLostIssueResponse(t *testing.T) {
 			}
 			return jsonResponse(200, []map[string]any{{"number": 7, "id": 55, "title": "repaired issue", "body": body, "state": "open", "user": map[string]string{"login": "sample-bug-app[bot]", "type": "Bot"}}}), nil
 		case "/repos/example/disposable/issues/7":
+			if req.Header.Get("Authorization") != "Bearer fixture-issues-read" {
+				t.Error("linked issue refresh did not use a read-only token")
+			}
 			return jsonResponse(200, map[string]any{"number": 7, "id": 55, "title": "changed externally", "body": body, "state": "closed"}), nil
 		}
 		t.Errorf("unexpected fixture request %v", req.URL)

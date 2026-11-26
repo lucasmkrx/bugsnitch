@@ -23,14 +23,16 @@ import (
 )
 
 type DraftRequest struct {
-	ApprovalVersion int64  `json:"approvalVersion,omitempty"`
-	Delivery        string `json:"delivery,omitempty"`
-	Candidate       string `json:"candidateSha,omitempty"`
-	Target          string `json:"target"`
-	Version         int64  `json:"version"`
-	PolicyVersion   int64  `json:"policyVersion"`
-	Summary         string `json:"summary,omitempty"`
-	Behavior        string `json:"behavior,omitempty"`
+	PlanDigest           string `json:"planDigest,omitempty"`
+	SharePlanAssumptions bool   `json:"sharePlanAssumptions,omitempty"`
+	ApprovalVersion      int64  `json:"approvalVersion,omitempty"`
+	Delivery             string `json:"delivery,omitempty"`
+	Candidate            string `json:"candidateSha,omitempty"`
+	Target               string `json:"target"`
+	Version              int64  `json:"version"`
+	PolicyVersion        int64  `json:"policyVersion"`
+	Summary              string `json:"summary,omitempty"`
+	Behavior             string `json:"behavior,omitempty"`
 }
 type Draft struct {
 	ApprovalVersion int64     `json:"approvalVersion"`
@@ -161,6 +163,14 @@ func (s Store) RequestDraft(ctx context.Context, w, p, id string, r DraftRequest
 	if c.version != r.Version || c.policy != r.PolicyVersion || (r.Candidate != "" && r.Candidate != c.head) {
 		return empty, ErrConflict
 	}
+	plan, err := readDraftPlan(ctx, tx, w, p, id)
+	if err != nil {
+		return empty, err
+	}
+	excerpt, err := plan.approvedExcerpt(r)
+	if err != nil {
+		return empty, err
+	}
 	r.Summary = incidents.Redact(r.Summary)
 	r.Behavior = incidents.Redact(r.Behavior)
 	var nonce [16]byte
@@ -171,13 +181,13 @@ func (s Store) RequestDraft(ctx context.Context, w, p, id string, r DraftRequest
 		// or terminal App job never re-enters the local publication flow.
 		result, err = tx.ExecContext(ctx, `UPDATE draft_pr_intents SET
 		    approval_version=approval_version+1,report_version=$4,policy_version=$5,installation_id=$6,repository_id=$7,issue_number=$8,
-		    issue_updated_at=$9,candidate_sha=$10,base_sha=$11,target=$12,marker=$13,summary=$14,behavior=$15,
+		    issue_updated_at=$9,candidate_sha=$10,base_sha=$11,target=$12,marker=$13,summary=$14,behavior=$15,plan_excerpt=$17,
 		    status='awaiting_publication',reason='',updated_at=now()
 		  WHERE workspace_id=$1 AND project_id=$2 AND attempt_id=$3 AND status='withdrawn' AND local_ship
-		    AND approval_version=$16 AND number IS NULL AND tries=0`, w, p, id, r.Version, r.PolicyVersion, c.install, c.repoID, c.issue, c.issueTime, c.head, c.base, r.Target, hex.EncodeToString(nonce[:]), r.Summary, r.Behavior, r.ApprovalVersion)
+		    AND approval_version=$16 AND number IS NULL AND tries=0`, w, p, id, r.Version, r.PolicyVersion, c.install, c.repoID, c.issue, c.issueTime, c.head, c.base, r.Target, hex.EncodeToString(nonce[:]), r.Summary, r.Behavior, r.ApprovalVersion, excerpt)
 	} else {
-		result, err = tx.ExecContext(ctx, `INSERT INTO draft_pr_intents(workspace_id,project_id,attempt_id,report_version,policy_version,installation_id,repository_id,issue_number,issue_updated_at,candidate_sha,base_sha,target,marker,status,summary,behavior,local_ship)
-	VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,CASE WHEN $16 THEN 'awaiting_publication' ELSE 'queued' END,$14,$15,$16) ON CONFLICT DO NOTHING`, w, p, id, r.Version, r.PolicyVersion, c.install, c.repoID, c.issue, c.issueTime, c.head, c.base, r.Target, hex.EncodeToString(nonce[:]), r.Summary, r.Behavior, r.Delivery == "local_ship")
+		result, err = tx.ExecContext(ctx, `INSERT INTO draft_pr_intents(workspace_id,project_id,attempt_id,report_version,policy_version,installation_id,repository_id,issue_number,issue_updated_at,candidate_sha,base_sha,target,marker,status,summary,behavior,local_ship,plan_excerpt)
+	VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,CASE WHEN $16 THEN 'awaiting_publication' ELSE 'queued' END,$14,$15,$16,$17) ON CONFLICT DO NOTHING`, w, p, id, r.Version, r.PolicyVersion, c.install, c.repoID, c.issue, c.issueTime, c.head, c.base, r.Target, hex.EncodeToString(nonce[:]), r.Summary, r.Behavior, r.Delivery == "local_ship", excerpt)
 	}
 	if err != nil {
 		return empty, err
@@ -186,7 +196,7 @@ func (s Store) RequestDraft(ctx context.Context, w, p, id string, r DraftRequest
 	if err != nil {
 		return empty, err
 	}
-	d, err := scanDraft(tx.QueryRowContext(ctx, "SELECT "+draftCols+" FROM draft_pr_intents WHERE workspace_id=$1 AND project_id=$2 AND attempt_id=$3 AND report_version=$4 AND policy_version=$5 AND target=$6 AND summary=$7 AND behavior=$8 AND local_ship=$9 AND approval_version=$10 AND status<>'withdrawn'", w, p, id, r.Version, r.PolicyVersion, r.Target, r.Summary, r.Behavior, r.Delivery == "local_ship", r.ApprovalVersion+1))
+	d, err := scanDraft(tx.QueryRowContext(ctx, "SELECT "+draftCols+" FROM draft_pr_intents WHERE workspace_id=$1 AND project_id=$2 AND attempt_id=$3 AND report_version=$4 AND policy_version=$5 AND target=$6 AND summary=$7 AND behavior=$8 AND local_ship=$9 AND approval_version=$10 AND status<>'withdrawn' AND plan_excerpt=$11", w, p, id, r.Version, r.PolicyVersion, r.Target, r.Summary, r.Behavior, r.Delivery == "local_ship", r.ApprovalVersion+1, excerpt))
 	if errors.Is(err, sql.ErrNoRows) {
 		return empty, ErrConflict
 	}
@@ -210,9 +220,9 @@ func draftEvent(ctx context.Context, tx *sql.Tx, w, p, id, kind string) error {
 }
 
 type job struct {
-	w, p, id, target, marker, state, name, summary, behavior string
-	c                                                        candidate
-	tries                                                    int
+	w, p, id, target, marker, state, name, summary, behavior, planExcerpt string
+	c                                                                     candidate
+	tries                                                                 int
 }
 
 func (j job) branch() string { return "bugsnitch/" + j.id }
@@ -266,13 +276,13 @@ func (s Store) SyncDraft(ctx context.Context, claim storage.JobClaim) error {
 	}
 	defer tx.Rollback()
 	var j job
-	err = tx.QueryRowContext(ctx, `SELECT x.workspace_id,x.project_id,x.attempt_id,x.target,x.marker,x.status,x.tries,p.repository,x.summary,x.behavior,
+	err = tx.QueryRowContext(ctx, `SELECT x.workspace_id,x.project_id,x.attempt_id,x.target,x.marker,x.status,x.tries,p.repository,x.summary,x.behavior,x.plan_excerpt,
 	x.report_version,x.policy_version,x.installation_id,x.repository_id,x.candidate_sha,x.base_sha,x.issue_number,x.issue_updated_at
 	FROM draft_pr_intents x JOIN projects p ON (p.workspace_id,p.id)=(x.workspace_id,x.project_id)
 	JOIN github_mappings m USING(installation_id,repository_id)
 	WHERE m.workspace_id=x.workspace_id AND m.project_id=x.project_id AND m.active AND x.status IN('queued','reconciling') AND (x.workspace_id,x.project_id,x.attempt_id)=($1,$2,$3)
 	AND x.next_run=$4::timestamptz AND x.next_run>clock_timestamp() FOR UPDATE OF x SKIP LOCKED FOR SHARE OF m SKIP LOCKED`,
-		claim.Workspace, claim.Project, claim.Item, claim.Fence).Scan(&j.w, &j.p, &j.id, &j.target, &j.marker, &j.state, &j.tries, &j.name, &j.summary, &j.behavior, &j.c.version, &j.c.policy, &j.c.install, &j.c.repoID, &j.c.head, &j.c.base, &j.c.issue, &j.c.issueTime)
+		claim.Workspace, claim.Project, claim.Item, claim.Fence).Scan(&j.w, &j.p, &j.id, &j.target, &j.marker, &j.state, &j.tries, &j.name, &j.summary, &j.behavior, &j.planExcerpt, &j.c.version, &j.c.policy, &j.c.install, &j.c.repoID, &j.c.head, &j.c.base, &j.c.issue, &j.c.issueTime)
 	if err != nil {
 		return err
 	}
@@ -343,15 +353,7 @@ func (s Store) sendDraft(ctx context.Context, j job, repo *github.DraftRepositor
 		return j.finish(ctx, tx, "queued", "Could not confirm published branch, target and open issue", nil, err)
 	}
 	title := fmt.Sprintf("Changes for issue #%d", j.c.issue)
-	quote := func(s string) string { return "    " + strings.ReplaceAll(incidents.Redact(s), "\n", "\n    ") }
-	if j.summary == "" {
-		j.summary = "See the candidate diff and the local attempt's change summary."
-	}
-	if j.behavior == "" {
-		j.behavior = "See the canonical issue and the local acceptance record."
-	}
-	body := fmt.Sprintf("## Problem\n\nTracks #%d.\n\n## Changes\n\n%s\n\n## Resulting behavior\n\n%s\n\n## Verification\n\nRunner validation exited 0 at %s. Independent review at that revision recorded zero important findings. Base revision %s.\n\n## Limitations\n\nCombined integration and environment verification remain pending.\n\n%s", j.c.issue, quote(j.summary), quote(j.behavior), j.c.head, j.c.base, j.mark())
-	pr, err := repo.Create(ctx, j.branch(), j.target, title, body)
+	pr, err := repo.Create(ctx, j.branch(), j.target, title, j.body())
 	if err != nil {
 		var failure *github.APIError
 		if errors.As(err, &failure) {
@@ -365,4 +367,15 @@ func (s Store) sendDraft(ctx context.Context, j job, repo *github.DraftRepositor
 		return j.finish(ctx, tx, "reconciling", "Create response uncertain. Checking repository for the matching PR", nil, err)
 	}
 	return j.record(ctx, tx, &pr)
+}
+
+func (j job) body() string {
+	quote := func(s string) string { return "    " + strings.ReplaceAll(incidents.Redact(s), "\n", "\n    ") }
+	if j.summary == "" {
+		j.summary = "See the candidate diff and the local attempt's change summary."
+	}
+	if j.behavior == "" {
+		j.behavior = "See the canonical issue and the local acceptance record."
+	}
+	return fmt.Sprintf("## Problem\n\nTracks #%d.\n\n%s## Changes\n\n%s\n\n## Resulting behavior\n\n%s\n\n## Verification\n\nRunner validation exited 0 at %s. Independent review at that revision recorded zero important findings. Base revision %s.\n\n## Limitations\n\nCombined integration and environment verification remain pending.\n\n%s", j.c.issue, j.planExcerpt, quote(j.summary), quote(j.behavior), j.c.head, j.c.base, j.mark())
 }

@@ -30,6 +30,8 @@ pub fn public() -> Router<Shared> {
         .route("/api/v1/device/model-permit", post(permit))
         .route("/api/v1/device/worker-lease", post(lease))
         .route("/api/v1/device/next", post(next))
+        .route("/api/v1/device/worker-start", post(worker_start))
+        .route("/api/v1/device/project-readiness", post(project_readiness))
         .route("/api/v1/device/share-diff", post(share_diff))
 }
 
@@ -232,6 +234,38 @@ async fn progression(
     Ok(Json(action))
 }
 
+async fn worker_start(
+    State(s): State<Shared>,
+    Device(token): Device,
+    ApiJson(body): ApiJson<Value>,
+) -> Reply {
+    version(&body)?;
+    Ok(Json(
+        s.domain(
+            "device.worker_start",
+            ["service".into(), "worker-dispatch".into()],
+            json!({"token":token,"body":body}),
+        )
+        .await?,
+    ))
+}
+
+async fn project_readiness(
+    State(s): State<Shared>,
+    Device(token): Device,
+    ApiJson(body): ApiJson<Value>,
+) -> Reply {
+    version(&body)?;
+    Ok(Json(
+        s.domain(
+            "device.project_readiness",
+            ["service".into(), "device-readiness".into()],
+            json!({"token":token,"body":body}),
+        )
+        .await?,
+    ))
+}
+
 async fn progression_wake(
     State(s): State<Shared>,
     Device(token): Device,
@@ -270,6 +304,8 @@ async fn progression_wake(
 struct TicketAnswer {
     version: i64,
     answer: String,
+    #[serde(default)]
+    feedback: String,
 }
 
 async fn ticket_answer(
@@ -283,7 +319,7 @@ async fn ticket_answer(
             "device.ticket_answer",
             o.actor(),
             json!({
-                "workspace":o.workspace,"attemptId":id,"version":b.version,"answer":b.answer
+                "workspace":o.workspace,"attemptId":id,"version":b.version,"answer":b.answer,"feedback":b.feedback
             }),
         )
         .await?,

@@ -31,19 +31,20 @@ const unattendedSchema = `CREATE TABLE IF NOT EXISTS unattended(
 var errUnattendedUnsupported = errors.New("the service does not support this unattended selection request")
 
 type unattendedScope struct {
-	Scope         protocol.RunScope              `json:"scope"`
-	Issues        map[int]protocol.IssueRevision `json:"issues"`
-	Workspace     string                         `json:"workspace"`
-	Repository    string                         `json:"repository"`
-	Service       string                         `json:"service"`
-	ProjectDigest string                         `json:"projectDigest"`
-	Duration      string                         `json:"duration"`
-	Parallel      int                            `json:"parallel"`
-	TurnBudget    int                            `json:"turnBudget"`
-	Corrections   bool                           `json:"allowCorrections"`
-	PlanApprover  string                         `json:"planApprover,omitempty"`
-	PublishTarget string                         `json:"publishTarget,omitempty"`
-	Steward       bool                           `json:"steward,omitempty"`
+	PortalDecisions bool                           `json:"portalDecisions,omitempty"`
+	Scope           protocol.RunScope              `json:"scope"`
+	Issues          map[int]protocol.IssueRevision `json:"issues"`
+	Workspace       string                         `json:"workspace"`
+	Repository      string                         `json:"repository"`
+	Service         string                         `json:"service"`
+	ProjectDigest   string                         `json:"projectDigest"`
+	Duration        string                         `json:"duration"`
+	Parallel        int                            `json:"parallel"`
+	TurnBudget      int                            `json:"turnBudget"`
+	Corrections     bool                           `json:"allowCorrections"`
+	PlanApprover    string                         `json:"planApprover,omitempty"`
+	PublishTarget   string                         `json:"publishTarget,omitempty"`
+	Steward         bool                           `json:"steward,omitempty"`
 }
 
 type unattendedGrant struct {
@@ -324,6 +325,11 @@ func runUnattended(ctx context.Context, project string, out io.Writer) error {
 		return err
 	}
 	defer unlock()
+	return superviseUnattended(ctx, project, out)
+}
+
+// Caller holds the project's exclusive supervisor lock.
+func superviseUnattended(ctx context.Context, project string, out io.Writer) error {
 	status, err := readUnattended(ctx, project)
 	if err != nil {
 		return err
@@ -335,7 +341,7 @@ func runUnattended(ctx context.Context, project string, out io.Writer) error {
 	if !time.Now().Before(grant.Expires) {
 		return updateUnattended(ctx, grant, "Authorization expired", true)
 	}
-	if strings.TrimSpace(os.Getenv("BUGSNITCH_ANTHROPIC_API_KEY")) == "" {
+	if !grant.PortalDecisions && strings.TrimSpace(os.Getenv("BUGSNITCH_ANTHROPIC_API_KEY")) == "" {
 		return errors.New("supply the runner's BUGSNITCH_ANTHROPIC_API_KEY before starting unattended work")
 	}
 	limits, err := runner.SetLocalLimits(0, 0)
@@ -412,7 +418,11 @@ func runUnattended(ctx context.Context, project string, out io.Writer) error {
 			if err != nil {
 				return update(err.Error(), true)
 			}
-			digest, err := runner.UnattendedProject(grant.Workspace, p.repo, p.path)
+			verifyProject := runner.UnattendedProject
+			if grant.PortalDecisions {
+				verifyProject = runner.PortalProject
+			}
+			digest, err := verifyProject(grant.Workspace, p.repo, p.path)
 			if err != nil {
 				return update(err.Error(), true)
 			}

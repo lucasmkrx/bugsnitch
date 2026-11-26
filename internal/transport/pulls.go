@@ -11,6 +11,8 @@ import (
 func (s *Server) pulls() integration.Store { return integration.Store{DB: s.DB, App: s.GitHubApp} }
 func pullError(e error) error {
 	switch {
+	case errors.Is(e, integration.ErrDraftPlanChanged):
+		return conflict(integration.ErrDraftPlanChanged.Error())
 	case errors.Is(e, integration.ErrInvalid):
 		return bad("Invalid pull request or evidence")
 	case errors.Is(e, integration.ErrConflict):
@@ -54,6 +56,14 @@ func (s *Server) recordPull(call *domainCall) error {
 	return call.reply(201, object{"accepted": true})
 }
 
+func (s *Server) previewDraftPlan(call *domainCall) error {
+	plan, err := s.pulls().DraftPlan(call.ctx, call.Workspace, call.Project, call.ID)
+	if err != nil {
+		return pullError(err)
+	}
+	return call.reply(200, object{"plan": plan})
+}
+
 func (s *Server) requestDraft(call *domainCall) error {
 	ws := call.Workspace
 	var b integration.DraftRequest
@@ -83,6 +93,9 @@ func (s *Server) recordHandover(call *domainCall) error {
 		return err
 	}
 	if err = s.pulls().Handover(call.ctx, call.Workspace, call.Project, n, b); err != nil {
+		if errors.Is(err, integration.ErrUnverifiedDeployment) {
+			return conflict(err.Error())
+		}
 		return pullError(err)
 	}
 	return call.reply(201, object{"accepted": true})

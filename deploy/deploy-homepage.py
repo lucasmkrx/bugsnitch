@@ -56,6 +56,11 @@ def ready_revision(service, image):
 def deploy(token, image):
     service = request(token)
     containers = service["template"]["containers"]
+    if any(
+        env.get("name") == "DATABASE_URL"
+        for container in containers for env in container.get("env", [])
+    ):
+        return None
     if len(containers) != 1 or containers[0].get("name") != "homepage-1":
         raise RuntimeError("Expected the existing single-container homepage service")
     if any(target.get("tag") for target in service.get("traffic", [])):
@@ -86,6 +91,8 @@ if __name__ == "__main__":
     if len(sys.argv) != 2 or not re.fullmatch(re.escape(IMAGE_PREFIX) + r"[a-f0-9]{64}", sys.argv[1]):
         sys.exit("Provide the Bugsnitch homepage image by its Artifact Registry SHA-256 digest")
     try:
-        print(deploy(os.environ["CLOUD_RUN_ACCESS_TOKEN"], sys.argv[1]))
+        revision = deploy(os.environ["CLOUD_RUN_ACCESS_TOKEN"], sys.argv[1])
+        if revision is not None:
+            print(revision)
     except (KeyError, OSError, RuntimeError, ValueError) as error:
         sys.exit(str(error))

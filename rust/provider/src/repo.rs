@@ -9,6 +9,8 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 pub enum Scope {
     Issues,
     ReadIssue,
+    ProjectRead,
+    ProjectWrite,
     Discover,
     Draft,
     Inspection,
@@ -22,6 +24,7 @@ pub struct Repository {
     pub name: String,
     pub path: String,
     pub id: i64,
+    pub node_id: String,
     pub scope: Scope,
     pub installation: i64,
     pub(crate) app_id: i64,
@@ -67,6 +70,8 @@ fn valid_name(s: &str) -> bool {
 #[serde(default)]
 pub struct Issue {
     pub id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub node_id: Option<String>,
     pub number: i64,
     pub title: Option<String>,
     pub body: Option<String>,
@@ -120,6 +125,8 @@ impl Repository {
             Scope::Discover => json!({"metadata":"read"}),
             Scope::Issues => json!({"issues":"write"}),
             Scope::ReadIssue => json!({"issues":"read"}),
+            Scope::ProjectRead => json!({"issues":"read","organization_projects":"read"}),
+            Scope::ProjectWrite => json!({"issues":"read","organization_projects":"write"}),
             Scope::Draft => json!({"contents":"read","issues":"read","pull_requests":"write"}),
             Scope::QueueRead => {
                 json!({"contents":"read","pull_requests":"read","administration":"read","merge_queues":"read","checks":"read"})
@@ -170,9 +177,13 @@ impl Repository {
         struct Identity {
             id: i64,
             full_name: String,
+            #[serde(default)]
+            node_id: String,
         }
         let identity: Identity = client.request(&auth.token, &identity_route, None, 200)?;
         if identity.id <= 0
+            || (matches!(scope, Scope::ProjectRead | Scope::ProjectWrite)
+                && identity.node_id.is_empty())
             || (id != 0 && identity.id != id)
             || !identity.full_name.eq_ignore_ascii_case(&name)
         {
@@ -184,6 +195,7 @@ impl Repository {
             path: format!("/repos/{name}"),
             name,
             id: identity.id,
+            node_id: identity.node_id,
             scope,
             installation,
             app_id: app.id,
@@ -204,6 +216,31 @@ impl Repository {
             return Err(Error::SubjectChanged);
         }
         Ok(i)
+    }
+    pub fn recent_work(&self) -> Result<Value> {
+        let route = format!(
+            "{}/issues?state=open&sort=updated&direction=desc&per_page=40",
+            self.path
+        );
+        let issues: Vec<Issue> = self.client.request(&self.token, &route, None, 200)?;
+        if issues.len() > 40 {
+            return Err(Error::Response);
+        }
+        let work: Vec<Value> = issues
+            .into_iter()
+            .filter_map(|i| {
+                let title = i.title?;
+                if i.id < 1 || i.number < 1 || i.state != "open" || title.trim().is_empty() {
+                    return None;
+                }
+                Some(
+                    json!({"number": i.number, "title": title.chars().take(256).collect::<String>(),
+                "body": i.body.unwrap_or_default().chars().take(2500).collect::<String>(),
+                "pull": i.pull_request.is_some()}),
+                )
+            })
+            .collect();
+        Ok(json!(work))
     }
     pub fn create(&self, title: &str, body: &str) -> Result<Issue> {
         let i: Issue = self.client.request(

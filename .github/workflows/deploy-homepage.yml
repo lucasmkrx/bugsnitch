@@ -53,6 +53,7 @@ jobs:
           export_environment_variables: false
 
       - name: Publish and deploy the image digest
+        id: rollout
         shell: bash
         env:
           CLOUD_RUN_ACCESS_TOKEN: ${{ steps.google.outputs.access_token }}
@@ -72,8 +73,14 @@ jobs:
           image=$(docker image inspect --format '{{range .RepoDigests}}{{println .}}{{end}}' "$tag" |
             awk -v prefix="$IMAGE_REPOSITORY@sha256:" 'index($0, prefix) == 1 { print; exit }')
           revision=$(python3 deploy/deploy-homepage.py "$image")
+          if [[ -z "$revision" ]]; then
+            echo "The authenticated portal serves this domain. Skipping the static homepage rollout."
+            exit 0
+          fi
+          echo "revision=$revision" >> "$GITHUB_OUTPUT"
           echo "Cloud Run revision: $revision"
           printf 'Cloud Run revision: `%s`\n\nImage: `%s`\n' "$revision" "$image" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify the public homepage and discovery files
+        if: steps.rollout.outputs.revision != ''
         run: python3 deploy/verify-homepage.py https://bugsnitch.com

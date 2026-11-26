@@ -77,7 +77,10 @@ export interface Attempt {
     disposition: "act" | "wait" | "ask" | "finish";
     approver?: string;
     expiresAt?: string;
-    answer?: "approve" | "hold";
+    decisionKind?: string;
+    question?: string;
+    planSummary?: string;
+    answer?: "approve" | "hold" | "answered";
     deployment?: { incidentId: string; environment: string; held: boolean }[];
     preparedEvidence?: {
       inspectionVersion: number;
@@ -198,6 +201,7 @@ export interface Pull {
   observedAt: string;
   issueState?: string;
   draft?: boolean;
+  queue?: { present: boolean; rules?: { queueRequired: boolean } };
   signOff?: { at: string } | null;
   queueDelivery?: {
     state: string;
@@ -226,6 +230,14 @@ export interface Pull {
         testSteps: string;
         recordedAt: string;
         recordedBy: string;
+        cost?: {
+          admittedTurns: number;
+          meteredTurns: number;
+          pricedTurns: number;
+          inputTokens: number;
+          outputTokens: number;
+          estimatedUSD?: number;
+        };
       }[]
     | null;
 }

@@ -127,7 +127,7 @@ test("API keys verify the paired runner before sending credentials to loopback",
   const browser = await chromium.launch(
     process.env.BUGSNITCH_TEST_CHROME
       ? { executablePath: process.env.BUGSNITCH_TEST_CHROME, headless: true }
-      : { headless: true },
+      : { channel: "chrome", headless: true },
   );
   t.after(() => browser.close());
   const context = await browser.newContext();

@@ -161,22 +161,23 @@ mod tests {
 
     #[test]
     fn proof_binds_runner_owner_workspace_and_expiry() {
+        let key = crate::http::random_hex(32).unwrap();
         let mut grant = Grant {
             device_id: "device-a".into(),
             expiry: 220,
             proof: String::new(),
         };
-        grant.proof = sign("secret", "runner", "first", "digest", &grant);
-        assert!(verify("secret", "runner", "first", "digest", &grant, 200).is_ok());
+        grant.proof = sign(&key, "runner", "first", "digest", &grant);
+        assert!(verify(&key, "runner", "first", "digest", &grant, 200).is_ok());
         for (purpose, workspace, digest, now) in [
             ("owner", "first", "digest", 200),
             ("runner", "second", "digest", 200),
             ("runner", "first", "other", 200),
             ("runner", "first", "digest", 220),
         ] {
-            assert!(verify("secret", purpose, workspace, digest, &grant, now).is_err());
+            assert!(verify(&key, purpose, workspace, digest, &grant, now).is_err());
         }
         grant.device_id = "device-b".into();
-        assert!(verify("secret", "runner", "first", "digest", &grant, 200).is_err());
+        assert!(verify(&key, "runner", "first", "digest", &grant, 200).is_err());
     }
 }

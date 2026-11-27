@@ -106,6 +106,9 @@ func (s *Server) approvePlan(call *domainCall) error {
 		if _, err = tx.ExecContext(ctx, "UPDATE projects SET version=version+1 WHERE id=$1", p); err != nil {
 			return err
 		}
+		if err = carryPortalPrerequisites(ctx, tx, ws, p, id); err != nil {
+			return err
+		}
 		ctx = audit.WithDetails(ctx, audit.Details{Reason: "Current plan and dependency bindings approved", SubjectVersion: planVersion})
 		return event(ctx, tx, ws, p, "plan.approved", id)
 	})

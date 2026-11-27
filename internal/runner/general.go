@@ -93,6 +93,12 @@ func ReconcileGeneral(id string, confirmed bool) error {
 	return closeGeneral(s.Operation)
 }
 func generalModel(ctx context.Context, ws, repo, role, id, instructions, prompt, model, effort string, schema any) (agent.Result, error) {
+	return generalModelUsing(ctx, ws, repo, role, id, instructions, prompt, model, effort, schema, readOnlyModel)
+}
+
+type readOnlyTurn func(context.Context, string, string, string, string, any) (agent.Result, error)
+
+func generalModelUsing(ctx context.Context, ws, repo, role, id, instructions, prompt, model, effort string, schema any, invoke readOnlyTurn) (agent.Result, error) {
 	var empty agent.Result
 	unlock, err := attemptLock(id)
 	if err != nil {
@@ -135,7 +141,7 @@ func generalModel(ctx context.Context, ws, repo, role, id, instructions, prompt,
 	} else {
 		authority <- nil
 	}
-	result, runErr := readOnlyModel(turnCtx, instructions, prompt, model, effort, schema)
+	result, runErr := invoke(turnCtx, instructions, prompt, model, effort, schema)
 	if result.Usage != nil && op.Device != "" && MeasureGeneral != nil {
 		MeasureGeneral(op, result)
 	}
@@ -143,7 +149,7 @@ func generalModel(ctx context.Context, ws, repo, role, id, instructions, prompt,
 	if e := <-authority; e != nil {
 		runErr = errors.Join(runErr, e)
 	}
-	// readOnlyModel closes and waits for its app-server process before returning.
+	// The model request has returned and any app-server process has exited.
 	if err = changeGeneral(id, "running", "ending"); err != nil {
 		return result, errors.Join(runErr, err)
 	}
@@ -153,12 +159,7 @@ func generalModel(ctx context.Context, ws, repo, role, id, instructions, prompt,
 var readOnlyModel = func(ctx context.Context, instructions, prompt, model, effort string, schema any) (agent.Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, 4*time.Minute)
 	defer cancel()
-	c, err := agent.Open(ctx)
-	if err != nil {
-		return agent.Result{}, err
-	}
-	defer c.Close()
-	return c.Turn(instructions, prompt, model, effort, schema)
+	return openAIOrCodex(ctx, instructions, prompt, model, effort, schema)
 }
 
 func Proof(ctx context.Context) (agent.Result, error) {

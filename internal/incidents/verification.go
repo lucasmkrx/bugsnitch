@@ -220,6 +220,52 @@ func (s Store) Verdict(ctx context.Context, w, p, id, env string) (Verdict, erro
 	return v, tx.Commit()
 }
 
+// VerifiedHandoverDeployments returns the provider receipts for active monitors on
+// this target. The caller shares the project lock with signed webhook writers.
+func VerifiedHandoverDeployments(ctx context.Context, tx *sql.Tx, w, p string, pull int64, candidate, env, build string) (map[string]string, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT m.id,m.incident_id,m.id IN(SELECT id FROM current_monitor_pull_subjects)
+	    AND g.active AND NOT p.paused AND NOT ws.stopped AND NOT EXISTS (
+	        SELECT FROM deployment_holds h JOIN deployment_monitors x ON x.id=h.monitor_id
+	        WHERE (x.workspace_id,x.project_id,x.environment)=(m.workspace_id,m.project_id,m.environment) AND h.cleared_at IS NULL)
+	    FROM deployment_monitors m JOIN github_mappings g USING(workspace_id,project_id,installation_id,repository_id)
+	    JOIN projects p ON (p.workspace_id,p.id)=(m.workspace_id,m.project_id) JOIN workspaces ws ON ws.id=p.workspace_id
+	    WHERE m.workspace_id=$1 AND m.project_id=$2 AND m.pull_number=$3 AND m.candidate=$4 AND m.environment=$5 AND m.active`, w, p, pull, candidate, env)
+	if err != nil {
+		return nil, err
+	}
+	monitors := map[string]string{}
+	for rows.Next() {
+		var id, incident string
+		var eligible bool
+		if err = rows.Scan(&id, &incident, &eligible); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		if !eligible {
+			rows.Close()
+			return nil, ErrConflict
+		}
+		monitors[id] = incident
+	}
+	rows.Close()
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	receipts := map[string]string{}
+	for id, incident := range monitors {
+		v, err := readVerdict(ctx, tx, w, p, incident, env)
+		if err != nil {
+			return nil, err
+		}
+		if v.Status != "Verified in environment" || v.Fix.MonitorID != id || v.Validation.MonitorID != id || v.Deployment.MonitorID != id ||
+			v.Deployment.Candidate != candidate || v.Deployment.Build != build {
+			return nil, ErrConflict
+		}
+		receipts[id] = v.Deployment.CommandID
+	}
+	return receipts, nil
+}
+
 func readVerdict(ctx context.Context, tx *sql.Tx, w, p, id, env string) (Verdict, error) {
 	v := Verdict{Environment: env, Source: "authenticated owner"}
 	var err error

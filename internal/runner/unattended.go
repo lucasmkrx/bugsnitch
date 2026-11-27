@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 )
@@ -16,10 +17,12 @@ import (
 var ErrUnattendedBudget = errors.New("unattended model-turn budget exhausted")
 
 type unattendedPass struct {
-	grantID       string
-	projectDigest string
-	corrections   bool
-	takeTurn      func(context.Context) error
+	grantID        string
+	firstAttemptID string
+	publishTarget  string
+	projectDigest  string
+	corrections    bool
+	takeTurn       func(context.Context) error
 }
 
 type unattendedKey struct{}
@@ -31,6 +34,15 @@ func projectDigest(p Project) string {
 }
 
 func UnattendedProject(workspace, repo, mappedPath string) (string, error) {
+	return supervisorProject(workspace, repo, mappedPath, false)
+}
+
+// PortalProject uses the same model adapters as an interactive worker on this checkout.
+func PortalProject(workspace, repo, mappedPath string) (string, error) {
+	return supervisorProject(workspace, repo, mappedPath, true)
+}
+
+func supervisorProject(workspace, repo, mappedPath string, portal bool) (string, error) {
 	p, err := project(workspace, repo)
 	if err != nil {
 		return "", err
@@ -42,7 +54,11 @@ func UnattendedProject(workspace, repo, mappedPath string) (string, error) {
 		return "", err
 	}
 	for _, phase := range []string{"plan", "implement", "review"} {
-		if p.Config.forStage(phase).Provider != "claude" {
+		provider := p.Config.forStage(phase).Provider
+		if portal && provider == "claude" && strings.TrimSpace(os.Getenv("BUGSNITCH_ANTHROPIC_API_KEY")) == "" {
+			return "", errors.New("provide BUGSNITCH_ANTHROPIC_API_KEY for the configured Claude worker stage")
+		}
+		if !portal && provider != "claude" {
 			return "", errors.New("unattended execution requires the Claude API provider for plan, implement and review")
 		}
 	}
@@ -69,14 +85,16 @@ func LockUnattended(projectID string) (func(), error) {
 }
 
 type UnattendedAuthority struct {
-	GrantID     string
-	Digest      string
-	Corrections bool
-	TakeTurn    func(context.Context) error
+	GrantID        string
+	FirstAttemptID string
+	PublishTarget  string
+	Digest         string
+	Corrections    bool
+	TakeTurn       func(context.Context) error
 }
 
 func (g UnattendedAuthority) bind(ctx context.Context) context.Context {
-	return context.WithValue(ctx, unattendedKey{}, unattendedPass{g.GrantID, g.Digest, g.Corrections, g.TakeTurn})
+	return context.WithValue(ctx, unattendedKey{}, unattendedPass{grantID: g.GrantID, firstAttemptID: g.FirstAttemptID, publishTarget: g.PublishTarget, projectDigest: g.Digest, corrections: g.Corrections, takeTurn: g.TakeTurn})
 }
 
 func StartUnattendedPass(ctx context.Context, workspace string, issue Issue, scope protocol.RunScope, grant UnattendedAuthority, admitted func(Summary)) (Attempt, error) {
@@ -92,6 +110,14 @@ func ContinueUnattendedPass(ctx context.Context, a Attempt, grant UnattendedAuth
 		return a, errors.New("unattended continuation no longer matches the authorized checkpoint")
 	}
 	return ContinueAt(grant.bind(ctx), a.ID, "", a.Version)
+}
+
+func AnswerUnattendedQuestion(ctx context.Context, a Attempt, grant UnattendedAuthority, feedback string) (Attempt, error) {
+	if grant.GrantID == "" || a.UnattendedGrant != grant.GrantID || a.State != "waiting" ||
+		a.ReasonCode != protocol.OwnerInputRequired || a.OwnerQuestion == "" || feedback == "" || len(feedback) > 2048 {
+		return a, ErrAuthorityStale
+	}
+	return ContinueAt(grant.bind(ctx), a.ID, feedback, a.Version)
 }
 
 func StewardUnattended(ctx context.Context, a Attempt, grant UnattendedAuthority, pull int) (Attempt, error) {

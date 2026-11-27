@@ -75,6 +75,16 @@ func (s Store) syncClaimed(ctx context.Context, app *github.App, claim storage.J
 	if !active {
 		return nil
 	}
+	if j.status == "linked" {
+		i, readErr := app.ReadIssue(ctx, j.installation, j.repository, j.repo, j.number)
+		if readErr != nil {
+			return reschedule(ctx, tx, j, "linked", "Current GitHub issue state unavailable", readErr)
+		}
+		if i.ID != j.issueID {
+			return reschedule(ctx, tx, j, "blocked", "Issue identity changed. Owner reconciliation required", nil)
+		}
+		return recordIssue(ctx, tx, j, i)
+	}
 	repo, err := app.Repository(ctx, j.installation, j.repository, j.repo)
 	if err != nil {
 		return reschedule(ctx, tx, j, j.status, "GitHub authorization or repository access unavailable", err)
@@ -97,15 +107,6 @@ func (s Store) syncClaimed(ctx context.Context, app *github.App, claim storage.J
 			return reschedule(ctx, tx, j, "reconciling", "Uncertain write. Waiting for an issue created by this app with the recorded marker", readErr)
 		}
 		return recordIssue(ctx, tx, j, *candidate)
-	case "linked":
-		i, readErr := repo.Get(ctx, j.number)
-		if readErr != nil {
-			return reschedule(ctx, tx, j, "linked", "Current GitHub issue state unavailable", readErr)
-		}
-		if i.ID != j.issueID {
-			return reschedule(ctx, tx, j, "blocked", "Issue identity changed. Owner reconciliation required", nil)
-		}
-		return recordIssue(ctx, tx, j, i)
 	}
 	return ErrInvalid
 }

@@ -51,6 +51,8 @@ Pairing connects the device. Before executing an issue, use `project-add` on tha
 
 ## Workflows
 
+In **Work**, select an issue from your organization's GitHub Project and start a paired runner. For a new ticket the runner proposes acceptance criteria, verification steps and an effort estimate. The portal carries the approved ticket through implementation, questions, PR review and sign-off. After the merge, record the target build, evidence and test steps to hand the ticket back to its owner. [Set up the GitHub Projects workflow](docs/OPERATIONS.md#github-projects-ticket-delivery)
+
 | Stage | What happens |
 | --- | --- |
 | Plan | Start with a canonical GitHub issue. Optionally link its Linear ticket. Approve the ticket's criteria, prerequisites and shared resources. Eligible independent tickets can run in parallel worktrees. [Runner guide](docs/RUNNER.md) |

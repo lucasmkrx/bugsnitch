@@ -101,7 +101,7 @@ func TestIndependentlyPassingChangesFailInCombination(t *testing.T) {
 	}
 
 	t.Run("retain inspected base without moving user refs", func(t *testing.T) {
-		ref, err := RetainInspectedBase(ctx, a, "fixture-target", targetSHA)
+		ref, err := RetainInspectedBase(ctx, a.Project, "fixture-target", targetSHA)
 		if err != nil || mustGit(dir, "rev-parse", ref) != targetSHA {
 			t.Fatal(ref, err)
 		}

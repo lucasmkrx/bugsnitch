@@ -2,6 +2,8 @@
 services:
   server:
     environment:
+      BUGSNITCH_GITHUB_PROJECT_STATUS_ACTIVE: ${BUGSNITCH_GITHUB_PROJECT_STATUS_ACTIVE:-In Progress}
+      BUGSNITCH_GITHUB_PROJECT_STATUS_DONE: ${BUGSNITCH_GITHUB_PROJECT_STATUS_DONE:-Done}
       GITHUB_APP_CLIENT_ID: ${GITHUB_APP_CLIENT_ID:?set the installed App client ID}
       GITHUB_APP_KEY_FILE: /run/bugsnitch/github-app.pem
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:?set the App webhook secret}

@@ -32,6 +32,10 @@ import {
   ticketAction,
 } from "./work";
 import { Members } from "./members";
+import { WorkerStarts } from "./worker-starts";
+import { ModelAccess } from "./model-access";
+import { RelatedIncidentWork } from "./incident-triage";
+import { IncidentBrowserQA } from "./browser-qa";
 
 interface Props {
   page: Page;
@@ -511,7 +515,13 @@ export function Views({
                 ["Attempt ID", <code>{a.id}</code>],
               ]}
             />
-            <AttemptAction state={s} attempt={a} run={run} />
+            <AttemptAction
+              key={a.id + ":" + a.version}
+              state={s}
+              attempt={a}
+              run={run}
+              locked={offlineLocked}
+            />
             <div className="panel-body">
               <h3>Execution evidence</h3>
               {a.evidence?.length ? (
@@ -624,6 +634,9 @@ export function Views({
     }
     return (
       <>
+        {role === "owner" && !s.capabilities.demo && (
+          <WorkerStarts state={s} project={project} locked={locked} run={run} />
+        )}
         {search("Search issues and attempts")}
         <Panel title="Attempts">
           {rows.length
@@ -687,7 +700,7 @@ export function Views({
               })
             : note(
                 query ? "No matching issues" : "No linked issues",
-                "Qualifying incident promotions appear here after GitHub confirms the issue.",
+                "Select a ticket from GitHub Projects or promote a qualifying incident.",
                 "repo",
               )}
         </Panel>
@@ -695,7 +708,7 @@ export function Views({
           tickets={tickets}
           run={run}
           locked={locked}
-          canLink={role === "owner"}
+          canLink={role === "owner" && tickets.some((t) => t.linear)}
         />
       </>
     );
@@ -767,29 +780,50 @@ export function Views({
               </details>
             ) : null}
             {!i.issueNumber && !i.promotion && (
-              <div className="panel-body">
-                <button
-                  disabled={locked}
-                  onClick={() =>
-                    void run(
-                      () =>
-                        post(
-                          "projects/" +
-                            enc(i.projectId) +
-                            "/incidents/" +
-                            enc(i.id) +
-                            "/promote",
-                          { version: i.version },
-                        ),
-                      "Issue promotion accepted for processing.",
-                    )
-                  }
-                >
-                  Approve issue promotion
-                </button>
-              </div>
+              <>
+                {p && (
+                  <RelatedIncidentWork
+                    key={`${i.id}:${i.version}`}
+                    incident={i}
+                    repository={p.repository}
+                    locked={offlineLocked}
+                    canLink={role === "owner"}
+                    run={run}
+                  />
+                )}
+                <div className="panel-body">
+                  <button
+                    disabled={locked}
+                    onClick={() =>
+                      void run(
+                        () =>
+                          post(
+                            "projects/" +
+                              enc(i.projectId) +
+                              "/incidents/" +
+                              enc(i.id) +
+                              "/promote",
+                            { version: i.version },
+                          ),
+                        "Issue promotion accepted for processing.",
+                      )
+                    }
+                  >
+                    Approve issue promotion
+                  </button>
+                </div>
+              </>
             )}
           </Panel>
+          {i.issueNumber && (
+            <IncidentBrowserQA
+              key={`${i.id}:${i.version}`}
+              incident={i}
+              locked={offlineLocked}
+              canShare={role !== "operator"}
+              run={run}
+            />
+          )}
           <Verification
             key={i.id}
             owner={role === "owner"}
@@ -1130,6 +1164,7 @@ export function Views({
       <Pulls
         state={s}
         project={project}
+        subject={subject}
         locked={offlineLocked}
         canAttest={role !== "operator"}
         run={run}
@@ -1211,6 +1246,9 @@ export function Views({
   }
   return (
     <>
+      {!s.capabilities.demo && (!s.viewer || s.viewer.role === "owner") && (
+        <ModelAccess key={s.viewer?.id || "owner"} />
+      )}
       <Panel title="Repository connections">
         {projects.length
           ? projects.map((p) => (
@@ -1269,13 +1307,6 @@ export function Views({
       {!project && role === "owner" && !s.capabilities.demo && (
         <Members locked={locked} run={run} projects={s.projects} />
       )}
-      <Panel title="Model access">
-        <div className="panel-body">
-          <Badge tone="warn">Hosted inference unavailable</Badge>
-          <p>{s.capabilities.reason}</p>
-          <p>Shared account allowance · Unknown</p>
-        </div>
-      </Panel>
     </>
   );
 }

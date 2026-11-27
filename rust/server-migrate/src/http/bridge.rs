@@ -23,7 +23,7 @@ pub(super) struct Worker {
     pub socket: PathBuf,
 }
 impl Worker {
-    pub async fn start(origin: &str) -> Result<Self, &'static str> {
+    pub async fn start(origin: &str, scheduled: bool) -> Result<Self, &'static str> {
         use std::os::unix::fs::PermissionsExt;
         let directory = tempfile::Builder::new()
             .prefix("bugsnitch-")
@@ -38,6 +38,10 @@ impl Worker {
         cmd.arg(&socket)
             .env_clear()
             .env("BUGSNITCH_ORIGIN", origin)
+            .env(
+                "BUGSNITCH_BACKGROUND_MODE",
+                if scheduled { "scheduled" } else { "continuous" },
+            )
             .kill_on_drop(true)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped());
@@ -64,6 +68,8 @@ impl Worker {
                             | "ALL_PROXY"
                             | "all_proxy"
                             | "BUGSNITCH_GITHUB_INSTALLATION_ID"
+                            | "BUGSNITCH_GITHUB_PROJECT_STATUS_ACTIVE"
+                            | "BUGSNITCH_GITHUB_PROJECT_STATUS_DONE"
                             | "BUGSNITCH_GITHUB_QUEUE_REPOSITORIES"
                             | "GITHUB_APP_CLIENT_ID"
                             | "GITHUB_APP_KEY_FILE"

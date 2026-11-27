@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import {
   type State,
   type Attempt,
@@ -11,6 +11,7 @@ import {
 } from "./api";
 import { Badge, Field, Modal, Panel, when, human } from "./ui";
 import type { Run } from "./actions";
+import { githubPullAction } from "./work";
 
 export function DispatchControl({
   workspace,
@@ -232,6 +233,42 @@ export function DraftPR({
     version: number;
     policyVersion: number;
   } | null>(null);
+  type ApprovedPlan = {
+    version: number;
+    criteria: string[];
+    verification: string;
+    estimateHours: number;
+    assumptions?: string;
+    digest: string;
+  };
+  const [preview, setPreview] = useState<ApprovedPlan | null>();
+  const [previewError, setPreviewError] = useState("");
+  const [includeAssumptions, setIncludeAssumptions] = useState(false);
+  const [refreshPreview, setRefreshPreview] = useState(0);
+  const path =
+    "projects/" + enc(attempt.projectId) + "/attempts/" + enc(attempt.id);
+  useEffect(() => {
+    if (!draft) return;
+    const controller = new AbortController();
+    void request<{ plan: ApprovedPlan | null }>(path + "/draft-plan", {
+      signal: controller.signal,
+    })
+      .then(({ plan }) => {
+        if (controller.signal.aborted) return;
+        if (plan !== null && (!plan?.digest || !Array.isArray(plan.criteria)))
+          throw new Error("The approved plan preview is incomplete.");
+        setPreview(plan);
+      })
+      .catch((error) => {
+        if (!controller.signal.aborted) setPreviewError(messageOf(error));
+      });
+    return () => controller.abort();
+  }, [draft, path, refreshPreview]);
+  function resetPreview() {
+    setPreview(undefined);
+    setPreviewError("");
+    setIncludeAssumptions(false);
+  }
   const current = (state.draftPRs || []).find(
     (d) => d.attemptId === attempt.id,
   );
@@ -247,6 +284,7 @@ export function DraftPR({
     e.preventDefault();
     if (!project) return;
     const f = new FormData(e.currentTarget);
+    resetPreview();
     setDraft({
       target: String(f.get("target")).trim(),
       summary: String(f.get("summary")).trim(),
@@ -273,7 +311,10 @@ export function DraftPR({
                 {current.reportVersion === attempt.version &&
                 current.candidateSha === attempt.candidateSha ? (
                   <>
-                    <p>Run this on the original paired computer.</p>
+                    <p>
+                      The portal worker publishes the approved branch. To
+                      publish manually on {attempt.machine}, run
+                    </p>
                     <code>
                       bugsnitch local-ship --id {attempt.id} --version{" "}
                       {current.reportVersion} --candidate {current.candidateSha}{" "}
@@ -324,7 +365,8 @@ export function DraftPR({
                     current.number
                   }
                 >
-                  Open pull request #{current.number}
+                  {githubPullAction(pull || undefined) ||
+                    "Open pull request #" + current.number}
                 </a>
                 <button
                   disabled={!canInspect}
@@ -381,8 +423,8 @@ export function DraftPR({
             </Field>
             {current?.status !== "withdrawn" && (
               <label>
-                <input name="localShip" type="checkbox" /> Publish the branch
-                with local-ship on the paired computer
+                <input name="localShip" type="checkbox" defaultChecked />{" "}
+                Publish the branch with local-ship on the paired computer
               </label>
             )}
             <button disabled={locked}>Review draft request</button>
@@ -413,14 +455,66 @@ export function DraftPR({
             </p>
           )}
           <p>
-            Candidate <code>{attempt.candidateSha}</code>
+            Candidate <code>{draft.candidateSha}</code>
           </p>
+          {previewError ? (
+            <>
+              <p role="alert">{previewError}</p>
+              <button
+                onClick={() => {
+                  resetPreview();
+                  setRefreshPreview((v) => v + 1);
+                }}
+              >
+                Reload plan preview
+              </button>
+            </>
+          ) : preview === undefined ? (
+            <p role="status">Loading approved plan…</p>
+          ) : (
+            preview && (
+              <>
+                <h3>Plan details for GitHub</h3>
+                <p>
+                  The draft will include these acceptance criteria from plan v
+                  {preview.version}.
+                </p>
+                <ul>
+                  {preview.criteria.map((criterion, i) => (
+                    <li key={i}>{criterion}</li>
+                  ))}
+                </ul>
+                <p>
+                  <strong>Verification</strong> {preview.verification}
+                </p>
+                <p>
+                  <strong>Estimate</strong> {preview.estimateHours} hours
+                </p>
+                {preview.assumptions && (
+                  <>
+                    <p className="worker-text">{preview.assumptions}</p>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={includeAssumptions}
+                        onChange={(e) =>
+                          setIncludeAssumptions(e.target.checked)
+                        }
+                      />{" "}
+                      Include these assumptions in the GitHub draft
+                    </label>
+                  </>
+                )}
+              </>
+            )
+          )}
           <div className="form-footer">
             <button onClick={() => setDraft(null)}>Cancel</button>
             <button
               className="primary"
               disabled={
                 locked ||
+                preview === undefined ||
                 (current?.approvalVersion ?? 0) !== draft.approvalVersion ||
                 project.policyVersion !== draft.policyVersion ||
                 attempt.version !== draft.version
@@ -435,12 +529,26 @@ export function DraftPR({
                           "/attempts/" +
                           enc(attempt.id) +
                           "/draft-pr",
-                        draft,
+                        {
+                          ...draft,
+                          ...(preview
+                            ? {
+                                planDigest: preview.digest,
+                                ...(includeAssumptions
+                                  ? { sharePlanAssumptions: true }
+                                  : {}),
+                              }
+                            : {}),
+                        },
                       ),
                     "Draft PR request accepted. Check the reported GitHub result.",
                   )
                 )
                   setDraft(null);
+                else {
+                  resetPreview();
+                  setRefreshPreview((v) => v + 1);
+                }
               }}
             >
               Request draft PR

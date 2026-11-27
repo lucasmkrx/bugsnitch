@@ -127,8 +127,8 @@ type remoteGit func(...string) (string, error)
 
 // Run network-facing Git in an empty bare repository. Only the reviewed
 // repository's object store is shared, never its remote configuration or refs.
-func withRemoteGit(ctx context.Context, a Attempt, protocol string, work func(remoteGit) error) error {
-	objects, err := git(a.Worktree, "rev-parse", "--path-format=absolute", "--git-path", "objects")
+func withRemoteGit(ctx context.Context, worktree, protocol string, work func(remoteGit) error) error {
+	objects, err := git(worktree, "rev-parse", "--path-format=absolute", "--git-path", "objects")
 	if err != nil || !filepath.IsAbs(objects) || strings.ContainsAny(objects, "\r\n") {
 		return errors.New("could not locate reviewed Git objects")
 	}
@@ -154,7 +154,7 @@ func withRemoteGit(ctx context.Context, a Attempt, protocol string, work func(re
 		err := cmd.Run()
 		return strings.TrimSpace(out.buffer.String()), err
 	}
-	format, err := git(a.Worktree, "rev-parse", "--show-object-format")
+	format, err := git(worktree, "rev-parse", "--show-object-format")
 	if err != nil || (format != "sha1" && format != "sha256") {
 		return errors.New("unsupported Git object format")
 	}
@@ -166,7 +166,7 @@ func withRemoteGit(ctx context.Context, a Attempt, protocol string, work func(re
 }
 
 func publishRef(ctx context.Context, a Attempt, remote, protocol, target string, confirm func(context.Context) error) error {
-	return withRemoteGit(ctx, a, protocol, func(run remoteGit) error {
+	return withRemoteGit(ctx, a.Worktree, protocol, func(run remoteGit) error {
 		branch, expected := a.Branch, ""
 		if a.Steward != nil {
 			branch = "bugsnitch/" + a.Steward.RootAttempt

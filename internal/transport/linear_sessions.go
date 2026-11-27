@@ -65,7 +65,7 @@ func (s *Server) receiveLinear(ctx context.Context, input []byte) (any, error) {
 }
 func (s *Server) ProcessLinearSessions(ctx context.Context) {
 	for ctx.Err() == nil {
-		processed, err := s.processLinearSession(ctx)
+		processed, err := s.ProcessLinearSession(ctx)
 		if err == nil && processed {
 			continue
 		}
@@ -76,7 +76,7 @@ func (s *Server) ProcessLinearSessions(ctx context.Context) {
 		}
 	}
 }
-func (s *Server) processLinearSession(ctx context.Context) (bool, error) {
+func (s *Server) ProcessLinearSession(ctx context.Context) (bool, error) {
 	var found bool
 	err := transaction(ctx, s.DB, func(tx *sql.Tx) error {
 		var id, ws, p, repo, prompt, previous string

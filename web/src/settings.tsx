@@ -339,6 +339,10 @@ export function Settings({
                   </button>
                 </>
               )}
+              <p>
+                Run <code>bugsnitch doctor --project {project.id}</code> on the
+                assigned computer to check its validator and deployment verification setup.
+              </p>
             </div>
           </Panel>
         ))}

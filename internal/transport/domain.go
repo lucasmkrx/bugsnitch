@@ -80,6 +80,18 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 	if r.Version != 1 {
 		return nil, bad("Unsupported domain protocol")
 	}
+	if r.Operation == "jobs.tick" {
+		if r.Actor != [2]string{"service", "scheduled-jobs"} || s.ScheduledJobs == nil {
+			return nil, denied
+		}
+		return true, s.ScheduledJobs(ctx)
+	}
+	if r.Operation == "device.worker_start" && r.Actor == [2]string{"service", "worker-dispatch"} {
+		return s.deviceWorkerStart(ctx, r.Input)
+	}
+	if r.Operation == "device.project_readiness" && r.Actor == [2]string{"service", "device-readiness"} {
+		return s.deviceProjectReadiness(ctx, r.Input)
+	}
 	if r.Operation == "linear.session" && r.Actor == [2]string{"service", "verified-linear"} {
 		return s.receiveLinear(ctx, r.Input)
 	}
@@ -117,15 +129,20 @@ func (s *Server) callDomain(ctx context.Context, r DomainRequest) (any, error) {
 		"release.create": s.createReleasePlan, "release.cancel": s.cancelReleasePlan,
 		"project.create":         s.createProject,
 		"project.connect_github": s.connectGitHub,
-		"member.chat":            s.bindChat,
-		"project.policy":         s.policy, "project.retention": s.retention, "workspace.limits": s.limits,
+		"github_project.issues":  s.projectIssues, "github_project.import": s.importProjectIssue,
+		"member.chat":    s.bindChat,
+		"project.policy": s.policy, "project.retention": s.retention, "workspace.limits": s.limits,
 		"workspace.budget": s.budget,
 		"device.limits":    s.deviceLimits,
 		"project.dispatch": s.dispatch, "decision.answer": s.answer, "message.create": s.message,
+		"worker.start": s.queueWorkerStart, "worker.starts": s.listWorkerStarts,
 		"plan.propose": s.proposePlan, "plan.approve": s.approvePlan, "plan.evidence": s.attestPrerequisite,
 		"publication.propose": s.publication, "publication.approve": s.publish,
 		"pull.queue": s.queuePull, "pull.refresh": s.refreshPull, "pull.evidence": s.recordPull, "pull.draft": s.requestDraft,
+		"pull.draft_plan": s.previewDraftPlan,
 		"incident.report": s.report, "incident.promote": s.promote,
+		"incident.related_work": s.relatedIncidentWork, "incident.link_issue": s.linkIncidentIssue,
+		"incident.browser_qa": s.incidentBrowserQA, "incident.share_browser_qa": s.shareBrowserQA, "pull.browser_qa": s.pullBrowserQA,
 		"incident.verdict": s.incidentVerdict, "incident.receipt": s.incidentReceipt,
 		"usage.threshold": s.setCostThreshold, "usage.price": s.setModelPrice, "usage.report": s.meterReport, "deployment.disable": s.disableMonitor, "deployment.configure": s.configureMonitor, "deployment.clear": s.clearHold,
 		"linear.link":   s.linkLinear,
@@ -147,12 +164,13 @@ func (s *Server) authorizeActor(call *domainCall, id string, role audit.Source, 
 	query := "SELECT EXISTS(SELECT FROM workspaces WHERE id=$1 AND account_id=$2)"
 	args := []any{workspace, id}
 	if role != audit.Owner {
-		allowed := op == "usage.report" || op == "incident.verdict" || op == "pull.refresh" || op == "incident.report"
+		allowed := op == "usage.report" || op == "incident.verdict" || op == "pull.refresh" || op == "incident.report" ||
+			op == "incident.related_work" || op == "incident.browser_qa" || op == "pull.browser_qa"
 		switch role {
 		case audit.Operator:
 		case audit.Approver:
 			allowed = allowed || op == "decision.answer" || op == "plan.approve" ||
-				op == "pull.evidence" || op == "pull.handover" || op == "pull.approve"
+				op == "pull.evidence" || op == "pull.handover" || op == "pull.approve" || op == "incident.share_browser_qa"
 		default:
 			return denied
 		}

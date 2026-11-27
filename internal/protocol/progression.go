@@ -12,6 +12,9 @@ type NextAction struct {
 	Disposition      string             `json:"disposition"`
 	Approver         string             `json:"approver,omitempty"`
 	Answer           string             `json:"answer,omitempty"`
+	Question         string             `json:"question,omitempty"`
+	Feedback         string             `json:"feedback,omitempty"`
+	PlanSummary      string             `json:"planSummary,omitempty"`
 	DecisionKind     string             `json:"decisionKind,omitempty"`
 	DecisionSubject  *CorrectionSubject `json:"decisionSubject,omitempty"`
 	PreparedEvidence *PreparedSignoff   `json:"preparedEvidence,omitempty"`

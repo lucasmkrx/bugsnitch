@@ -30,12 +30,14 @@ const usage = `Usage: bugsnitch COMMAND [OPTIONS]
   approval-github        Evaluate authenticated GitHub PR or merge-group observations
   approval-review-receipt Prepare a check-run body for an independently reviewed candidate
   approval-preview       Replay repository policy against labeled historical changes
-  doctor                 Check Git, native runner capabilities and Codex
+  doctor                 Check runner tools or an assigned project with --project
   models                 List models and reasoning settings on this runtime
   usage                  Read available ChatGPT allowance windows
-  proof                  Run a read-only ChatGPT authorization check
+  proof                  Run a read-only model authorization check
+  model-settings         Connect dashboard model settings to this local runner
   pair, rotate, unpair, status    Manage local device enrollment
   local-run              Execute a bounded batch of approved issues locally
+  portal-worker          Deliver portal-selected tickets on this paired project
   local-unattended       Authorize and supervise a batch on this paired device
   local-limits           Show or set this runner's ticket and model-turn limits
   next --project ID      Print the next verified issue selection
@@ -50,6 +52,7 @@ const usage = `Usage: bugsnitch COMMAND [OPTIONS]
   local-start            Start work on one owner-selected GitHub issue
   local-verify           Verify issue criteria on an identified build or deployment
   local-verification     Inspect a saved verification receipt
+  local-browser-qa       Capture browser evidence for the baseline and candidate
   local-continue         Approve a plan or request a bounded correction
   local-show             Inspect the complete local stage evidence
   local-usage            Read metered model usage for an attempt
@@ -99,6 +102,8 @@ func run(ctx context.Context, args []string) error {
 	switch args[0] {
 	case "local-run":
 		return device.LocalRun(ctx, args[1:], os.Stdout)
+	case "portal-worker":
+		return device.PortalWorker(ctx, args[1:], os.Stdout)
 	case "local-unattended":
 		return device.LocalUnattended(ctx, args[1:], os.Stdout)
 	case "local-limits":
@@ -117,7 +122,32 @@ func run(ctx context.Context, args []string) error {
 		return approvalCheck(ctx, args[1:])
 	case "approval-preview":
 		return approvalPreview(ctx, args[1:])
+	case "model-settings":
+		defaultOrigin := os.Getenv("BUGSNITCH_ORIGIN")
+		if defaultOrigin == "" {
+			defaultOrigin = "http://localhost:8787"
+		}
+		origin := fs.String("origin", defaultOrigin, "dashboard origin")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 {
+			return errors.New("use model-settings --origin DASHBOARD_ORIGIN")
+		}
+		return runner.ServeModelSettings(ctx, *origin, os.Stdout)
 	case "doctor":
+		project := fs.String("project", "", "assigned project ID")
+		environment := fs.String("environment", "", "target deployment environment")
+		runValidator := fs.Bool("run-validator", false, "execute the configured validator on a disposable export of HEAD")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if fs.NArg() != 0 || *project == "" && (*environment != "" || *runValidator) {
+			return errors.New("use doctor [--project PROJECT_ID [--environment ENVIRONMENT] [--run-validator]]")
+		}
+		if *project != "" {
+			return device.ProjectReadiness(ctx, *project, *environment, *runValidator, os.Stdout)
+		}
 		fmt.Printf("Platform %s/%s\n", runtime.GOOS, runtime.GOARCH)
 		if runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
 			return errors.New("local task execution requires macOS or Linux")
@@ -140,7 +170,16 @@ func run(ctx context.Context, args []string) error {
 			fmt.Println("Native runner helper unavailable or incompatible. Install the matching runner bundle.")
 			missing = true
 		}
-		for _, tool := range []string{"git", "codex"} {
+		api, err := runner.UsesOpenAIAPI()
+		if err != nil {
+			return err
+		}
+		tools := []string{"git", "codex"}
+		if api {
+			fmt.Println("OpenAI API configured. Run bugsnitch proof to check model access.")
+			tools = []string{"git"}
+		}
+		for _, tool := range tools {
 			cmd := exec.CommandContext(ctx, tool, "--version")
 			out, err := cmd.Output()
 			if err != nil {
@@ -155,11 +194,27 @@ func run(ctx context.Context, args []string) error {
 			}
 		}
 		if missing {
+			if api {
+				return errors.New("the runner requires its matching native helper and Git")
+			}
 			return fmt.Errorf("the runner requires its matching native helper, Git and Codex %s", agent.Version)
 		}
 		return nil
 	case "local-verify":
 		return localVerify(ctx, args[1:])
+	case "local-browser-qa":
+		id := fs.String("id", "", "local attempt ID")
+		if err := fs.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *id == "" || fs.NArg() != 0 {
+			return errors.New("use local-browser-qa --id ATTEMPT_ID")
+		}
+		report, err := runner.CaptureBrowserQA(ctx, *id)
+		if err != nil {
+			return err
+		}
+		return printJSON(report)
 	case "local-verification":
 		id := fs.String("id", "", "verification receipt ID")
 		if err := fs.Parse(args[1:]); err != nil {
@@ -204,7 +259,11 @@ func run(ctx context.Context, args []string) error {
 		if strings.TrimSpace(r.Text) != "BUGSNITCH_LOCAL_OK" {
 			return errors.New("completed turn did not return the expected marker")
 		}
-		return printJSON(map[string]string{"runtime": agent.Version, "auth": "chatgpt", "status": "completed", "model": r.Model, "thread": r.Thread, "turn": r.Turn, "response": "BUGSNITCH_LOCAL_OK"})
+		auth, runtime := "chatgpt", agent.Version
+		if r.Auth == "api-key" {
+			auth, runtime = r.Auth, "openai-responses"
+		}
+		return printJSON(map[string]string{"runtime": runtime, "auth": auth, "status": "completed", "model": r.Model, "thread": r.Thread, "turn": r.Turn, "response": "BUGSNITCH_LOCAL_OK"})
 	case "plan-draft":
 		workspace := fs.String("workspace", "personal", "local workspace id")
 		brief := fs.String("brief", "", "path to an owner-authored UTF-8 brief")
@@ -460,7 +519,7 @@ func main() {
 	runner.BeforeTurn, runner.AfterTurn = device.TurnStart, device.TurnEnd
 	signals := []os.Signal{os.Interrupt}
 	// These commands own long-running work and must finish cleanup on SIGTERM.
-	if len(os.Args) > 1 && (os.Args[1] == "sync" || os.Args[1] == "local-unattended" || os.Args[1] == "local-verify" && slices.Contains(os.Args[2:], "--")) {
+	if len(os.Args) > 1 && (os.Args[1] == "sync" || os.Args[1] == "model-settings" || os.Args[1] == "local-unattended" || os.Args[1] == "portal-worker" || os.Args[1] == "local-verify" && slices.Contains(os.Args[2:], "--")) {
 		signals = append(signals, syscall.SIGTERM)
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), signals...)

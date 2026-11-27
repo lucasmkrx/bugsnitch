@@ -28,6 +28,7 @@ func Retain(ctx context.Context, db *sql.DB) error {
 		"DELETE FROM pairings WHERE expires_at<=now()",
 		"UPDATE devices SET previous_hash=NULL WHERE previous_hash IS NOT NULL AND rotated_at<now()-interval '1 day'",
 		`DELETE FROM shared_diffs f USING projects p WHERE p.id=f.project_id AND f.created_at < now()-p.retention_days*interval '1 day'`,
+		`DELETE FROM incident_browser_qa q USING projects p WHERE p.id=q.project_id AND q.created_at < now()-p.retention_days*interval '1 day'`,
 		`UPDATE manager_messages m SET body='[Message expired]',redacted_at=now() FROM projects p WHERE p.id=m.project_id AND m.redacted_at IS NULL AND m.created_at<now()-p.retention_days*interval '1 day'`,
 		`UPDATE incident_inbox b SET observed='[Observation expired]',expected='',steps='',frames='[]',redacted_at=now() FROM projects p WHERE p.id=b.project_id AND b.processed AND b.redacted_at IS NULL AND b.accepted_at<now()-p.retention_days*interval '1 day'`,
 		`UPDATE incident_issues x SET status='blocked',reason='Observation expired before issue creation' FROM incidents i,projects p WHERE x.incident_id=i.id AND p.id=i.project_id AND x.status='queued' AND i.last_seen<now()-p.retention_days*interval '1 day'`,

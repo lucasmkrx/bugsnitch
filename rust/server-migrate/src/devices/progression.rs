@@ -21,6 +21,10 @@ struct Subject {
     #[serde(default)]
     request_plan: bool,
     #[serde(default)]
+    question: String,
+    #[serde(default)]
+    plan_summary: String,
+    #[serde(default)]
     recipient: String,
     correction: Option<Correction>,
     prepared: Option<Prepared>,
@@ -72,6 +76,16 @@ pub(super) fn device(db: &Db<'_>, input: Value) -> Result<Value> {
     if b.protocol != 1 || !valid_attempt(&b.attempt_id, b.version) || b.recipient.len() > 100 {
         return Err(Error::bad("Invalid attempt progression request"));
     }
+    let question = !b.question.is_empty();
+    if b.question.len() > 2048
+        || b.plan_summary.len() > 8192
+        || (!b.plan_summary.is_empty() && !b.request_plan)
+        || (question && (b.request_plan || b.correction.is_some() || !b.recipient.is_empty()))
+        || !crate::redact::shareable(&b.question)
+        || !crate::redact::shareable(&b.plan_summary)
+    {
+        return Err(Error::bad("Invalid shared checkpoint text"));
+    }
     let revision = b.version.to_string();
     let identity = db.optional(
         "SELECT a.workspace_id,a.project_id,a.device_id,w.account_id,p.policy_version,
@@ -82,7 +96,10 @@ pub(super) fn device(db: &Db<'_>, input: Value) -> Result<Value> {
                SELECT 1 FROM admission ad WHERE (ad.workspace_id,ad.project_id,ad.device_id,ad.attempt_id)
                  =(a.workspace_id,a.project_id,a.device_id,a.id) AND ad.owns_issue
           ),a.state='completed' AND a.phase='wrap_up' AND NOT p.paused AND NOT w.stopped AND p.allow_draft_pr,
-          a.issue_number,a.candidate_sha
+          a.issue_number,a.candidate_sha,
+          a.state='waiting' AND a.reason_code='owner_input_required' AND NOT p.paused AND NOT w.stopped
+             AND EXISTS (SELECT 1 FROM admission ad WHERE (ad.workspace_id,ad.project_id,ad.device_id,ad.attempt_id)
+                 =(a.workspace_id,a.project_id,a.device_id,a.id) AND ad.owns_issue)
          FROM attempt_reports a JOIN devices d ON (d.workspace_id,d.id)=(a.workspace_id,a.device_id)
          JOIN device_projects dp ON (dp.workspace_id,dp.project_id,dp.device_id)=(a.workspace_id,a.project_id,a.device_id)
          JOIN projects p ON (p.workspace_id,p.id)=(a.workspace_id,a.project_id)
@@ -92,7 +109,7 @@ pub(super) fn device(db: &Db<'_>, input: Value) -> Result<Value> {
         &[&token_hash,&b.attempt_id,&revision],
     )?.ok_or_else(Error::denied)?;
     let (ws, project, device) = (identity.text(0)?, identity.text(1)?, identity.text(2)?);
-    if b.request_plan || b.correction.is_some() {
+    if b.request_plan || b.correction.is_some() || question {
         let expiry = b.expires_at.as_deref().unwrap_or("");
         if !expiry.is_empty()
             && OffsetDateTime::parse(expiry, &Rfc3339)
@@ -103,6 +120,7 @@ pub(super) fn device(db: &Db<'_>, input: Value) -> Result<Value> {
         }
         if identity.text(5)?.is_empty()
             || (b.request_plan && (!identity.bool(6)? || b.correction.is_some()))
+            || (question && !identity.bool(10)?)
         {
             return Err(Error::conflict(
                 "The plan checkpoint is no longer waiting for approval",
@@ -145,10 +163,20 @@ pub(super) fn device(db: &Db<'_>, input: Value) -> Result<Value> {
                 subject.to_string(),
                 "Approval requested for the exact reviewed PR correction",
             )
+        } else if question {
+            (
+                "owner_question",
+                json!({"question":b.question}).to_string(),
+                "Owner input requested for the current ticket checkpoint",
+            )
         } else {
             (
                 "implementation_plan",
-                "{}".to_owned(),
+                if b.plan_summary.is_empty() {
+                    "{}".to_owned()
+                } else {
+                    json!({"planSummary":b.plan_summary}).to_string()
+                },
                 "Approval requested for the exact local implementation plan",
             )
         };
@@ -244,7 +272,11 @@ pub(super) fn device(db: &Db<'_>, input: Value) -> Result<Value> {
             )?;
         }
     }
-    let row = db.one("SELECT action::text FROM attempt_progression WHERE workspace_id=$1 AND id=$2 AND version=$3",
+    let row = db.one("SELECT (a.action || CASE WHEN a.action->>'kind'='owner_input' AND a.action->>'answer'='answered'
+            THEN jsonb_build_object('feedback',q.feedback) ELSE '{}'::jsonb END)::text
+        FROM attempt_progression a LEFT JOIN ticket_decisions q ON
+            (q.workspace_id,q.attempt_id,q.attempt_version)=(a.workspace_id,a.id,a.version) AND q.kind='owner_question'
+        WHERE a.workspace_id=$1 AND a.id=$2 AND a.version=$3",
         &[ws,&b.attempt_id,&revision])?;
     Ok(serde_json::from_str(row.text(0)?)?)
 }
@@ -256,19 +288,29 @@ pub struct Answer {
     attempt_id: String,
     version: i64,
     answer: String,
+    #[serde(default)]
+    feedback: String,
 }
 
 pub(super) fn answer(db: &Db<'_>, b: Answer) -> Result<Value> {
-    if !valid_attempt(&b.attempt_id, b.version) || !matches!(b.answer.as_str(), "approve" | "hold")
+    let feedback = b.feedback.trim();
+    if !valid_attempt(&b.attempt_id, b.version)
+        || !match b.answer.as_str() {
+            "approve" | "hold" => feedback.is_empty(),
+            "answered" => {
+                !feedback.is_empty() && feedback.len() <= 2048 && crate::redact::shareable(feedback)
+            }
+            _ => false,
+        }
     {
         return Err(Error::bad(
-            "Choose Approve or Hold for the exact checkpoint",
+            "Choose a valid checkpoint response. Keep answers under 2049 bytes and remove sensitive values.",
         ));
     }
     let revision = b.version.to_string();
     let (role, actor) = db.actor();
     let row = db.optional(
-        "SELECT a.project_id,q.answer,q.kind FROM ticket_decisions q
+        "SELECT a.project_id,q.answer,q.kind,coalesce(q.feedback,'') FROM ticket_decisions q
          JOIN attempt_reports a ON (a.workspace_id,a.id,a.version)=(q.workspace_id,q.attempt_id,q.attempt_version)
          JOIN projects p ON (p.workspace_id,p.id)=(a.workspace_id,a.project_id)
          JOIN workspaces w ON w.id=a.workspace_id
@@ -277,7 +319,8 @@ pub(super) fn answer(db: &Db<'_>, b: Answer) -> Result<Value> {
            AND q.expires_at>now() AND q.subject_policy=p.policy_version
            AND q.plan_id=(SELECT id FROM plan_versions v WHERE (v.workspace_id,v.project_id)=(a.workspace_id,a.project_id)
                  AND v.approved_at IS NOT NULL ORDER BY v.version DESC LIMIT 1)
-           AND ((q.kind='implementation_plan' AND a.state='waiting' AND a.phase='implement' AND a.reason_code='plan_review_required')
+           AND ((q.kind='owner_question' AND a.reason_code='owner_input_required' AND a.state='waiting' AND $5='owner')
+             OR (q.kind='implementation_plan' AND a.state='waiting' AND a.phase='implement' AND a.reason_code='plan_review_required')
              OR (q.kind='publish_correction' AND a.state='completed' AND a.phase='wrap_up' AND p.allow_draft_pr
                AND EXISTS(SELECT 1 FROM pull_observations o
                  WHERE (o.workspace_id,o.project_id,o.number)=(a.workspace_id,a.project_id,(q.subject->>'pullNumber')::bigint)
@@ -292,15 +335,18 @@ pub(super) fn answer(db: &Db<'_>, b: Answer) -> Result<Value> {
            ))) FOR UPDATE OF q FOR SHARE OF a,p,w,d",
         &[&b.workspace,&b.attempt_id,&revision,actor,role],
     )?.ok_or_else(|| Error::conflict("The ticket decision is stale or assigned to another approver"))?;
+    if (row.text(2)? == "owner_question") != (b.answer == "answered") {
+        return Err(Error::bad("The response does not match this checkpoint"));
+    }
     if let Some(previous) = row.opt(1)? {
-        return if previous == b.answer {
+        return if previous == b.answer && row.text(3)? == feedback {
             Ok(json!({"answer":b.answer}))
         } else {
             Err(Error::conflict("This checkpoint already has an answer"))
         };
     }
     db.exec(
-        "UPDATE ticket_decisions SET answer=$4,answered_at=now()
+        "UPDATE ticket_decisions SET answer=$4,feedback=nullif($6,''),answered_at=now()
          WHERE workspace_id=$1 AND attempt_id=$2 AND attempt_version=$3 AND kind=$5",
         &[
             &b.workspace,
@@ -308,6 +354,7 @@ pub(super) fn answer(db: &Db<'_>, b: Answer) -> Result<Value> {
             &revision,
             &b.answer,
             row.text(2)?,
+            feedback,
         ],
     )?;
     db.event(

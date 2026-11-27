@@ -65,6 +65,16 @@ pub(super) fn reads() -> Router<Shared> {
 pub(super) fn routes() -> Router<Shared> {
     let mut r = Router::new();
     r = r.route(
+        "/api/v1/projects/{project}/attempts/{id}/draft-plan",
+        get(|State(s), Extension(o), Path(p)| {
+            command(s, o, "pull.draft_plan", p, None, Value::Null)
+        }),
+    );
+    r = r.route(
+        "/api/v1/projects/{project}/worker-starts",
+        get(|State(s), Extension(o), Path(p)| command(s, o, "worker.starts", p, None, Value::Null)),
+    );
+    r = r.route(
         "/api/v1/projects/{project}/incidents/{id}/verification",
         get(
             |State(s), Extension(o), Path(p), Query(q): Query<Filters>| {
@@ -78,6 +88,25 @@ pub(super) fn routes() -> Router<Shared> {
             command(s, o, "policy_cases.subjects", p, None, Value::Null)
         }),
     );
+    for (path, op) in [
+        (
+            "/api/v1/projects/{project}/incidents/{id}/related-work",
+            "incident.related_work",
+        ),
+        (
+            "/api/v1/projects/{project}/incidents/{id}/browser-qa",
+            "incident.browser_qa",
+        ),
+        (
+            "/api/v1/projects/{project}/pulls/{number}/browser-qa",
+            "pull.browser_qa",
+        ),
+    ] {
+        r = r.route(
+            path,
+            get(move |State(s), Extension(o), Path(p)| command(s, o, op, p, None, Value::Null)),
+        );
+    }
     r = r.route(
         "/api/v1/projects/{project}/policy-cases",
         get(|State(s), Extension(o), Path(p)| {
@@ -90,6 +119,18 @@ pub(super) fn routes() -> Router<Shared> {
             "policy_cases.label",
         ),
         ("/api/v1/projects", "project.create"),
+        (
+            "/api/v1/projects/{project}/github-project/issues",
+            "github_project.issues",
+        ),
+        (
+            "/api/v1/projects/{project}/github-project/import",
+            "github_project.import",
+        ),
+        (
+            "/api/v1/projects/{project}/issues/{number}/start",
+            "worker.start",
+        ),
         ("/api/v1/releases", "release.create"),
         ("/api/v1/releases/{id}/cancel", "release.cancel"),
         ("/api/v1/members/{id}/chat", "member.chat"),
@@ -164,6 +205,14 @@ pub(super) fn routes() -> Router<Shared> {
         ("/api/v1/projects/{project}/usage", "usage.report"),
         ("/api/v1/incidents", "incident.report"),
         (
+            "/api/v1/projects/{project}/incidents/{id}/link-issue",
+            "incident.link_issue",
+        ),
+        (
+            "/api/v1/projects/{project}/incidents/{id}/browser-qa",
+            "incident.share_browser_qa",
+        ),
+        (
             "/api/v1/projects/{project}/incidents/{id}/promote",
             "incident.promote",
         ),
@@ -180,10 +229,12 @@ pub(super) fn routes() -> Router<Shared> {
         // Receipt submissions have a smaller public wire limit than other commands.
         r = r.route(
             path,
-            if op == "incident.receipt" {
-                handler.layer(axum::extract::DefaultBodyLimit::max(8192))
-            } else {
-                handler
+            match op {
+                "incident.receipt" => handler.layer(axum::extract::DefaultBodyLimit::max(8192)),
+                "incident.share_browser_qa" => {
+                    handler.layer(axum::extract::DefaultBodyLimit::max(224 << 10))
+                }
+                _ => handler,
             },
         );
     }

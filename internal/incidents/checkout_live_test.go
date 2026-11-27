@@ -188,7 +188,28 @@ func checkoutIncidentRepair(t *testing.T) {
 	issue := runner.Issue(fixture.Promote())
 	// The advertised offer and reproducer supply this owner-selected scope.
 	issue.Criteria = []string{"Orders of exactly 5000 cents ship free. Preserve the $5 fee at 4999 cents and free shipping at 5001 cents.", "Keep the shippingCents API and current invalid-input behavior. The unchanged node verify.mjs must pass."}
-	if err = runner.AddProject("personal", issue.Repository, repo, runner.Config{Files: []string{"shipping.mjs"}, Validate: []string{node, "verify.mjs"}}); err != nil {
+	harness, err := filepath.Abs(filepath.Join(checkoutSource, "browser-qa.mjs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	playwright, err := filepath.Abs("../../web/node_modules/playwright-core/index.mjs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	browserCommand := []string{node, harness, playwright}
+	if bin := os.Getenv("BUGSNITCH_TEST_CHROME"); bin != "" {
+		if !filepath.IsAbs(bin) {
+			bin, err = filepath.Abs(filepath.Join("../../web", bin))
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		browserCommand = append(browserCommand, bin)
+	}
+	if err = runner.AddProject("personal", issue.Repository, repo, runner.Config{
+		Files: []string{"shipping.mjs"}, Validate: []string{node, "verify.mjs"},
+		BrowserQA: map[int]runner.BrowserQACheck{issue.Number: {Assertion: "An order of $50 ships free.", Command: browserCommand}},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
@@ -225,6 +246,15 @@ func checkoutIncidentRepair(t *testing.T) {
 		t.Fatalf("missing validation or independent review on %s", a.CandidateSHA)
 	}
 	t.Logf("Local attempt %s: baseline %s failed; candidate %s passed node verify.mjs and independent review turn", a.ID, base, a.CandidateSHA)
+	qa, err := runner.CaptureBrowserQA(ctx, a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := qa.Validate(); err != nil || qa.Before.Revision != base || qa.After.Revision != a.CandidateSHA ||
+		qa.Before.Result != "fail" || qa.After.Result != "pass" || qa.Before.Observed == qa.After.Observed {
+		t.Fatalf("unexpected QA comparison: before=%s, after=%s, err=%v", qa.Before.Observed, qa.After.Observed, err)
+	}
+	t.Logf("Browser QA on the committed exports: %s → %s", qa.Before.Observed, qa.After.Observed)
 	fixture.Observe(incidents.Receipt{Kind: "fix", Candidate: a.CandidateSHA, Evidence: "Runner validation and independent review turn, attempt " + a.ID}, "Awaiting deployment")
 	monitor := fixture.Monitor(a.CandidateSHA)
 	site := newCheckoutSite(t)

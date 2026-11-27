@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lucasmkrx/bugsnitch/internal/incidents"
 	"github.com/lucasmkrx/bugsnitch/internal/protocol"
 	"github.com/lucasmkrx/bugsnitch/internal/runner"
 )
@@ -22,7 +23,8 @@ func watchProgression(ctx context.Context, p profile, project string, wake chan<
 	var after int64
 	for ctx.Err() == nil {
 		var current struct {
-			Position int64 `json:"position"`
+			Position        int64 `json:"position"`
+			NextPollSeconds int   `json:"nextPollSeconds"`
 		}
 		request := struct {
 			Protocol int    `json:"protocol"`
@@ -40,7 +42,8 @@ func watchProgression(ctx context.Context, p profile, project string, wake chan<
 			after = current.Position
 			continue
 		}
-		timer := time.NewTimer(time.Second)
+		seconds := max(1, min(current.NextPollSeconds, 60))
+		timer := time.NewTimer(time.Duration(seconds) * time.Second)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -59,7 +62,12 @@ CREATE TABLE IF NOT EXISTS unattended_observations(
 );`
 
 func (g unattendedGrant) authority() runner.UnattendedAuthority {
-	return runner.UnattendedAuthority{GrantID: g.ID, Digest: g.ProjectDigest, Corrections: g.Corrections, TakeTurn: g.takeTurn}
+	a := runner.UnattendedAuthority{GrantID: g.ID, Digest: g.ProjectDigest, Corrections: g.Corrections, TakeTurn: g.takeTurn}
+	if g.PortalDecisions {
+		a.FirstAttemptID = g.ID
+		a.PublishTarget = g.PublishTarget
+	}
+	return a
 }
 
 func unattendedActions(ctx context.Context, g unattendedGrant) ([]protocol.NextAction, error) {
@@ -119,6 +127,8 @@ func (g unattendedGrant) effect(ctx context.Context, a runner.Attempt, key strin
 }
 
 type progressionRequest struct {
+	Question     string                      `json:"question,omitempty"`
+	PlanSummary  string                      `json:"planSummary,omitempty"`
 	Protocol     int                         `json:"protocol"`
 	AttemptID    string                      `json:"attemptId"`
 	Version      int                         `json:"version"`
@@ -184,7 +194,8 @@ func observeUnattended(ctx context.Context, p selectionProject, g unattendedGran
 		return n, a, true, saveNextAction(ctx, g, n)
 	}
 	approver := ""
-	if a.State == "waiting" && a.ReasonCode == protocol.PlanReviewRequired {
+	question := a.State == "waiting" && a.ReasonCode == protocol.OwnerInputRequired && g.PortalDecisions && a.OwnerQuestion != ""
+	if a.State == "waiting" && (a.ReasonCode == protocol.PlanReviewRequired || question) {
 		approver = g.PlanApprover
 	}
 	if approver == "" && (a.State != "completed" || g.PublishTarget == "" && g.PlanApprover == "") {
@@ -193,7 +204,17 @@ func observeUnattended(ctx context.Context, p selectionProject, g unattendedGran
 	req := progressionRequest{Protocol: protocol.Version, AttemptID: a.ID, Version: a.Version}
 	if approver != "" {
 		req.RequestPlan, req.ExpiresAt = true, &g.Expires
-		if approver != "owner" {
+		if question {
+			req.RequestPlan, req.Question = false, incidents.Redact(a.OwnerQuestion)
+		} else if g.PortalDecisions {
+			for _, artifact := range slices.Backward(a.Artifacts) {
+				if artifact.Phase == "plan" {
+					req.PlanSummary = incidents.Redact(artifact.Summary)
+					break
+				}
+			}
+		}
+		if !question && approver != "owner" {
 			req.Recipient = approver
 		}
 	}
@@ -211,11 +232,28 @@ func observeUnattended(ctx context.Context, p selectionProject, g unattendedGran
 			return next, a, true, err
 		}
 	}
-	return next, a, true, saveNextAction(ctx, g, next)
+	display := next
+	display.Feedback = ""
+	return display, a, true, saveNextAction(ctx, g, display)
 }
 
 func progressAttempt(ctx context.Context, p selectionProject, g unattendedGrant, a runner.Attempt, next protocol.NextAction) error {
 	switch next.Kind {
+	case "owner_input":
+		if !g.PortalDecisions || next.Answer != "answered" || next.Question != incidents.Redact(a.OwnerQuestion) {
+			return nil
+		}
+		return g.effect(ctx, a, next.Kind, false, func() error {
+			fresh, err := hostedNextAction(ctx, p.enrolled, a, "")
+			if err != nil {
+				return err
+			}
+			if fresh.Kind != next.Kind || fresh.Answer != "answered" || fresh.Question != next.Question || fresh.Feedback == "" {
+				return runner.ErrAuthorityStale
+			}
+			_, err = runner.AnswerUnattendedQuestion(ctx, a, g.authority(), fresh.Feedback)
+			return err
+		})
 	case "recover_commit":
 		return g.effect(ctx, a, next.Kind, true, func() error { _, err := runner.RecoverCommit(a.ID); return err })
 	case "resume_candidate":
@@ -336,7 +374,7 @@ func prepareSignoff(ctx context.Context, p profile, g unattendedGrant, a runner.
 	}
 	key := fmt.Sprintf("combined_validation:%x", sha256.Sum256([]byte(pull.Base+" "+pull.Target)))
 	return g.effect(ctx, a, key, false, func() error {
-		ref, err := runner.RetainInspectedBase(ctx, a, pull.Target, pull.Base)
+		ref, err := runner.RetainInspectedBase(ctx, a.Project, pull.Target, pull.Base)
 		if err != nil {
 			return err
 		}
@@ -399,7 +437,9 @@ func scanProgress(ctx context.Context, p selectionProject, g unattendedGrant, at
 
 func (job unattendedProgress) pending(g unattendedGrant) bool {
 	switch job.next.Kind {
-	case "finished", "terminal", "device_revoked", "dispatch_paused", "hold", "inspect_revision", "inspect_execution":
+	case "owner_input":
+		return g.PortalDecisions && job.next.DecisionKind == "owner_question" && job.next.ExpiresAt != nil && time.Now().Before(*job.next.ExpiresAt)
+	case "finished", "terminal", "device_revoked", "dispatch_paused", "hold", "inspect_revision", "inspect_execution", "wait_deployment", "deployment_handover":
 		return false
 	case "review_plan":
 		return job.next.Answer != "hold" && (job.next.ExpiresAt == nil || time.Now().Before(*job.next.ExpiresAt))
@@ -412,6 +452,8 @@ func (job unattendedProgress) pending(g unattendedGrant) bool {
 
 func (job unattendedProgress) runnable() bool {
 	switch job.next.Kind {
+	case "owner_input":
+		return job.next.Answer == "answered"
 	case "review_plan":
 		return job.next.Answer == "approve"
 	case "recover_commit", "resume_candidate", "publish_draft", "publish_correction", "wait_inspection", "prepare_signoff":
@@ -451,6 +493,7 @@ func observeProject(ctx context.Context, project string) ([]protocol.NextAction,
 		} else if err != nil {
 			return nil, err
 		}
+		action.Feedback = ""
 		actions = append(actions, action)
 	}
 	return actions, nil

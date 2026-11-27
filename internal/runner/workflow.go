@@ -63,16 +63,28 @@ func create(ctx context.Context, w, r string, i Issue, previous, reason string, 
 	if err = verifyIssue(ctx, i); err != nil {
 		return a, err
 	}
-	sha, err := git(p.Path, "rev-parse", "HEAD^{commit}")
+	var sha string
+	grant, unattended := ctx.Value(unattendedKey{}).(unattendedPass)
+	switch {
+	case steward != nil:
+		sha = steward.PreviousHead
+	case unattended && previous == "" && grant.firstAttemptID != "":
+		sha, err = portalTicketBase(ctx, p, grant.publishTarget)
+	default:
+		sha, err = git(p.Path, "rev-parse", "HEAD^{commit}")
+	}
 	if err != nil {
 		return a, err
-	}
-	if steward != nil {
-		sha = steward.PreviousHead
 	}
 	id, err := newID()
 	if err != nil {
 		return a, err
+	}
+	if unattended && previous == "" && grant.firstAttemptID != "" {
+		if !idPattern.MatchString(grant.firstAttemptID) {
+			return a, errors.New("invalid portal start identity")
+		}
+		id = grant.firstAttemptID
 	}
 	dir, err := home()
 	if err != nil {
@@ -80,7 +92,7 @@ func create(ctx context.Context, w, r string, i Issue, previous, reason string, 
 	}
 	a = Attempt{Summary: Summary{ID: id, Workspace: w, Repository: p.Repository, IssueNumber: i.Number, BaseSHA: sha, Version: 1, Phase: "plan", State: "waiting"}, Project: p, Issue: i, CreatedAt: now(), Branch: "bugsnitch/" + id, Worktree: filepath.Join(dir, "worktrees", id)}
 	a.Steward = steward
-	if grant, ok := ctx.Value(unattendedKey{}).(unattendedPass); ok {
+	if unattended {
 		a.UnattendedGrant = grant.grantID
 	}
 	a.UpdatedAt = a.CreatedAt
@@ -112,11 +124,12 @@ func create(ctx context.Context, w, r string, i Issue, previous, reason string, 
 		a.Version = 2
 		capacityCondition = " AND (SELECT count(*) FROM journal_attempts WHERE json_extract(data,'$.state')='running') < (SELECT ticket_limit FROM runner_capacity WHERE id=1)"
 	}
-	b, err := query(fmt.Sprintf("BEGIN IMMEDIATE; INSERT OR IGNORE INTO journal_attempts SELECT %s,%s,%s,%d,%d,%s,generation FROM (SELECT (%s) AS generation) WHERE generation IS NOT NULL%s; %s; COMMIT;", literal(id), literal(w), literal(p.Repository), i.Number, a.Version, packed(&a), generation, capacityCondition, latest))
+	b, err := query(fmt.Sprintf("BEGIN IMMEDIATE; INSERT OR IGNORE INTO journal_attempts SELECT %s,%s,%s,%d,%d,%s,generation FROM (SELECT (%s) AS generation) WHERE generation IS NOT NULL%s; SELECT changes() || ':' || coalesce((%s),''); COMMIT;", literal(id), literal(w), literal(p.Repository), i.Number, a.Version, packed(&a), generation, capacityCondition, latest))
 	if err != nil {
 		return a, err
 	}
-	if prior := strings.TrimSpace(string(b)); prior != id {
+	inserted, prior, _ := strings.Cut(strings.TrimSpace(string(b)), ":")
+	if prior != id || inserted != "1" {
 		if prior == "" && admitted != nil {
 			return Attempt{}, ErrTicketCapacity
 		}
@@ -181,6 +194,13 @@ func continueAttempt(ctx context.Context, id, feedback string, version int, unti
 		return a, errors.New("answer the recorded owner question with --feedback before continuing")
 	}
 	guarded := a.OwnerQuestion == "" && (a.Steward != nil || version != 0 && a.LocalRunScope != nil && a.Project.Config.AutoCorrect)
+	if _, unattended := ctx.Value(unattendedKey{}).(unattendedPass); unattended {
+		guarded = true
+		if a.PendingSensitivePath != "" && feedback == "Allow "+a.PendingSensitivePath {
+			a.ApprovedSensitivePaths = append(a.ApprovedSensitivePaths, a.PendingSensitivePath)
+		}
+		a.PendingSensitivePath = ""
+	}
 	return advance(ctx, &a, feedback, guarded)
 }
 func hook(f func(Summary) error, a *Attempt) error {
@@ -300,18 +320,16 @@ func (c Config) forStage(phase string) StageSettings {
 }
 
 var modelTurn = func(ctx context.Context, a *Attempt, directive, prompt string, schema any) (agent.Result, error) {
-	settings := a.Project.Config.forStage(a.Phase)
+	return configuredModelTurn(ctx, a.Project.Config.forStage(a.Phase), directive, prompt, schema)
+}
+
+func configuredModelTurn(ctx context.Context, settings StageSettings, directive, prompt string, schema any) (agent.Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(settings.TimeoutSeconds)*time.Second)
 	defer cancel()
 	if settings.Provider == "claude" {
 		return agent.Claude(ctx, directive, prompt, settings.Model, settings.Reasoning, schema)
 	}
-	c, err := agent.Open(ctx)
-	if err != nil {
-		return agent.Result{}, err
-	}
-	defer c.Close()
-	return c.Turn(directive, prompt, settings.Model, settings.Reasoning, schema)
+	return openAIOrCodex(ctx, directive, prompt, settings.Model, settings.Reasoning, schema)
 }
 
 var MeasureWorker func(Summary, agent.Result)
@@ -455,8 +473,10 @@ func steps(ctx context.Context, a *Attempt, ordinaryPass bool) error {
 	}
 	if ordinaryPass {
 		for _, change := range changes {
-			if protectedChange(change.path) {
-				a.OwnerQuestion = "The proposed change touches " + change.path + ". Which changes to this sensitive path do you approve for this ticket?"
+			if protectedChange(change.path) && !slices.Contains(a.ApprovedSensitivePaths, change.path) {
+				a.PendingSensitivePath = change.path
+				a.OwnerAnswer = ""
+				a.OwnerQuestion = "The proposed change touches " + change.path + ". Reply “Allow " + change.path + "” to authorize this path for the candidate, or describe an alternative."
 				a.Message = "Sensitive change requires owner feedback."
 				a.State = "waiting"
 				a.ReasonCode = protocol.OwnerInputRequired
@@ -474,6 +494,7 @@ func steps(ctx context.Context, a *Attempt, ordinaryPass bool) error {
 		return err
 	}
 	a.Intent = intentFor(expected, changes, recordTurn(a, r, work.Summary))
+	a.ApprovedSensitivePaths = nil
 	if err = a.save(); err != nil {
 		return err
 	}

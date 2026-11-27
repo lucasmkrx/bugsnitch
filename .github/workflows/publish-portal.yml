@@ -1,0 +1,71 @@
+name: Publish portal image
+
+on:
+  push:
+    branches: [codex/portal-release]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - name: Build and smoke-test the portal
+        id: image
+        shell: bash
+        run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}:git-$GITHUB_SHA"
+          docker build --file deploy/Dockerfile --tag "$image" \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" .
+          printf 'name=%s\n' "$image" >> "$GITHUB_OUTPUT"
+          network="portal-smoke-$GITHUB_RUN_ID"
+          postgres="$network-db"
+          portal="$network-app"
+          trap 'docker rm -f "$portal" "$postgres" >/dev/null 2>&1 || true; docker network rm "$network" >/dev/null 2>&1 || true' EXIT
+          docker network create "$network" >/dev/null
+          password=$(openssl rand -hex 24)
+          docker run -d --name "$postgres" --network "$network" \
+            -e "POSTGRES_PASSWORD=$password" postgres:17.12-alpine >/dev/null
+          for i in {1..30}; do
+            if docker exec "$postgres" pg_isready -h 127.0.0.1 -U postgres; then break; fi
+            sleep 1
+          done
+          docker exec "$postgres" pg_isready -h 127.0.0.1 -U postgres
+          owner_token=$(openssl rand -hex 32)
+          schedule_token=$(openssl rand -hex 32)
+          docker run -d --name "$portal" --network "$network" -p 127.0.0.1:8787:8787 \
+            -e "DATABASE_URL=postgresql://postgres:$password@$postgres/postgres?sslmode=disable" \
+            -e BUGSNITCH_ORIGIN=http://127.0.0.1:8787 \
+            -e "BUGSNITCH_OWNER_TOKEN=$owner_token" \
+            -e "BUGSNITCH_SCHEDULE_TOKEN=$schedule_token" "$image" >/dev/null
+          for i in {1..40}; do
+            if curl -fsS --max-time 2 http://127.0.0.1:8787/readyz >/dev/null 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:8787/readyz
+          curl -fsS http://127.0.0.1:8787/app/ >/dev/null
+          test "$(curl -so /dev/null -w '%{http_code}' http://127.0.0.1:8787/api/v1/state)" = 401
+          test "$(curl -so /dev/null -w '%{http_code}' -X POST http://127.0.0.1:8787/internal/jobs/tick)" = 401
+          test "$(curl -so /dev/null -w '%{http_code}' -H "Authorization: Bearer $schedule_token" \
+            -X POST http://127.0.0.1:8787/internal/jobs/tick)" = 204
+
+      - name: Publish the verified image
+        shell: bash
+        env:
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE: ${{ steps.image.outputs.name }}
+        run: |
+          printf '%s' "$REGISTRY_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+          trap 'docker logout ghcr.io >/dev/null' EXIT
+          docker push "$IMAGE"
+          digest=$(docker image inspect --format '{{index .RepoDigests 0}}' "$IMAGE")
+          printf 'Verified image: `%s`\n' "$digest" >> "$GITHUB_STEP_SUMMARY"

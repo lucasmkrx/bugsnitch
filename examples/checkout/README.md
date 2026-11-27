@@ -18,6 +18,12 @@ Chromium clicks the broken checkout twice. The actual SDK captures each exceptio
 
 The runner creates a disposable Git worktree, pauses after planning, applies the authorized repair and runs the original regression command. The test checks that successful validation and independent review belong to the candidate SHA. A loopback HTTP service hosts the candidate's static assets and SDK. The page reads its build ID from the SHA-256 manifest of the served files. The fixture sends signed GitHub deployment events to the public webhook and checks the CI promotion gate. Chromium clicks **Calculate shipping** on the served build and checks the visible result before the independent verifier fixture submits its signed check. Redeploying identical assets requires a fresh browser check. A report from the still-running old build preserves the verdict. An injected recurrence on the fixed build returns the incident to triage and holds promotion.
 
+## Browser QA evidence
+
+The acceptance exercise also configures `browser-qa.mjs` to run the same interaction on both committed snapshots and capture the checkout in PNG. It expects the browser to show a $5 shipping fee before the repair and free shipping after it.
+
+To reuse this check with a standalone checkout fixture, set the `browserQA` command to an absolute Node executable, the trusted `browser-qa.mjs` from this repository, and the absolute `web/node_modules/playwright-core/index.mjs` path. Optionally add an absolute Chromium executable path as the final argument. Register the check under the linked incident’s issue number. [Runner setup and sharing](../../docs/RUNNER.md#capture-before-and-after-browser-qa)
+
 ## Run the repair with a live local Codex account
 
 First run the acceptance target to prepare the dependencies and confirm the browser and database setup. Its temporary database is removed when the target exits. For the direct Go test below, set `BUGSNITCH_TEST_DATABASE_URL` to a running disposable PostgreSQL database where the test role can create schemas. Export the helper paths and sign in to the supported local Codex runtime with your ChatGPT account. This opt-in uses live planning, implementation and independent review turns and spends that account's allowance. The provider endpoints and served deployment still run on loopback. [Helper paths](../../README.md#verification-and-operations)

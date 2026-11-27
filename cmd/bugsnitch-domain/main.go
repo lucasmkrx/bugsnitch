@@ -78,10 +78,16 @@ func run() error {
 	defer func() { stop(); work.Wait() }()
 	if token := os.Getenv("BUGSNITCH_LINEAR_AGENT_TOKEN"); token != "" {
 		service.LinearAgent = linear.New("Bearer " + token)
-		work.Go(func() { service.ProcessLinearSessions(ctx) })
 	}
-	work.Go(func() { storage.Maintain(ctx, db) })
-	work.Go(func() { runBackground(ctx, db, dsn, app, service.ProgressionWakes.Signal) })
+	if os.Getenv("BUGSNITCH_BACKGROUND_MODE") == "scheduled" {
+		service.ScheduledJobs = func(ctx context.Context) error { return runScheduledJobs(ctx, &service, app) }
+	} else {
+		if service.LinearAgent != nil {
+			work.Go(func() { service.ProcessLinearSessions(ctx) })
+		}
+		work.Go(func() { storage.Maintain(ctx, db) })
+		work.Go(func() { runBackground(ctx, db, dsn, app, service.ProgressionWakes.Signal) })
+	}
 	go func() { <-ctx.Done(); _ = listener.Close() }()
 	if _, err = os.Stdout.Write([]byte{1}); err != nil {
 		return err

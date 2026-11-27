@@ -250,6 +250,9 @@ func AddProject(w, r, path string, config Config) error {
 		return errors.New("validation executable unavailable")
 	}
 	config.Validate[0] = bin
+	if err := configureBrowserQA(dir, config.BrowserQA); err != nil {
+		return err
+	}
 	for _, name := range config.Files {
 		if _, err := readFile(dir, name); err != nil {
 			return err

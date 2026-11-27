@@ -120,3 +120,21 @@ func (a *App) ReadIssue(ctx context.Context, installation, repository int64, nam
 	defer r.Close()
 	return r.Get(ctx, n)
 }
+
+type RelatedWork struct {
+	Number int64  `json:"number"`
+	Title  string `json:"title"`
+	Body   string `json:"body"`
+	Pull   bool   `json:"pull"`
+}
+
+func (a *App) RecentWork(ctx context.Context, installation, repository int64, name string) ([]RelatedWork, error) {
+	r, err := a.open(ctx, installation, repository, name, "read_issue")
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	var items []RelatedWork
+	err = r.call(ctx, fields{"op": "recent_work"}, &items)
+	return items, err
+}

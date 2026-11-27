@@ -138,6 +138,9 @@ func runBackground(ctx context.Context, db *sql.DB, dsn string, app *github.App,
 	var work sync.WaitGroup
 	defer work.Wait()
 	work.Go(func() { watchJobs(ctx, dsn, wake, progress) })
+	if app != nil {
+		work.Go(func() { runBoardSync(ctx, db, app) })
+	}
 	stores := backgroundStores{db, app, incidents.Store{DB: db}, integration.Store{DB: db, App: app}, planning.Store{DB: db}}
 	lanes := []string{"inbox"}
 	if app != nil {

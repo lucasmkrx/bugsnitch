@@ -28,7 +28,7 @@ const groups: [string, Page[]][] = [
 const summaries: Record<Page, string> = {
   overview: "Delivery, incidents, and decisions across your projects.",
   plans: "Deliverables, acceptance criteria, and execution order.",
-  work: "Canonical issues and evidence from registered computers.",
+  work: "Start a worker on a GitHub ticket and follow its progress.",
   prs: "Review status and integration readiness.",
   incidents: "Application failures, reproduction evidence, and repair status.",
   decisions: "Review the evidence and choose the next action.",

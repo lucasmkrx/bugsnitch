@@ -3,6 +3,8 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"regexp"
 	"strconv"
 	"strings"
@@ -26,17 +28,28 @@ type Handover struct {
 
 type HandoverReceipt struct {
 	Handover
-	RecordedAt time.Time `json:"recordedAt"`
-	RecordedBy string    `json:"recordedBy"`
+	RecordedAt time.Time   `json:"recordedAt"`
+	RecordedBy string      `json:"recordedBy"`
+	Cost       *WorkerCost `json:"cost,omitempty"`
+}
+
+type WorkerCost struct {
+	AdmittedTurns int64    `json:"admittedTurns"`
+	MeteredTurns  int64    `json:"meteredTurns"`
+	PricedTurns   int64    `json:"pricedTurns"`
+	InputTokens   int64    `json:"inputTokens"`
+	OutputTokens  int64    `json:"outputTokens"`
+	EstimatedUSD  *float64 `json:"estimatedUSD,omitempty"`
 }
 
 var commitSHA = regexp.MustCompile(`^([a-f0-9]{40}|[a-f0-9]{64})$`)
+var ErrUnverifiedDeployment = errors.New("the current monitored build needs passing verification and cleared deployment holds")
 
 func (s Store) Handover(ctx context.Context, w, p string, n int64, h Handover) error {
 	role, id := audit.Actor(ctx)
 	if (role != "owner" && role != "approver") || id == "" || n < 1 || h.Version < 1 ||
 		!commitSHA.MatchString(h.MergedSHA) || !digest.MatchString(h.Digest) ||
-		!handoverLabel(h.Target, 256) || !handoverLabel(h.Environment, 100) || !handoverLabel(h.Build, 256) ||
+		!handoverLabel(h.Target, 256) || !handoverLabel(h.Environment, 100) || (!handoverLabel(h.Build, 256) && !commitSHA.MatchString(h.Build)) ||
 		strings.TrimSpace(h.Summary) == "" || len(h.Summary) > 2000 ||
 		strings.TrimSpace(h.TestSteps) == "" || len(h.TestSteps) > 3000 {
 		return ErrInvalid
@@ -47,23 +60,39 @@ func (s Store) Handover(ctx context.Context, w, p string, n int64, h Handover) e
 		return err
 	}
 	defer tx.Rollback()
+	var project string
+	if err = tx.QueryRowContext(ctx, `SELECT id FROM projects WHERE workspace_id=$1 AND id=$2 FOR SHARE`, w, p).Scan(&project); err != nil {
+		return err
+	}
 
 	// Use the exact inspected merge and destination shown for attestation.
 	var matches bool
-	err = tx.QueryRowContext(ctx, `SELECT coalesce(version=$4 AND snapshot->>'state'='MERGED'
+	var issue int64
+	err = tx.QueryRowContext(ctx, `SELECT issue_number,coalesce(version=$4 AND snapshot->>'state'='MERGED'
 	    AND snapshot->>'mergedSha'=$5 AND snapshot->>'target'=$6,false)
 	    FROM pull_observations WHERE workspace_id=$1 AND project_id=$2 AND number=$3 FOR SHARE`,
-		w, p, n, h.Version, h.MergedSHA, h.Target).Scan(&matches)
+		w, p, n, h.Version, h.MergedSHA, h.Target).Scan(&issue, &matches)
 	if err != nil {
 		return err
 	}
 	if !matches {
 		return ErrConflict
 	}
+	deployments, err := incidents.VerifiedHandoverDeployments(ctx, tx, w, p, n, h.MergedSHA, h.Environment, h.Build)
+	if errors.Is(err, incidents.ErrConflict) {
+		return ErrUnverifiedDeployment
+	}
+	if err != nil {
+		return err
+	}
+	monitors, err := json.Marshal(deployments)
+	if err != nil {
+		return err
+	}
 	res, err := tx.ExecContext(ctx, `INSERT INTO pull_handovers(
-	    workspace_id,project_id,pull_number,inspection_version,merged_sha,target,environment,build,evidence_digest,summary,test_steps,actor_role,actor_id)
-	    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT DO NOTHING`,
-		w, p, n, h.Version, h.MergedSHA, h.Target, h.Environment, h.Build, h.Digest, h.Summary, h.TestSteps, role, id)
+	    workspace_id,project_id,pull_number,inspection_version,merged_sha,target,environment,build,evidence_digest,summary,test_steps,actor_role,actor_id,worker_cost,monitor_deployments)
+	    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,ticket_worker_cost($1,$2,$14),$15) ON CONFLICT DO NOTHING`,
+		w, p, n, h.Version, h.MergedSHA, h.Target, h.Environment, h.Build, h.Digest, h.Summary, h.TestSteps, role, id, issue, monitors)
 	if err != nil {
 		return err
 	}
@@ -74,8 +103,8 @@ func (s Store) Handover(ctx context.Context, w, p string, n int64, h Handover) e
 	if count == 0 {
 		err = tx.QueryRowContext(ctx, `SELECT (inspection_version,merged_sha,target,evidence_digest,summary,test_steps,actor_role,actor_id)
 		    =($6,$7,$8,$9,$10,$11,$12,$13)
-		    FROM pull_handovers WHERE workspace_id=$1 AND project_id=$2 AND pull_number=$3 AND environment=$4 AND build=$5`,
-			w, p, n, h.Environment, h.Build, h.Version, h.MergedSHA, h.Target, h.Digest, h.Summary, h.TestSteps, role, id).Scan(&matches)
+		    FROM pull_handovers WHERE workspace_id=$1 AND project_id=$2 AND pull_number=$3 AND environment=$4 AND build=$5 AND monitor_deployments=$14`,
+			w, p, n, h.Environment, h.Build, h.Version, h.MergedSHA, h.Target, h.Digest, h.Summary, h.TestSteps, role, id, monitors).Scan(&matches)
 		if err != nil {
 			return err
 		}

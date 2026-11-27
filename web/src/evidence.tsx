@@ -16,17 +16,21 @@ import {
   type GateCredential,
 } from "./deployment-monitor";
 import type { Run } from "./actions";
-import { Field, Panel, Badge, Empty, Modal, when } from "./ui";
+import { githubPullAction } from "./work";
+import { Field, Panel, Badge, Empty, Modal, link, when } from "./ui";
+import { BrowserQA } from "./browser-qa";
 
 export function Pulls({
   state,
   project,
+  subject,
   locked,
   canAttest,
   run,
 }: {
   state: State;
   project?: Project;
+  subject: string;
   locked: boolean;
   canAttest: boolean;
   run: Run;
@@ -35,6 +39,9 @@ export function Pulls({
   const pulls = state.pullRequests.filter(
     (p) => !project || p.projectId === project.id,
   );
+  const visible = subject
+    ? pulls.filter((p) => String(p.number) === subject)
+    : pulls;
   const repository = (id: string) =>
     state.projects.find((p) => p.id === id)?.repository;
   async function inspect(e: FormEvent<HTMLFormElement>) {
@@ -57,35 +64,39 @@ export function Pulls({
   }
   return (
     <>
-      <Panel title="Inspect a pull request">
-        <form className="panel-body" onSubmit={inspect}>
-          <Field title="Repository">
-            <select name="project" required defaultValue={project?.id || ""}>
-              <option disabled value="">
-                Choose project
-              </option>
-              {(project ? [project] : state.projects).map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.repository}
+      {subject ? (
+        <a href={link("prs", project?.id)}>All pull requests</a>
+      ) : (
+        <Panel title="Inspect a pull request">
+          <form className="panel-body" onSubmit={inspect}>
+            <Field title="Repository">
+              <select name="project" required defaultValue={project?.id || ""}>
+                <option disabled value="">
+                  Choose project
                 </option>
-              ))}
-            </select>
-          </Field>
-          <div className="form-pair">
-            <Field title="Pull request number">
-              <input type="number" min={1} name="number" required />
+                {(project ? [project] : state.projects).map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.repository}
+                  </option>
+                ))}
+              </select>
             </Field>
-            <Field title="Canonical issue number">
-              <input type="number" min={1} name="issue" required />
-            </Field>
-          </div>
-          <button disabled={locked || !state.projects.length}>
-            Inspect pull request
-          </button>
-        </form>
-      </Panel>
-      {pulls.length ? (
-        pulls.map((p) => (
+            <div className="form-pair">
+              <Field title="Pull request number">
+                <input type="number" min={1} name="number" required />
+              </Field>
+              <Field title="Canonical issue number">
+                <input type="number" min={1} name="issue" required />
+              </Field>
+            </div>
+            <button disabled={locked || !state.projects.length}>
+              Inspect pull request
+            </button>
+          </form>
+        </Panel>
+      )}
+      {visible.length ? (
+        visible.map((p) => (
           <Panel
             key={p.projectId + p.number}
             title={"#" + p.number + " " + p.title}
@@ -100,7 +111,7 @@ export function Pulls({
                   p.number
                 }
               >
-                Open on GitHub
+                {githubPullAction(p) || "Open on GitHub"}
               </a>
               <p>
                 {repository(p.projectId)} · Issue #{p.issueNumber} · Inspected{" "}
@@ -210,6 +221,14 @@ export function Pulls({
                   </button>
                 )}
             </div>
+            {p.head && (
+              <BrowserQA
+                key={`${p.issueNumber}:${p.head}`}
+                path={`projects/${enc(p.projectId)}/pulls/${p.number}/browser-qa`}
+                candidate={p.head}
+                locked={locked}
+              />
+            )}
             {(state.viewer?.role || "owner") === "owner" &&
               p.state === "OPEN" && (
                 <QueueControls
@@ -508,7 +527,7 @@ function PullHandover({
       </p>
       {pull.handovers?.length ? (
         pull.handovers.map((h) => (
-          <details key={h.environment + "\u0000" + h.build}>
+          <details key={h.environment + "\u0000" + h.build + "\u0000" + h.recordedAt}>
             <summary>
               {h.environment} · {h.build}
             </summary>
@@ -519,6 +538,33 @@ function PullHandover({
             <p>
               Evidence <code>{h.evidenceDigest}</code>
             </p>
+            <p>
+              <strong>Runner cost</strong>{" "}
+              {h.cost?.estimatedUSD != null
+                ? h.cost.estimatedUSD.toLocaleString("en-US", {
+                    style: "currency",
+                    currency: "USD",
+                    maximumFractionDigits: 6,
+                  }) +
+                  (h.cost.pricedTurns < h.cost.admittedTurns
+                    ? " partial estimate"
+                    : " estimated")
+                : "Estimate unavailable"}
+            </p>
+            {h.cost && (
+              <p>
+                Usage reported for {h.cost.meteredTurns} of{" "}
+                {h.cost.admittedTurns} admitted turns. {h.cost.pricedTurns}{" "}
+                priced.
+                {h.cost.meteredTurns > 0 && (
+                  <>
+                    {" "}
+                    {h.cost.inputTokens.toLocaleString()} input tokens ·{" "}
+                    {h.cost.outputTokens.toLocaleString()} output tokens.
+                  </>
+                )}
+              </p>
+            )}
             <p>
               Attested by {h.recordedBy} · {when(h.recordedAt)}
             </p>

@@ -112,39 +112,7 @@ func TestUnattendedBatchRestartsAndStartsOnlyAuthorizedIssues(t *testing.T) {
 		}
 	})
 
-	t.Setenv("BUGSNITCH_HOME", t.TempDir())
-	t.Setenv("BUGSNITCH_ANTHROPIC_API_KEY", "fixture-api-key")
-	t.Setenv("BUGSNITCH_GITHUB_READ_TOKEN", "fixture-read-only")
-	dir := t.TempDir()
-	git := func(args ...string) {
-		t.Helper()
-		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "core.hooksPath=" + os.DevNull, "-c", "commit.gpgsign=false", "-c", "user.name=Fixture", "-c", "user.email=test@fixture.invalid"}, args...)...)
-		if output, err := cmd.CombinedOutput(); err != nil {
-			t.Fatal(args, string(output), err)
-		}
-	}
-	git("init")
-	if err := os.WriteFile(filepath.Join(dir, "label.txt"), []byte("old\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	git("add", "label.txt")
-	git("commit", "-m", "baseline")
-	git("remote", "add", "origin", "https://github.com/"+repo+".git")
-	if err := device.RunCLI([]string{"pair", "--server", s.Origin, "--code", code}); err != nil {
-		t.Fatal(err)
-	}
-	if err := device.RunCLI([]string{"register", "--project", project, "--path", dir}); err != nil {
-		t.Fatal(err)
-	}
-	stage := runner.StageSettings{Provider: "claude", Model: "fixture-claude"}
-	if err := runner.AddProject("personal", repo, dir, runner.Config{RequirePlanReview: true, Files: []string{"label.txt"}, Validate: []string{"/usr/bin/grep", "-Fxq", "fixed", "label.txt"}, Stages: map[string]runner.StageSettings{"plan": stage, "implement": stage, "review": stage}}); err != nil {
-		t.Fatal(err)
-	}
-	start, finish, tstart, tend, lease := runner.BeforeStart, runner.AfterFinish, runner.BeforeTurn, runner.AfterTurn, runner.CheckWorker
-	t.Cleanup(func() {
-		runner.BeforeStart, runner.AfterFinish, runner.BeforeTurn, runner.AfterTurn, runner.CheckWorker = start, finish, tstart, tend, lease
-	})
-	runner.BeforeStart, runner.AfterFinish, runner.BeforeTurn, runner.AfterTurn, runner.CheckWorker = device.Admit, device.Finish, device.TurnStart, device.TurnEnd, device.CheckWorker
+	setupPairedWorker(t, s, repo, project, code)
 
 	arm := []string{"arm", "--project", project, "--issues", "2,3", "--for", "5m", "--turns", "6", "--plan-approver", "owner"}
 	var preview bytes.Buffer
@@ -221,4 +189,43 @@ func unattendedResponse(value any) (*http.Response, error) {
 		return nil, err
 	}
 	return &http.Response{StatusCode: 200, Header: make(http.Header), Body: io.NopCloser(bytes.NewReader(b))}, nil
+}
+
+func setupPairedWorker(t *testing.T, s *testServer, repo, project, code string) string {
+	t.Helper()
+	t.Setenv("BUGSNITCH_HOME", t.TempDir())
+	t.Setenv("BUGSNITCH_ANTHROPIC_API_KEY", "fixture-api-key")
+	t.Setenv("BUGSNITCH_GITHUB_READ_TOKEN", "fixture-read-only")
+	dir := t.TempDir()
+	git := func(args ...string) {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "core.hooksPath=" + os.DevNull, "-c", "commit.gpgsign=false", "-c", "user.name=Fixture", "-c", "user.email=test@fixture.invalid"}, args...)...)
+		if output, err := cmd.CombinedOutput(); err != nil {
+			t.Fatal(args, string(output), err)
+		}
+	}
+	git("init")
+	if err := os.WriteFile(filepath.Join(dir, "label.txt"), []byte("old\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "label.txt")
+	git("commit", "-m", "baseline")
+	git("remote", "add", "origin", "https://github.com/"+repo+".git")
+	if err := device.RunCLI([]string{"pair", "--server", s.Origin, "--code", code}); err != nil {
+		t.Fatal(err)
+	}
+	if err := device.RunCLI([]string{"register", "--project", project, "--path", dir}); err != nil {
+		t.Fatal(err)
+	}
+	stage := runner.StageSettings{Provider: "claude", Model: "fixture-claude"}
+	if err := runner.AddProject("personal", repo, dir, runner.Config{RequirePlanReview: true, Files: []string{"label.txt"}, Validate: []string{"/usr/bin/grep", "-Fxq", "fixed", "label.txt"}, Stages: map[string]runner.StageSettings{"plan": stage, "implement": stage, "review": stage}}); err != nil {
+		t.Fatal(err)
+	}
+	start, finish, tstart, tend, lease := runner.BeforeStart, runner.AfterFinish, runner.BeforeTurn, runner.AfterTurn, runner.CheckWorker
+	t.Cleanup(func() {
+		runner.BeforeStart, runner.AfterFinish, runner.BeforeTurn, runner.AfterTurn, runner.CheckWorker = start, finish, tstart, tend, lease
+	})
+	runner.BeforeStart, runner.AfterFinish, runner.BeforeTurn, runner.AfterTurn, runner.CheckWorker = device.Admit, device.Finish, device.TurnStart, device.TurnEnd, device.CheckWorker
+
+	return dir
 }

@@ -139,6 +139,33 @@ The default model backend is local Codex. To use the Claude Messages API for a s
 
 Run `bugsnitch local-usage --id ATTEMPT_ID` for recorded token totals by model and a count of turns without metering. Optionally pass `--rates RATES.json` with model IDs mapped to `inputPerMillionUSD` and `outputPerMillionUSD`. The estimate covers the token counts in retained artifacts. Use the provider's billing record for actual spend.
 
+## Check project readiness
+
+Run `bugsnitch doctor --project PROJECT_ID` on the assigned, paired computer. It checks the registered Git checkout, the configured validator and its launcher, the GitHub connection, and the active deployment monitors. Use `--environment staging` to check a specific environment. Each missing prerequisite includes a setup action. Add `--run-validator` to execute the configured validator and sandbox on a disposable export of the committed `HEAD`. The export contains tracked files and follows Git archive attributes. It omits Git metadata, submodule contents and local build dependencies.
+
+## Capture before-and-after browser QA
+
+Add a `browserQA` entry for the incident’s canonical GitHub issue number in the private `project-add` configuration. Select a single assertion and a trusted check installed outside the checkout. For example, add this alongside `files` and `validate`.
+
+```json
+"browserQA": {
+  "7": {
+    "assertion": "An order of $50 ships free.",
+    "command": ["/absolute/path/to/checkout-browser-check"]
+  }
+}
+```
+
+Bugsnitch invokes the same check against separate Git exports of the attempt’s original and candidate commits. Each invocation gets `{ "checkout": "…", "revision": "…", "assertion": "…" }` on standard input and a private working directory and home. The check starts the application from the supplied checkout, drives the browser and records what it observed. Its standard output is one JSON object with the supplied `revision`, a `result` of `pass` or `fail`, a short `observed` string, and a `screenshot` containing base64 PNG data. Each image can be up to 80 KiB and 1600 × 1200 pixels. Crop screenshots to the relevant interaction. Exit zero after observing either outcome. Use a nonzero exit for setup or browser failures. Use absolute paths for dependencies outside the check’s minimal `PATH`.
+
+```sh
+umask 077
+bugsnitch local-browser-qa --id ATTEMPT_ID > browser-qa.json
+bugsnitch sync
+```
+
+In the linked incident, open **Share a browser QA report**, select the JSON file, and review both screenshots before sharing. Project retention applies to shared reports. The existing environment verification flow records fresh observations after deployment. [Checkout browser-check example](../examples/checkout/README.md#browser-qa-evidence)
+
 ## Verify an issue on an existing deployment
 
 Use `local-verify` when the code is already deployed and the issue needs observations. The command reads the open GitHub issue and records its identity, requirements digest, reviewed checklist, environment, build revision and one result per criterion in the local journal. It works from outside a checkout. Private issues can use `BUGSNITCH_GITHUB_READ_TOKEN` or the signed-in GitHub CLI. The verification run uses no model turn and creates no branch, commit or PR.

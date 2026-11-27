@@ -134,7 +134,25 @@ func TestQueueAndPassingChecksCannotReplaceDecisionForTarget(t *testing.T) {
 }
 
 func TestHandoverRequiresExactMergedSubjectAndReplaysOnce(t *testing.T) {
-	db, _ := scratchDB(t)
+	db, run := scratchDB(t)
+	run(`INSERT INTO devices(id,workspace_id,name,platform) VALUES('worker','personal','Mac','test');
+	    INSERT INTO device_projects VALUES('personal','worker','p');
+	    INSERT INTO worker_starts(id,workspace_id,project_id,device_id,issue_number,request_id,requested_plan,policy_version,
+	        github_id,digest,revision,title,status) VALUES('start','personal','p','worker',7,'start_7','',1,71,'digest','rev','Plan ticket','started');
+	    WITH turn AS (INSERT INTO events(workspace_id,kind,subject_id,actor_source,actor_id)
+	        VALUES('personal','local_model.started','start','device','worker') RETURNING seq)
+	        INSERT INTO model_turn_metering(event_seq,model,input_tokens,output_tokens) SELECT seq,'unpriced-planner',60,10 FROM turn;
+	    INSERT INTO attempt_reports(id,workspace_id,project_id,device_id,issue_number,base_sha,candidate_sha,phase,state,version)
+	       VALUES ('attempt','personal','p','worker',7,'a','b','wrap_up','completed',1),
+	              ('other','personal','p','worker',8,'a','b','wrap_up','completed',1);
+	    INSERT INTO model_price_history(workspace_id,model,version,effective_at,input_per_million_usd,output_per_million_usd)
+	       VALUES('personal','model',1,now()-interval '1 day',2,4);
+	    WITH turns AS (INSERT INTO events(workspace_id,project_id,kind,subject_id,actor_source,actor_id)
+	       VALUES('personal','p','admission.turn_start','attempt','device','worker'),
+	             ('personal','p','admission.turn_start','other','device','worker') RETURNING seq)
+	       INSERT INTO model_turn_metering(event_seq,model,input_tokens,output_tokens) SELECT seq,'model',1000,500 FROM turns;
+	    INSERT INTO events(workspace_id,project_id,kind,subject_id,actor_source,actor_id)
+	       VALUES('personal','p','admission.turn_start','attempt','device','worker')`)
 	s := Store{DB: db}
 	ctx := audit.WithActor(t.Context(), audit.Owner, "owner")
 	observation := github.PullObservation{State: "OPEN", Target: "main"}
@@ -158,14 +176,23 @@ func TestHandoverRequiresExactMergedSubjectAndReplaysOnce(t *testing.T) {
 		t.Fatal("stale inspection accepted", err)
 	}
 	h.Version = pull.Version
-	for range 2 {
+	for i := range 2 {
 		if err := s.Handover(ctx, "personal", "p", 9, h); err != nil {
 			t.Fatal(err)
+		}
+		if i == 0 {
+			run(`INSERT INTO model_turn_metering(event_seq,model,input_tokens,output_tokens)
+				SELECT max(seq),'model',50000,50 FROM events WHERE kind='admission.turn_start' AND subject_id='attempt'`)
 		}
 	}
 	pulls, err := s.List(ctx, "personal")
 	if err != nil || len(pulls) != 1 || len(pulls[0].Handovers) != 1 || pulls[0].Handovers[0].Digest != h.Digest {
 		t.Fatal("handover projection", pulls, err)
+	}
+	cost := pulls[0].Handovers[0].Cost
+	if cost == nil || cost.AdmittedTurns != 3 || cost.MeteredTurns != 2 || cost.PricedTurns != 1 ||
+		cost.InputTokens != 1060 || cost.OutputTokens != 510 || cost.EstimatedUSD == nil || *cost.EstimatedUSD != 0.004 {
+		t.Fatalf("handover must snapshot only this ticket's known cost and coverage: %+v", cost)
 	}
 	h.TestSteps = "Changed"
 	if err := s.Handover(ctx, "personal", "p", 9, h); !errors.Is(err, ErrConflict) {

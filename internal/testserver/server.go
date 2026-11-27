@@ -18,7 +18,7 @@ import (
 	"time"
 )
 
-type Config struct{ Origin, OwnerToken, PluginToken, WebDir, GitHubSecret, SentrySecret, SlackSecret, TelegramSecret, LinearSecret string }
+type Config struct{ Origin, OwnerToken, PluginToken, WebDir, GitHubSecret, SentrySecret, SlackSecret, TelegramSecret, LinearSecret, ScheduleToken string }
 
 // Start forwards requests to the packaged server over loopback. Tests retain
 // their own database connections to exercise precise failure conditions.
@@ -40,6 +40,9 @@ func Start(t *testing.T, dsn string, cfg Config) http.Handler {
 	cmd := exec.Command(binary)
 	cmd.Env = []string{"DATABASE_URL=" + dsn, "BUGSNITCH_LISTEN=127.0.0.1:0", "BUGSNITCH_ORIGIN=" + cfg.Origin,
 		"BUGSNITCH_OWNER_TOKEN=" + cfg.OwnerToken, "BUGSNITCH_MCP_TOKEN=" + cfg.PluginToken, "BUGSNITCH_WEB_DIR=" + cfg.WebDir, "SENTRY_CLIENT_SECRET=" + cfg.SentrySecret, "GITHUB_WEBHOOK_SECRET=" + cfg.GitHubSecret, "SLACK_SIGNING_SECRET=" + cfg.SlackSecret, "TELEGRAM_WEBHOOK_SECRET=" + cfg.TelegramSecret, "LINEAR_WEBHOOK_SECRET=" + cfg.LinearSecret}
+	if cfg.ScheduleToken != "" {
+		cmd.Env = append(cmd.Env, "BUGSNITCH_SCHEDULE_TOKEN="+cfg.ScheduleToken)
+	}
 	for _, key := range []string{"HOME", "USER", "TMPDIR", "PATH", "KRB5CCNAME", "KRB5_CONFIG", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
 		if value, ok := os.LookupEnv(key); ok {
 			cmd.Env = append(cmd.Env, key+"="+value)

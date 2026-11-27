@@ -53,13 +53,26 @@ def ready_revision(service, image):
     return None
 
 
-def deploy(token, image):
-    service = request(token)
+def homepage_target(service):
     containers = service["template"]["containers"]
+    if any(
+        container.get("name") == "portal"
+        or any(env.get("name") == "DATABASE_URL" for env in container.get("env", []))
+        for container in containers
+    ):
+        return False
     if len(containers) != 1 or containers[0].get("name") != "homepage-1":
         raise RuntimeError("Expected the existing single-container homepage service")
     if any(target.get("tag") for target in service.get("traffic", [])):
         raise RuntimeError("The service has tagged traffic targets that require an explicit rollout")
+    return True
+
+
+def deploy(token, image):
+    service = request(token)
+    if not homepage_target(service):
+        return None
+    containers = service["template"]["containers"]
     if service.get("traffic") == TRAFFIC:
         revision = ready_revision(service, image)
         if revision:
@@ -83,9 +96,18 @@ def deploy(token, image):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2 or not re.fullmatch(re.escape(IMAGE_PREFIX) + r"[a-f0-9]{64}", sys.argv[1]):
+    if len(sys.argv) != 2 or (
+        sys.argv[1] != "--check-target"
+        and not re.fullmatch(re.escape(IMAGE_PREFIX) + r"[a-f0-9]{64}", sys.argv[1])
+    ):
         sys.exit("Provide the Bugsnitch homepage image by its Artifact Registry SHA-256 digest")
     try:
-        print(deploy(os.environ["CLOUD_RUN_ACCESS_TOKEN"], sys.argv[1]))
+        token = os.environ["CLOUD_RUN_ACCESS_TOKEN"]
+        if sys.argv[1] == "--check-target":
+            print("homepage" if homepage_target(request(token)) else "portal")
+        else:
+            revision = deploy(token, sys.argv[1])
+            if revision is not None:
+                print(revision)
     except (KeyError, OSError, RuntimeError, ValueError) as error:
         sys.exit(str(error))

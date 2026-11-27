@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 mod client;
+mod projects;
 mod pulls;
 mod queue;
 mod repo;
@@ -30,9 +31,26 @@ enum Command {
         scope: Scope,
     },
     Identity,
+    ProjectIssues {
+        board: i32,
+        after: Option<String>,
+    },
+    ProjectImport {
+        board: i32,
+        issue: i32,
+        item: String,
+    },
+    ProjectStatus {
+        issue: i64,
+        github_id: i64,
+        project_node: String,
+        item_node: String,
+        status: String,
+    },
     Get {
         number: i64,
     },
+    RecentWork,
     Create {
         title: String,
         body: String,
@@ -90,9 +108,26 @@ enum Command {
 fn call(r: &Repository, cmd: Command) -> Result<Value> {
     match cmd {
         Command::Identity if r.scope == Scope::Discover => Ok(json!(r.id)),
+        Command::ProjectIssues { board, after } if r.scope == Scope::ProjectRead => {
+            r.project_issues(board, after.as_deref())
+        }
+        Command::ProjectImport { board, issue, item } if r.scope == Scope::ProjectRead => {
+            r.project_import(board, issue, &item)
+        }
+        Command::ProjectStatus {
+            issue,
+            github_id,
+            project_node,
+            item_node,
+            status,
+        } if r.scope == Scope::ProjectWrite => {
+            r.project_status(issue, github_id, &project_node, &item_node, &status)?;
+            Ok(Value::Null)
+        }
         Command::Get { number } if matches!(r.scope, Scope::Issues | Scope::ReadIssue) => {
             Ok(json!(r.get(number)?))
         }
+        Command::RecentWork if r.scope == Scope::ReadIssue => r.recent_work(),
         Command::Create { title, body } if r.scope == Scope::Issues => {
             Ok(json!(r.create(&title, &body)?))
         }

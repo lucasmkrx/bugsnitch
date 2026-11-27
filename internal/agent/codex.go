@@ -47,6 +47,7 @@ type Client struct {
 type Result struct {
 	Usage      *ModelUsage `json:"usage,omitempty"`
 	DurationMS *int64      `json:"-"`
+	Auth       string      `json:"-"`
 	Model      string      `json:"model"`
 	Thread     string      `json:"thread"`
 	Turn       string      `json:"turn"`

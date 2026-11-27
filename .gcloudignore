@@ -1,0 +1,5 @@
+.gcloudignore
+.git/
+.codex/
+.agents/
+#!include:.gitignore

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Stable public device protocol. Only authenticated credential digests and
 //! named operations reach the coordinator; the server derives owner scope.
+mod model_settings;
 mod recommendation;
 
 use super::{ApiJson, Owner, Shared, WebError, WebResult, hash, random_hex};
@@ -22,6 +23,10 @@ pub fn public() -> Router<Shared> {
     Router::new()
         .route("/api/v1/device/pair", post(pair))
         .route("/api/v1/device/sync", post(sync))
+        .route(
+            "/api/v1/device/model-settings",
+            post(model_settings::device),
+        )
         .route("/api/v1/device/draft-delivery", post(draft_delivery))
         .route("/api/v1/device/progression", post(progression))
         .route("/api/v1/device/progression-wake", post(progression_wake))
@@ -30,12 +35,18 @@ pub fn public() -> Router<Shared> {
         .route("/api/v1/device/model-permit", post(permit))
         .route("/api/v1/device/worker-lease", post(lease))
         .route("/api/v1/device/next", post(next))
+        .route("/api/v1/device/worker-start", post(worker_start))
+        .route("/api/v1/device/project-readiness", post(project_readiness))
         .route("/api/v1/device/share-diff", post(share_diff))
 }
 
 pub fn owner() -> Router<Shared> {
     Router::new()
         .route("/api/v1/pairings", post(pairing))
+        .route(
+            "/api/v1/model-settings/authorize",
+            post(model_settings::authorize),
+        )
         .route("/api/v1/devices/{id}/revoke", post(revoke))
         .route("/api/v1/attempts/{id}/control", post(control))
         .route("/api/v1/attempts/{id}/ticket-decision", post(ticket_answer))
@@ -232,6 +243,38 @@ async fn progression(
     Ok(Json(action))
 }
 
+async fn worker_start(
+    State(s): State<Shared>,
+    Device(token): Device,
+    ApiJson(body): ApiJson<Value>,
+) -> Reply {
+    version(&body)?;
+    Ok(Json(
+        s.domain(
+            "device.worker_start",
+            ["service".into(), "worker-dispatch".into()],
+            json!({"token":token,"body":body}),
+        )
+        .await?,
+    ))
+}
+
+async fn project_readiness(
+    State(s): State<Shared>,
+    Device(token): Device,
+    ApiJson(body): ApiJson<Value>,
+) -> Reply {
+    version(&body)?;
+    Ok(Json(
+        s.domain(
+            "device.project_readiness",
+            ["service".into(), "device-readiness".into()],
+            json!({"token":token,"body":body}),
+        )
+        .await?,
+    ))
+}
+
 async fn progression_wake(
     State(s): State<Shared>,
     Device(token): Device,
@@ -244,13 +287,17 @@ async fn progression_wake(
     let project = body["projectId"]
         .as_str()
         .ok_or_else(|| bad("Invalid progression project"))?;
-    let cursor = claim(
+    let mut cursor = claim(
         s.clone(),
         token.clone(),
         "device.progression_cursor",
         body.clone(),
     )
     .await?;
+    if s.schedule_hash.is_some() {
+        cursor["nextPollSeconds"] = json!(15);
+        return Ok(Json(cursor));
+    }
     if cursor["position"].as_i64().is_some_and(|n| n > after) {
         return Ok(Json(cursor));
     }
@@ -270,6 +317,8 @@ async fn progression_wake(
 struct TicketAnswer {
     version: i64,
     answer: String,
+    #[serde(default)]
+    feedback: String,
 }
 
 async fn ticket_answer(
@@ -283,7 +332,7 @@ async fn ticket_answer(
             "device.ticket_answer",
             o.actor(),
             json!({
-                "workspace":o.workspace,"attemptId":id,"version":b.version,"answer":b.answer
+                "workspace":o.workspace,"attemptId":id,"version":b.version,"answer":b.answer,"feedback":b.feedback
             }),
         )
         .await?,
